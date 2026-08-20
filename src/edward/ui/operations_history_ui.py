@@ -50,13 +50,50 @@ def install_operations_history_ui(app_class: type[Any]) -> None:
     def _decimal_text(value: Any) -> str:
         return app_class._money(value)
 
-    def _current_rub_balance(self: Any, account_id: str) -> Decimal:
-        positions = self.client.get_positions(account_id)
-        money = self._items(positions, "money")
-        for position in money:
-            if str(self._field(position, "currency", "")).upper() == "RUB":
-                return _decimal(self._field(position, "available", 0))
+    def _extract_money_balance(payload: Any) -> Decimal:
+        if isinstance(payload, dict):
+            for field in ("total_amount_currencies", "total_amount_portfolio", "available", "balance", "amount"):
+                value = app_class._field(payload, field, None)
+                if value is not None:
+                    return _decimal(value)
+            for key in ("money", "currencies", "positions", "withdraw_limits", "withdraw_limit", "limits"):
+                value = payload.get(key)
+                if isinstance(value, list):
+                    for item in value:
+                        if str(app_class._field(item, "currency", "")).upper() == "RUB":
+                            return _decimal(app_class._field(item, "available", app_class._field(item, "amount", app_class._field(item, "balance", 0))))
+                elif isinstance(value, dict):
+                    found = _extract_money_balance(value)
+                    if found != Decimal("0"):
+                        return found
+        elif isinstance(payload, list):
+            for item in payload:
+                found = _extract_money_balance(item)
+                if found != Decimal("0"):
+                    return found
         return Decimal("0")
+
+    def _current_rub_balance(self: Any, account_id: str) -> Decimal:
+        try:
+            if str(getattr(getattr(self, "environment", None), "value", "")).lower() == "sandbox":
+                portfolio = self.client.get_sandbox_portfolio(account_id)
+                return _extract_money_balance(portfolio)
+            positions = self.client.get_positions(account_id)
+            return _extract_money_balance(positions)
+        except Exception:
+            positions = self.client.get_positions(account_id)
+            return _extract_money_balance(positions)
+
+    def _portfolio_value(self: Any, account_id: str) -> Decimal:
+        try:
+            portfolio = self.client.get_sandbox_portfolio(account_id) if str(getattr(getattr(self, "environment", None), "value", "")).lower() == "sandbox" else self.client.get_portfolio(account_id)
+            for field in ("total_amount_portfolio", "total_amount_currencies"):
+                value = self._field(portfolio, field, None)
+                if value is not None:
+                    return _decimal(value)
+            return _extract_money_balance(portfolio)
+        except Exception:
+            return Decimal("0")
 
     def _copy_rows(self: Any, tree: Any, selected_only: bool = False) -> None:
         items = tree.selection() if selected_only else tree.get_children("")
@@ -84,11 +121,8 @@ def install_operations_history_ui(app_class: type[Any]) -> None:
         account_name = getattr(active_account, "name", "") if active_account else ""
         account_display = account_name or aid
 
-        try:
-            current_balance = _current_rub_balance(self, aid)
-        except Exception as exc:
-            current_balance = Decimal("0")
-            self.status_var.set(f"Не удалось получить текущий баланс: {exc}")
+        current_balance = _current_rub_balance(self, aid)
+        portfolio_value = _portfolio_value(self, aid)
 
         toolbar = ttk.Frame(self.content)
         toolbar.pack(fill="x", pady=(0, 10))
@@ -96,12 +130,12 @@ def install_operations_history_ui(app_class: type[Any]) -> None:
 
         tree = self._tree(
             self.content,
-            ("Дата", "Время", "Счёт", "Тип", "Статус", "Сумма", "Валюта", "Текущий баланс", "Инструмент", "Количество", "Операция ID"),
-            (100, 85, 270, 170, 110, 130, 80, 140, 140, 100, 360),
+            ("Дата", "Время", "Счёт", "Тип", "Статус", "Сумма", "Валюта", "Текущий баланс", "Стоимость портфеля", "Инструмент", "Количество", "Операция ID"),
+            (100, 85, 270, 170, 110, 130, 80, 140, 150, 140, 100, 360),
         )
         ttk.Button(toolbar, text="Копировать всю историю", command=lambda: _copy_rows(self, tree, False)).pack(side="left", padx=8)
         ttk.Button(toolbar, text="Копировать выбранное", command=lambda: _copy_rows(self, tree, True)).pack(side="left")
-        ttk.Label(toolbar, text=f"Счёт: {account_display} | Текущий баланс: {_decimal_text(current_balance)} RUB | Статусы: Успех / Ошибка / В процессе").pack(side="left", padx=15)
+        ttk.Label(toolbar, text=f"Счёт: {account_display} | Текущий баланс: {_decimal_text(current_balance)} RUB | Стоимость портфеля: {_decimal_text(portfolio_value)} RUB | Статусы: Успех / Ошибка / В процессе").pack(side="left", padx=15)
 
         try:
             response = self.client.get_operations(aid, 1000)
@@ -133,10 +167,10 @@ def install_operations_history_ui(app_class: type[Any]) -> None:
             quantity = self._field(operation, "quantity", self._field(operation, "lots", ""))
             operation_id = self._field(operation, "id", self._field(operation, "operation_id", ""))
 
-            tree.insert("", "end", values=(date_text, time_text, account_display, _operation_name(operation), _status(operation), _decimal_text(money), str(currency).upper(), _decimal_text(current_balance), instrument, quantity, operation_id))
+            tree.insert("", "end", values=(date_text, time_text, account_display, _operation_name(operation), _status(operation), _decimal_text(money), str(currency).upper(), _decimal_text(current_balance), _decimal_text(portfolio_value), instrument, quantity, operation_id))
 
         for row in self.history.read_all():
-            tree.insert("", "end", values=(row.get("date", ""), row.get("time", ""), row.get("account_id", account_display), row.get("operation", ""), "Успех" if str(row.get("status", "")).upper() == "FILLED" else "В процессе", row.get("amount", ""), row.get("currency", ""), _decimal_text(current_balance), row.get("ticker", ""), row.get("quantity", ""), row.get("order_id", "")))
+            tree.insert("", "end", values=(row.get("date", ""), row.get("time", ""), row.get("account_id", account_display), row.get("operation", ""), "Успех" if str(row.get("status", "")).upper() == "FILLED" else "В процессе", row.get("amount", ""), row.get("currency", ""), _decimal_text(current_balance), _decimal_text(portfolio_value), row.get("ticker", ""), row.get("quantity", ""), row.get("order_id", "")))
 
     app_class._page_history = _page_history
     app_class._operations_history_installed = True
