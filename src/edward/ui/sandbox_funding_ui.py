@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import time
 from decimal import Decimal, InvalidOperation
 from tkinter import messagebox, simpledialog
 from typing import Any
@@ -9,7 +8,7 @@ from edward.services.balance_service import BalanceService
 
 
 def install_sandbox_funding_ui(app_class: type[Any]) -> None:
-    """Add sandbox-only account funding controls with post-funding balance validation."""
+    """Add sandbox-only account funding controls with expected-vs-real balance validation."""
     if getattr(app_class, "_sandbox_funding_installed", False):
         return
 
@@ -30,14 +29,20 @@ def install_sandbox_funding_ui(app_class: type[Any]) -> None:
         self._sandbox_pay_in_button.pack(fill="x", pady=2)
 
     def _get_sandbox_rub_balance(self: Any, account_id: str) -> Decimal:
-        positions = self.client.get_sandbox_positions(account_id)
-        money = BalanceService.get_money_positions(positions)
-        rub = Decimal("0")
-        for position in money:
-            currency = str(self._field(position, "currency", "")).upper()
-            if currency == "RUB":
-                rub += BalanceService._decimal(self._field(position, "available"))
-        return rub
+        """Get the pre-funding RUB cash balance from SandboxPortfolio."""
+        portfolio = self.client.get_sandbox_portfolio(account_id)
+
+        # T-Invest SandboxPortfolio exposes cash totals separately from
+        # the instrument positions. Prefer total_amount_currencies for cash.
+        for field_name in ("total_amount_currencies", "total_amount_portfolio"):
+            value = self._field(portfolio, field_name, None)
+            if value is not None:
+                return BalanceService._decimal(value)
+
+        raise RuntimeError(
+            "Не удалось определить текущий RUB-баланс sandbox-счёта.\n"
+            f"Ответ GetSandboxPortfolio: {portfolio}"
+        )
 
     def _sandbox_pay_in(self: Any) -> None:
         if str(self.environment.value).lower() != "sandbox":
@@ -91,29 +96,15 @@ def install_sandbox_funding_ui(app_class: type[Any]) -> None:
             self.update_idletasks()
             result = self.client.sandbox_pay_in(account_id, amount)
 
-            response_balance = self._field(result, "balance", None)
-            if response_balance is not None:
-                response_balance = BalanceService._decimal(response_balance)
-
-            actual_balance = None
-            last_error: Exception | None = None
-            for _ in range(6):
-                try:
-                    actual_balance = _get_sandbox_rub_balance(self, account_id)
-                    if actual_balance == expected_balance:
-                        break
-                except Exception as exc:
-                    last_error = exc
-                time.sleep(0.5)
-
-            if actual_balance is None:
+            # SandboxPayIn returns the real current account balance after the
+            # operation. This is the authoritative post-operation value.
+            response_balance_raw = self._field(result, "balance", None)
+            if response_balance_raw is None:
                 raise RuntimeError(
-                    f"Не удалось получить баланс после пополнения.\n"
-                    f"Баланс до: {balance_before} RUB\n"
-                    f"Ожидалось: {expected_balance} RUB\n"
-                    f"Ответ SandboxPayIn: {result}\n"
-                    f"Ошибка получения баланса: {last_error}"
+                    "SandboxPayIn не вернул фактический баланс.\n"
+                    f"Ответ API: {result}"
                 )
+            actual_balance = BalanceService._decimal(response_balance_raw)
 
             if actual_balance != expected_balance:
                 raise RuntimeError(
@@ -121,8 +112,7 @@ def install_sandbox_funding_ui(app_class: type[Any]) -> None:
                     f"Баланс до: {balance_before:,.2f} RUB\n"
                     f"Пополнение: {amount:,.2f} RUB\n"
                     f"Ожидаемый баланс: {expected_balance:,.2f} RUB\n"
-                    f"Фактический баланс: {actual_balance:,.2f} RUB\n"
-                    f"Баланс из SandboxPayIn: {response_balance if response_balance is not None else 'не передан'}\n"
+                    f"Фактический баланс из SandboxPayIn: {actual_balance:,.2f} RUB\n"
                     f"Ответ API: {result}"
                 )
 
