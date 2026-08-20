@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from typing import Any
 
 
 @dataclass
@@ -15,12 +16,7 @@ class TInvestAdapterClient:
 
     def _request(self, method: str, path: str, payload: dict | None = None) -> dict:
         data = None if payload is None else json.dumps(payload).encode("utf-8")
-        request = Request(
-            f"{self.base_url}{path}",
-            data=data,
-            method=method,
-            headers={"Content-Type": "application/json"},
-        )
+        request = Request(f"{self.base_url}{path}", data=data, method=method, headers={"Content-Type": "application/json"})
         try:
             with urlopen(request, timeout=self.timeout) as response:
                 return json.loads(response.read().decode("utf-8"))
@@ -52,14 +48,7 @@ class TInvestAdapterClient:
         return self._request("POST", "/positions", {"account_id": account_id})
 
     def find_instrument(self, query: str, trade_available_only: bool = True) -> dict:
-        return self._request(
-            "POST",
-            "/instruments/search",
-            {"query": query, "api_trade_available_flag": trade_available_only},
-        )
-
-    def get_instrument(self, instrument_uid: str) -> dict:
-        return self._request("POST", "/instruments/get", {"instrument_uid": instrument_uid})
+        return self._request("POST", "/instruments/search", {"query": query, "api_trade_available_flag": trade_available_only})
 
     def get_last_prices(self, instrument_ids: list[str]) -> dict:
         return self._request("POST", "/market/last-prices", {"instrument_ids": instrument_ids})
@@ -73,11 +62,26 @@ class TInvestAdapterClient:
     def get_order_state(self, account_id: str, order_id: str) -> dict:
         return self._request("POST", "/orders/state", {"account_id": account_id, "order_id": order_id})
 
-    def post_order(self, request: dict) -> dict:
-        return self._request("POST", "/orders/create", request)
+    @staticmethod
+    def _order_payload(request: Any) -> dict:
+        return {
+            "quantity": int(getattr(request, "quantity")),
+            "direction": getattr(getattr(request, "side"), "value", getattr(request, "side")),
+            "account_id": str(getattr(request, "account_id")),
+            "order_type": getattr(getattr(request, "order_type"), "value", getattr(request, "order_type")),
+            "instrument_uid": str(getattr(request, "instrument_uid")),
+            "request_id": str(getattr(request, "request_id")),
+            "price": str(getattr(request, "price")) if getattr(request, "price", None) is not None else None,
+            "stop_price": str(getattr(request, "stop_price")) if getattr(request, "stop_price", None) is not None else None,
+        }
+
+    def post_order(self, request: Any) -> dict:
+        return self._request("POST", "/orders/create", self._order_payload(request))
 
     def cancel_order(self, account_id: str, order_id: str) -> dict:
         return self._request("POST", "/orders/cancel", {"account_id": account_id, "order_id": order_id})
 
-    def replace_order(self, request: dict) -> dict:
-        return self._request("POST", "/orders/replace", request)
+    def replace_order(self, request: Any, order_id: str) -> dict:
+        payload = self._order_payload(request)
+        payload["order_id"] = order_id
+        return self._request("POST", "/orders/replace", payload)
