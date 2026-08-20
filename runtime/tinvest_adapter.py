@@ -124,9 +124,9 @@ class AdapterState:
             raise RuntimeError(f"T-Invest SDK service '{name}' is unavailable")
         return service
 
-    def _rest_request(self, method: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def _rest_request(self, method: str, payload: dict[str, Any], target: str | None = None) -> dict[str, Any]:
         request = Request(
-            f"{REST_TARGET}/rest/tinkoff.public.invest.api.contract.v1.{method}",
+            f"{target or REST_TARGET}/rest/tinkoff.public.invest.api.contract.v1.{method}",
             data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
             method="POST",
             headers={"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json", "Accept": "application/json"},
@@ -156,7 +156,17 @@ class AdapterState:
             raise ValueError("Максимальная сумма пополнения — 30 000 000 RUB")
         whole = amount.quantize(Decimal("1"))
         nano = int((amount - whole) * Decimal("1000000000"))
-        return self._rest_request("SandboxService/SandboxPayIn", {"accountId": str(account_id), "amount": {"currency": "RUB", "units": str(whole), "nano": nano}})
+        logger.info("[SANDBOX FUNDING] SandboxPayIn account_id=%s amount=%s RUB", account_id, amount)
+        result = self._rest_request(
+            "SandboxService/SandboxPayIn",
+            {"accountId": str(account_id), "amount": {"currency": "RUB", "units": str(whole), "nano": nano}},
+            target="https://invest-public-api.tbank.ru",
+        )
+        logger.info("[SANDBOX FUNDING] SandboxPayIn response=%s", result)
+        balance = result.get("balance") if isinstance(result, dict) else None
+        if balance is None:
+            raise RuntimeError(f"SandboxPayIn returned no balance: {result!r}")
+        return result
     def portfolio(self, account_id): return self._service("operations").get_portfolio(account_id=account_id)
     def positions(self, account_id): return self._service("operations").get_positions(account_id=account_id)
 
