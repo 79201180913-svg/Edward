@@ -39,10 +39,15 @@ class TradingValidator:
         if not context.trading_allowed:
             raise ValueError("Trading is not currently allowed for this instrument")
 
-        if request.order_type == OrderType.LIMIT:
+        if request.order_type in (OrderType.LIMIT, OrderType.STOP_LIMIT):
             if request.price is None or context.price_increment is None:
                 raise ValueError("Limit price validation data is unavailable")
             validate_price_step(request.price, context.price_increment)
+
+        if request.order_type in (OrderType.STOP, OrderType.STOP_LIMIT):
+            if request.stop_price is None or context.price_increment is None:
+                raise ValueError("Stop price validation data is unavailable")
+            validate_price_step(request.stop_price, context.price_increment)
 
         if request.side == OrderSide.BUY:
             if context.available_money is None or context.estimated_total is None:
