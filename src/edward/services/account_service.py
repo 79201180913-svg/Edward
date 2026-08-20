@@ -15,7 +15,13 @@ class AccountService:
         return self._api.get_accounts()
 
     def get_open_accounts(self) -> Any:
-        return self._api.get_accounts(status="ACCOUNT_STATUS_OPEN")
+        response = self.get_accounts()
+        response.accounts[:] = [
+            account
+            for account in response.accounts
+            if str(account.status).endswith("ACCOUNT_STATUS_OPEN")
+        ]
+        return response
 
     @staticmethod
     def select_account(accounts: Any, account_id: str) -> Any:
