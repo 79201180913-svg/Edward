@@ -102,19 +102,20 @@ def _account_label(account: dict) -> str:
 
 def _print_accounts(accounts: list[dict], active_id: str | None) -> None:
     print()
-    print("ACCOUNTS")
+    print("OPEN ACCOUNTS")
     print("----------------------------------------")
-    for index, account in enumerate(accounts, start=1):
+    open_accounts = [account for account in accounts if _is_open(account)]
+    for index, account in enumerate(open_accounts, start=1):
         marker = " *" if str(account.get("id", "")) == active_id else ""
         print(f"{index}. {_account_label(account)}{marker}")
-    if not accounts:
-        print("No accounts found.")
+    if not open_accounts:
+        print("No open accounts found.")
     print("----------------------------------------")
 
 
 def _choose_account(accounts: list[dict], prompt: str) -> dict | None:
     if not accounts:
-        print("No accounts available.")
+        print("No open accounts available.")
         return None
     value = input(prompt).strip()
     try:
