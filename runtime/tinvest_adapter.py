@@ -7,6 +7,7 @@ import os
 import ssl
 import sys
 import tempfile
+from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -152,7 +153,7 @@ class AdapterState:
         if amount <= 0:
             raise ValueError("Сумма пополнения должна быть больше 0")
         if amount > Decimal("30000000"):
-            raise ValueError("Максимальная сумма одного пополнения — 30 000 000 RUB")
+            raise ValueError("Максимальная сумма пополнения — 30 000 000 RUB")
         whole = amount.quantize(Decimal("1"))
         nano = int((amount - whole) * Decimal("1000000000"))
         return self._rest_request("SandboxService/SandboxPayIn", {"accountId": str(account_id), "amount": {"currency": "RUB", "units": str(whole), "nano": nano}})
