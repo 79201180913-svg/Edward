@@ -31,6 +31,7 @@ class TInvestAdapterClient:
     def get_accounts(self) -> dict: return self._request("POST", "/accounts", {})
     def create_sandbox_account(self, name: str | None = None) -> dict: return self._request("POST", "/accounts/create", {"name": name} if name else {})
     def close_sandbox_account(self, account_id: str) -> dict: return self._request("POST", "/accounts/close", {"account_id": account_id})
+    def sandbox_pay_in(self, account_id: str, amount: Any) -> dict: return self._request("POST", "/accounts/pay-in", {"account_id": account_id, "amount": str(amount)})
     def get_portfolio(self, account_id: str) -> dict: return self._request("POST", "/portfolio", {"account_id": account_id})
     def get_positions(self, account_id: str) -> dict: return self._request("POST", "/positions", {"account_id": account_id})
     def find_instrument(self, query: str, trade_available_only: bool = True) -> dict: return self._request("POST", "/instruments/search", {"query": query, "api_trade_available_flag": trade_available_only})
@@ -43,8 +44,7 @@ class TInvestAdapterClient:
     def get_order_state(self, account_id: str, order_id: str) -> dict: return self._request("POST", "/orders/state", {"account_id": account_id, "order_id": order_id})
     def get_order_price(self, account_id: str, instrument_id: str, price: Any, direction: str, quantity: int) -> dict:
         return self._request("POST", "/orders/price", {"account_id": account_id, "instrument_id": instrument_id, "price": price, "direction": direction, "quantity": quantity})
-    def get_max_lots(self, account_id: str, instrument_id: str, price: Any) -> dict:
-        return self._request("POST", "/orders/max-lots", {"account_id": account_id, "instrument_id": instrument_id, "price": price})
+    def get_max_lots(self, account_id: str, instrument_id: str, price: Any) -> dict: return self._request("POST", "/orders/max-lots", {"account_id": account_id, "instrument_id": instrument_id, "price": price})
     def get_operations(self, account_id: str, limit: int = 1000) -> dict: return self._request("POST", "/operations", {"account_id": account_id, "limit": limit})
 
     @staticmethod
