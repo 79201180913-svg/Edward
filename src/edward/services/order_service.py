@@ -29,6 +29,7 @@ class OrderRequest:
     price: Decimal | None = None
     stop_price: Decimal | None = None
     request_id: str = ""
+    instrument_kind: str = "SHARE"
 
     def __post_init__(self) -> None:
         if self.quantity <= 0:
