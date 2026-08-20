@@ -1,0 +1,3 @@
+keyring>=25.0
+openpyxl>=3.1
+t-tech-investments>=0.1
