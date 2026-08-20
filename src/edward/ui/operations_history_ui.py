@@ -50,50 +50,28 @@ def install_operations_history_ui(app_class: type[Any]) -> None:
     def _decimal_text(value: Any) -> str:
         return app_class._money(value)
 
-    def _extract_money_balance(payload: Any) -> Decimal:
-        if isinstance(payload, dict):
-            for field in ("total_amount_currencies", "total_amount_portfolio", "available", "balance", "amount"):
-                value = app_class._field(payload, field, None)
-                if value is not None:
-                    return _decimal(value)
-            for key in ("money", "currencies", "positions", "withdraw_limits", "withdraw_limit", "limits"):
-                value = payload.get(key)
-                if isinstance(value, list):
-                    for item in value:
-                        if str(app_class._field(item, "currency", "")).upper() == "RUB":
-                            return _decimal(app_class._field(item, "available", app_class._field(item, "amount", app_class._field(item, "balance", 0))))
-                elif isinstance(value, dict):
-                    found = _extract_money_balance(value)
-                    if found != Decimal("0"):
-                        return found
-        elif isinstance(payload, list):
-            for item in payload:
-                found = _extract_money_balance(item)
-                if found != Decimal("0"):
-                    return found
+    def _current_rub_balance(self: Any, account_id: str) -> Decimal:
+        positions = self.client.get_positions(account_id)
+        money = self._items(positions, "money")
+        for position in money:
+            if str(self._field(position, "currency", "")).upper() == "RUB":
+                return _decimal(self._field(position, "available", 0))
         return Decimal("0")
 
-    def _current_rub_balance(self: Any, account_id: str) -> Decimal:
-        try:
-            if str(getattr(getattr(self, "environment", None), "value", "")).lower() == "sandbox":
-                portfolio = self.client.get_sandbox_portfolio(account_id)
-                return _extract_money_balance(portfolio)
-            positions = self.client.get_positions(account_id)
-            return _extract_money_balance(positions)
-        except Exception:
-            positions = self.client.get_positions(account_id)
-            return _extract_money_balance(positions)
-
     def _portfolio_value(self: Any, account_id: str) -> Decimal:
-        try:
-            portfolio = self.client.get_sandbox_portfolio(account_id) if str(getattr(getattr(self, "environment", None), "value", "")).lower() == "sandbox" else self.client.get_portfolio(account_id)
-            for field in ("total_amount_portfolio", "total_amount_currencies"):
-                value = self._field(portfolio, field, None)
-                if value is not None:
-                    return _decimal(value)
-            return _extract_money_balance(portfolio)
-        except Exception:
-            return Decimal("0")
+        """Return value of invested security positions only, excluding cash."""
+        positions = self.client.get_positions(account_id)
+        securities = self._items(positions, "securities")
+        total = Decimal("0")
+        for position in securities:
+            explicit_value = self._field(position, "value", None)
+            if explicit_value is not None:
+                total += _decimal(explicit_value)
+                continue
+            current_price = _decimal(self._field(position, "current_price", 0))
+            quantity = _decimal(self._field(position, "quantity", self._field(position, "balance", 0)))
+            total += current_price * quantity
+        return total
 
     def _copy_rows(self: Any, tree: Any, selected_only: bool = False) -> None:
         items = tree.selection() if selected_only else tree.get_children("")
@@ -121,8 +99,17 @@ def install_operations_history_ui(app_class: type[Any]) -> None:
         account_name = getattr(active_account, "name", "") if active_account else ""
         account_display = account_name or aid
 
-        current_balance = _current_rub_balance(self, aid)
-        portfolio_value = _portfolio_value(self, aid)
+        try:
+            current_balance = _current_rub_balance(self, aid)
+        except Exception as exc:
+            current_balance = Decimal("0")
+            self.status_var.set(f"Не удалось получить текущий баланс: {exc}")
+
+        try:
+            portfolio_value = _portfolio_value(self, aid)
+        except Exception as exc:
+            portfolio_value = Decimal("0")
+            self.status_var.set(f"Не удалось получить стоимость ценных бумаг: {exc}")
 
         toolbar = ttk.Frame(self.content)
         toolbar.pack(fill="x", pady=(0, 10))
