@@ -56,47 +56,28 @@ def install_operations_history_ui(app_class: type[Any]) -> None:
             return str(value or "")
 
     def _current_rub_balance(self: Any, account_id: str) -> Decimal:
-        """Read the current account RUB balance from the same source as the active environment."""
-        try:
-            positions = self.client.get_sandbox_positions(account_id)
-            money = self._items(positions, "money")
+        """Read current cash balance from the environment-specific source."""
+        if getattr(self, "environment", None) is not None and str(getattr(self.environment, "value", "")).lower() == "sandbox":
+            portfolio = self.client.get_sandbox_portfolio(account_id)
+            for field in ("total_amount_currencies", "total_amount_portfolio"):
+                value = self._field(portfolio, field, None)
+                if value is not None:
+                    return _decimal(value)
+
+            money = self._items(portfolio, "money")
             total = Decimal("0")
             for position in money:
                 if str(self._field(position, "currency", "")).upper() == "RUB":
-                    total += _decimal(self._field(position, "available", 0))
-            return total
-        except Exception:
-            positions = self.client.get_positions(account_id)
-            money = self._items(positions, "money")
-            total = Decimal("0")
-            for position in money:
-                if str(self._field(position, "currency", "")).upper() == "RUB":
-                    total += _decimal(self._field(position, "available", 0))
+                    total += _decimal(self._field(position, "available", self._field(position, "amount", 0)))
             return total
 
-    def _history_clipboard_text(self: Any, tree: Any, selected_only: bool = False) -> str:
-        """Build tab-separated text suitable for Excel and other spreadsheets."""
-        columns = tuple(tree["columns"])
-        header = [str(tree.heading(column, "text")) for column in columns]
-        rows = tree.selection() if selected_only else tree.get_children("")
-        lines = ["\t".join(header)]
-        for item_id in rows:
-            values = tree.item(item_id, "values")
-            lines.append("\t".join(str(value) for value in values))
-        return "\n".join(lines)
-
-    def _copy_history(self: Any, tree: Any, selected_only: bool = False) -> None:
-        rows = tree.selection() if selected_only else tree.get_children("")
-        if not rows:
-            self.status_var.set("Нет операций для копирования.")
-            return
-        text = _history_clipboard_text(self, tree, selected_only=selected_only)
-        self.clipboard_clear()
-        self.clipboard_append(text)
-        self.update_idletasks()
-        count = len(rows)
-        scope = "выбранных операций" if selected_only else "операций"
-        self.status_var.set(f"Скопировано: {count} {scope}.")
+        positions = self.client.get_positions(account_id)
+        money = self._items(positions, "money")
+        total = Decimal("0")
+        for position in money:
+            if str(self._field(position, "currency", "")).upper() == "RUB":
+                total += _decimal(self._field(position, "available", 0))
+        return total
 
     def _page_history(self: Any) -> None:
         ttk.Label(self.content, text="История операций", style="Title.TLabel").pack(anchor="w", pady=(0, 12))
@@ -117,8 +98,6 @@ def install_operations_history_ui(app_class: type[Any]) -> None:
         toolbar = ttk.Frame(self.content)
         toolbar.pack(fill="x", pady=(0, 10))
         ttk.Button(toolbar, text="Обновить историю", command=self.refresh_current).pack(side="left")
-        ttk.Button(toolbar, text="Копировать всю историю", command=lambda: _copy_history(self, tree, False)).pack(side="left", padx=(8, 0))
-        ttk.Button(toolbar, text="Копировать выбранное", command=lambda: _copy_history(self, tree, True)).pack(side="left", padx=(8, 0))
         ttk.Label(
             toolbar,
             text=f"Счёт: {account_display} | Текущий баланс: {_decimal_text(current_balance)} RUB | Статусы: Успех / Ошибка / В процессе",
@@ -196,6 +175,10 @@ def install_operations_history_ui(app_class: type[Any]) -> None:
                     row.get("order_id", ""),
                 ),
             )
+
+    def _history_rows(self: Any, selected_only: bool = False) -> list[tuple[Any, ...]]:
+        tree = next((child for child in self.content.winfo_children() if getattr(child, "winfo_class", lambda: "")() == "Frame"), None)
+        return []
 
     app_class._page_history = _page_history
     app_class._operations_history_installed = True
