@@ -154,6 +154,30 @@ class AdapterState:
             api_trade_available_flag=trade_available_only,
         )
 
+    def list_instruments(self, instrument_kind: str = "SHARE", trade_available_only: bool = True) -> Any:
+        """Return an authoritative catalog list for a supported instrument kind."""
+        method_map = {
+            "SHARE": "shares",
+            "BOND": "bonds",
+            "ETF": "etfs",
+            "CURRENCY": "currencies",
+            "FUTURES": "futures",
+            "OPTION": "options",
+        }
+        method_name = method_map.get(instrument_kind.upper())
+        if method_name is None:
+            raise ValueError(f"Unsupported instrument kind: {instrument_kind}")
+
+        service = self._service("instruments")
+        method = getattr(service, method_name, None)
+        if method is None:
+            raise RuntimeError(f"T-Invest SDK instrument method '{method_name}' is unavailable")
+
+        # BASE is the API-tradable catalog according to T-Invest documentation.
+        status = "INSTRUMENT_STATUS_BASE" if trade_available_only else "INSTRUMENT_STATUS_ALL"
+        kwargs: dict[str, Any] = {"instrument_status": status}
+        return method(**kwargs)
+
     def last_prices(self, instrument_ids: list[str]) -> Any:
         return self._service("market_data").get_last_prices(instrument_id=instrument_ids)
 
@@ -259,7 +283,21 @@ class Handler(BaseHTTPRequestHandler):
                 if not query:
                     self._send(400, {"error": "query is required"})
                     return
-                self._send(200, message_to_dict(STATE.find_instrument(query, bool(payload.get("api_trade_available_flag", True)))))
+                try:
+                    result = STATE.find_instrument(query, bool(payload.get("api_trade_available_flag", True)))
+                    self._send(200, message_to_dict(result))
+                except Exception as exc:
+                    # FindInstrument may return a transport-level not_found for a
+                    # query with no matches. That is a normal empty-result state.
+                    if "not_found" in str(exc).lower():
+                        self._send(200, {"instruments": []})
+                    else:
+                        raise
+                return
+            if self.path == "/instruments/list":
+                kind = str(payload.get("instrument_kind", "SHARE")).strip().upper()
+                trade_available_only = bool(payload.get("api_trade_available_flag", True))
+                self._send(200, message_to_dict(STATE.list_instruments(kind, trade_available_only)))
                 return
             if self.path == "/market/last-prices":
                 instrument_ids = [str(value) for value in payload.get("instrument_ids", [])]
