@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from decimal import Decimal
 from typing import Any
 
@@ -7,6 +8,9 @@ from edward.api.tinvest_adapter_client import TInvestAdapterClient
 from edward.services.balance_service import BalanceService
 from edward.services.order_service import OrderRequest, OrderSide, OrderType
 from edward.validation.trading_validator import ValidationContext
+
+
+logger = logging.getLogger("edward.trading_validation")
 
 
 class AdapterTradingDataProvider:
@@ -17,10 +21,26 @@ class AdapterTradingDataProvider:
         response = self._client.list_instruments(request.instrument_kind, trade_available_only=False)
         instruments = self._items(response, 'instruments')
         instrument = next((item for item in instruments if self._uid(item) == request.instrument_uid), None)
+
         status = self._client.get_trading_status(request.instrument_uid)
-        available = bool(self._field(status, 'api_trade_available_flag', False))
-        if request.order_type == OrderType.LIMIT and not bool(self._field(status, 'limit_order_available_flag', True)):
+        api_trade_available = bool(self._field(status, 'api_trade_available_flag', False))
+        limit_order_available = bool(self._field(status, 'limit_order_available_flag', True))
+        available = api_trade_available
+        if request.order_type == OrderType.LIMIT and not limit_order_available:
             available = False
+
+        logger.info(
+            "[TRADING DEBUG] uid=%s ticker=%s order_type=%s "
+            "api_trade_available_flag=%r limit_order_available_flag=%r trading_allowed=%r status=%r",
+            request.instrument_uid,
+            self._field(instrument, 'ticker', ''),
+            request.order_type.value,
+            self._field(status, 'api_trade_available_flag', None),
+            self._field(status, 'limit_order_available_flag', None),
+            available,
+            status,
+        )
+
         current = self._items(self._client.get_last_prices([request.instrument_uid]), 'last_prices')
         market_price = self._decimal(self._field(current[0], 'price')) if current else None
         increment = self._decimal(self._field(instrument, 'min_price_increment')) if instrument else None
