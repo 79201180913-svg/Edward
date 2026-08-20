@@ -158,11 +158,7 @@ class AdapterState:
         whole = amount.quantize(Decimal("1"))
         nano = int((amount - whole) * Decimal("1000000000"))
         logger.info("[SANDBOX FUNDING] SandboxPayIn account_id=%s amount=%s RUB", account_id, amount)
-        result = self._rest_request(
-            "SandboxService/SandboxPayIn",
-            {"accountId": str(account_id), "amount": {"currency": "RUB", "units": str(whole), "nano": nano}},
-            target="https://invest-public-api.tbank.ru",
-        )
+        result = self._rest_request("SandboxService/SandboxPayIn", {"accountId": str(account_id), "amount": {"currency": "RUB", "units": str(whole), "nano": nano}}, target="https://invest-public-api.tbank.ru")
         logger.info("[SANDBOX FUNDING] SandboxPayIn response=%s", result)
         balance = result.get("balance") if isinstance(result, dict) else None
         if balance is None:
@@ -172,25 +168,24 @@ class AdapterState:
     def sandbox_positions(self, account_id):
         if ENVIRONMENT != "sandbox":
             raise RuntimeError("GetSandboxPositions is available only in SANDBOX")
-        result = self._rest_request(
-            "SandboxService/GetSandboxPositions",
-            {"accountId": str(account_id)},
-            target="https://invest-public-api.tbank.ru",
-        )
+        result = self._rest_request("SandboxService/GetSandboxPositions", {"accountId": str(account_id)}, target="https://invest-public-api.tbank.ru")
         logger.info("[SANDBOX FUNDING] GetSandboxPositions account_id=%s response=%s", account_id, result)
+        return result
+
+    def sandbox_portfolio(self, account_id):
+        if ENVIRONMENT != "sandbox":
+            raise RuntimeError("GetSandboxPortfolio is available only in SANDBOX")
+        result = self._rest_request("SandboxService/GetSandboxPortfolio", {"accountId": str(account_id), "currency": "RUB"}, target="https://invest-public-api.tbank.ru")
+        logger.info("[SANDBOX FUNDING] GetSandboxPortfolio account_id=%s response=%s", account_id, result)
         return result
 
     def portfolio(self, account_id): return self._service("operations").get_portfolio(account_id=account_id)
     def positions(self, account_id): return self._service("operations").get_positions(account_id=account_id)
-
-    def find_instrument(self, query, trade_available_only=True):
-        return self._rest_request("InstrumentsService/FindInstrument", {"query": query, "instrumentKind": "INSTRUMENT_TYPE_UNSPECIFIED", "apiTradeAvailableFlag": trade_available_only})
-
+    def find_instrument(self, query, trade_available_only=True): return self._rest_request("InstrumentsService/FindInstrument", {"query": query, "instrumentKind": "INSTRUMENT_TYPE_UNSPECIFIED", "apiTradeAvailableFlag": trade_available_only})
     def _list_primary(self, kind, trade):
         method = {"SHARE": "Shares", "BOND": "Bonds", "ETF": "Etfs", "CURRENCY": "Currencies", "FUTURES": "Futures", "OPTION": "Options"}.get(kind.upper())
         if not method: raise ValueError(f"Unsupported instrument kind: {kind}")
         return self._rest_request(f"InstrumentsService/{method}", {"instrumentStatus": "INSTRUMENT_STATUS_BASE" if trade else "INSTRUMENT_STATUS_ALL", "instrumentExchange": "INSTRUMENT_EXCHANGE_UNSPECIFIED"})
-
     def _assets_fallback(self, kind, trade):
         if kind.upper() in {"FUTURES", "OPTION"}: raise RuntimeError("Instrument catalog fallback is unavailable for futures/options")
         response = self._rest_request("InstrumentsService/GetAssets", {"instrumentType": {"SHARE": "INSTRUMENT_TYPE_SHARE", "BOND": "INSTRUMENT_TYPE_BOND", "ETF": "INSTRUMENT_TYPE_ETF", "CURRENCY": "INSTRUMENT_TYPE_CURRENCY"}.get(kind.upper(), "INSTRUMENT_TYPE_UNSPECIFIED"), "instrumentStatus": "INSTRUMENT_STATUS_BASE" if trade else "INSTRUMENT_STATUS_ALL"})
@@ -199,15 +194,12 @@ class AdapterState:
             for instrument in asset.get("instruments", []):
                 item = dict(instrument); item.setdefault("name", asset.get("name", asset.get("name_brief", ""))); instruments.append(item)
         return {"instruments": instruments}
-
     def list_instruments(self, kind="SHARE", trade=True):
         try: return self._list_primary(kind, trade)
         except RuntimeError as exc:
             if "404" not in str(exc) and "not_found" not in str(exc).lower(): raise
             return self._assets_fallback(kind, trade)
-
     def instrument(self, instrument_id): return self._rest_request("InstrumentsService/GetInstrumentBy", {"idType": "INSTRUMENT_ID_TYPE_UID", "id": instrument_id})
-
     def last_prices(self, ids):
         logger.info("[PRICE DEBUG] SDK GetLastPrices: ids=%d", len(ids))
         response = self._service("market_data").get_last_prices(instrument_id=ids)
@@ -226,7 +218,6 @@ class AdapterState:
         except Exception as exc:
             logger.warning("[PRICE DEBUG] REST GetLastPrices failed: %s", exc)
             return data
-
     def trading_status(self, instrument_id): return self._service("market_data").get_trading_status(instrument_id=instrument_id)
     def trading_statuses(self, ids):
         logger.info("[PRICE DEBUG] GetTradingStatuses: ids=%d", len(ids))
@@ -245,7 +236,6 @@ class AdapterState:
         kwargs = {"order_id": payload["order_id"], "quantity": payload["quantity"], "account_id": payload["account_id"]}
         if payload.get("price") is not None: kwargs["price"] = payload["price"]
         return self._service("orders").replace_order(**kwargs)
-
 
 STATE = AdapterState()
 
@@ -268,6 +258,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/accounts/close": self._send(200, message_to_dict(STATE.close_sandbox_account(str(p.get("account_id", "")).strip()))); return
             if self.path == "/accounts/pay-in": self._send(200, STATE.sandbox_pay_in(str(p.get("account_id", "")).strip(), p.get("amount"))); return
             if self.path == "/accounts/sandbox-positions": self._send(200, STATE.sandbox_positions(str(p.get("account_id", "")).strip())); return
+            if self.path == "/accounts/sandbox-portfolio": self._send(200, STATE.sandbox_portfolio(str(p.get("account_id", "")).strip())); return
             if self.path == "/portfolio": self._send(200, message_to_dict(STATE.portfolio(str(p.get("account_id", "")).strip()))); return
             if self.path == "/positions": self._send(200, message_to_dict(STATE.positions(str(p.get("account_id", "")).strip()))); return
             if self.path == "/instruments/search": self._send(200, message_to_dict(STATE.find_instrument(str(p.get("query", "")).strip(), bool(p.get("api_trade_available_flag", True))))); return
