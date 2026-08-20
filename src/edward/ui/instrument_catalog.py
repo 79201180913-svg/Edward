@@ -25,6 +25,14 @@ def _uid(instrument: Any) -> str:
     return str(_field(instrument, "uid", _field(instrument, "instrument_uid", "")))
 
 
+def _flag(value: Any) -> str:
+    if value is True:
+        return "YES"
+    if value is False:
+        return "NO"
+    return str(value)
+
+
 def _print_instruments(instruments: list[Any], start: int = 1) -> None:
     print("\nINSTRUMENTS")
     print("----------------------------------------")
@@ -36,7 +44,10 @@ def _print_instruments(instruments: list[Any], start: int = 1) -> None:
         name = _field(instrument, "name", "")
         uid = _uid(instrument)
         currency = _field(instrument, "currency", "")
-        print(f"{index}. {ticker} | {name} | {currency} | uid={uid}")
+        buy = _flag(_field(instrument, "buy_available_flag", ""))
+        sell = _flag(_field(instrument, "sell_available_flag", ""))
+        trade = _flag(_field(instrument, "api_trade_available_flag", ""))
+        print(f"{index}. {ticker} | {name} | {currency} | BUY={buy} SELL={sell} API={trade} | uid={uid}")
     print("----------------------------------------")
 
 
@@ -71,12 +82,7 @@ def show_catalog(client: Any, on_selected: Callable[[Any], None] | None = None) 
     print(f"\nLoaded {len(instruments)} instruments.")
     query = input("Filter by ticker/name (Enter = all): ").strip().casefold()
     if query:
-        instruments = [
-            instrument
-            for instrument in instruments
-            if query in str(_field(instrument, "ticker", "")).casefold()
-            or query in str(_field(instrument, "name", "")).casefold()
-        ]
+        instruments = catalog.search(query, kind, True)
 
     page_size = 20
     page = 0
@@ -103,13 +109,7 @@ def show_catalog(client: Any, on_selected: Callable[[Any], None] | None = None) 
             continue
         if choice == "f":
             query = input("Filter: ").strip().casefold()
-            instruments = [
-                instrument
-                for instrument in catalog.list(kind, True)
-                if not query
-                or query in str(_field(instrument, "ticker", "")).casefold()
-                or query in str(_field(instrument, "name", "")).casefold()
-            ]
+            instruments = catalog.search(query, kind, True)
             page = 0
             continue
         try:
@@ -129,7 +129,11 @@ def show_catalog(client: Any, on_selected: Callable[[Any], None] | None = None) 
         print(f"FIGI:     {_field(selected, 'figi', '')}")
         print(f"ISIN:     {_field(selected, 'isin', '')}")
         print(f"Currency: {_field(selected, 'currency', '')}")
-        print(f"Trading:  {_field(selected, 'api_trade_available_flag', '')}")
+        print(f"Class:    {_field(selected, 'class_code', '')}")
+        print(f"Buy:      {_flag(_field(selected, 'buy_available_flag', ''))}")
+        print(f"Sell:     {_flag(_field(selected, 'sell_available_flag', ''))}")
+        print(f"API:      {_flag(_field(selected, 'api_trade_available_flag', ''))}")
+        print(f"Step:     {_field(selected, 'min_price_increment', '')}")
         print("----------------------------------------")
         if on_selected:
             on_selected(selected)
