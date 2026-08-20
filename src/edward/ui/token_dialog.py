@@ -42,36 +42,28 @@ def request_and_save_token(store: TokenStore) -> str | None:
         bd=1,
     )
     entry.pack(fill="x")
-    entry.focus_set()
+    entry.focus_force()
 
-    # Explicitly wire clipboard shortcuts. This makes paste work reliably
-    # when Edward is started from run_edward.bat / Git Bash on Windows.
+    # Use Tk's native virtual clipboard events. Unlike manual Control-V
+    # bindings, these are handled by the standard Entry widget clipboard
+    # implementation on Windows.
     def paste(_event=None):
         try:
-            value = root.clipboard_get()
-        except tk.TclError:
-            return "break"
-        try:
-            entry.delete("sel.first", "sel.last")
+            entry.event_generate("<<Paste>>")
         except tk.TclError:
             pass
-        entry.insert("insert", value)
         return "break"
 
     def copy(_event=None):
         try:
-            selected = entry.selection_get()
+            entry.event_generate("<<Copy>>")
         except tk.TclError:
-            return "break"
-        root.clipboard_clear()
-        root.clipboard_append(selected)
-        root.update()
+            pass
         return "break"
 
     def cut(_event=None):
-        copy()
         try:
-            entry.delete("sel.first", "sel.last")
+            entry.event_generate("<<Cut>>")
         except tk.TclError:
             pass
         return "break"
@@ -81,15 +73,15 @@ def request_and_save_token(store: TokenStore) -> str | None:
         entry.icursor("end")
         return "break"
 
-    root.bind_all("<Control-Key-v>", paste)
-    root.bind_all("<Control-Key-V>", paste)
-    root.bind_all("<Control-Key-c>", copy)
-    root.bind_all("<Control-Key-C>", copy)
-    root.bind_all("<Control-Key-x>", cut)
-    root.bind_all("<Control-Key-X>", cut)
-    root.bind_all("<Control-Key-a>", select_all)
-    root.bind_all("<Control-Key-A>", select_all)
-    root.bind_all("<Shift-Insert>", paste)
+    entry.bind("<Control-v>", paste)
+    entry.bind("<Control-V>", paste)
+    entry.bind("<Control-c>", copy)
+    entry.bind("<Control-C>", copy)
+    entry.bind("<Control-x>", cut)
+    entry.bind("<Control-X>", cut)
+    entry.bind("<Control-a>", select_all)
+    entry.bind("<Control-A>", select_all)
+    entry.bind("<Shift-Insert>", paste)
 
     def cancel() -> None:
         result["token"] = None
@@ -103,7 +95,7 @@ def request_and_save_token(store: TokenStore) -> str | None:
                 "Токен не может быть пустым.",
                 parent=root,
             )
-            entry.focus_set()
+            entry.focus_force()
             return
 
         try:
