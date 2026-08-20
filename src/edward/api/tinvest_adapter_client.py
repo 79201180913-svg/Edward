@@ -34,8 +34,14 @@ class TInvestAdapterClient:
     def sandbox_pay_in(self, account_id: str, amount: Any) -> dict: return self._request("POST", "/accounts/pay-in", {"account_id": account_id, "amount": str(amount)})
     def get_sandbox_positions(self, account_id: str) -> dict: return self._request("POST", "/accounts/sandbox-positions", {"account_id": account_id})
     def get_sandbox_portfolio(self, account_id: str) -> dict: return self._request("POST", "/accounts/sandbox-portfolio", {"account_id": account_id})
-    def get_portfolio(self, account_id: str) -> dict: return self._request("POST", "/portfolio", {"account_id": account_id})
-    def get_positions(self, account_id: str) -> dict: return self._request("POST", "/positions", {"account_id": account_id})
+    def get_portfolio(self, account_id: str) -> dict:
+        if str(self.health().get("environment", "")).lower() == "sandbox":
+            return self.get_sandbox_portfolio(account_id)
+        return self._request("POST", "/portfolio", {"account_id": account_id})
+    def get_positions(self, account_id: str) -> dict:
+        if str(self.health().get("environment", "")).lower() == "sandbox":
+            return self.get_sandbox_positions(account_id)
+        return self._request("POST", "/positions", {"account_id": account_id})
     def find_instrument(self, query: str, trade_available_only: bool = True) -> dict: return self._request("POST", "/instruments/search", {"query": query, "api_trade_available_flag": trade_available_only})
     def list_instruments(self, instrument_kind: str = "SHARE", trade_available_only: bool = True) -> dict: return self._request("POST", "/instruments/list", {"instrument_kind": instrument_kind, "api_trade_available_flag": trade_available_only})
     def get_instrument(self, instrument_id: str) -> dict: return self._request("POST", "/instruments/get", {"instrument_id": instrument_id})
