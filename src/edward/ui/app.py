@@ -156,15 +156,38 @@ class EdwardApp(tk.Tk):
         ttk.Label(self.content,text='Новая торговая заявка',style='Title.TLabel').pack(anchor='w',pady=(0,16)); aid=self._require_account()
         if not aid:return
         ins=self.selected_instrument or {}; f=ttk.Frame(self.content); f.pack(fill='x'); vars={}
-        fields=[('ticker','Инструмент',ins.get('ticker','')),('side','Операция','Покупка'),('order_type','Тип заявки','Лимитная'),('quantity','Количество лотов','1'),('price','Цена',str(ins.get('last_price','')))]
+
+        # Определяем доступные типы заявки непосредственно перед отображением формы.
+        status=self.client.get_trading_status(str(ins.get('instrument_uid','')))
+        api_trade_available=bool(self._field(status,'api_trade_available_flag',False))
+        market_available=bool(self._field(status,'market_order_available_flag',True))
+        limit_available=bool(self._field(status,'limit_order_available_flag',False))
+        available_types=[]
+        if market_available and api_trade_available: available_types.append('Рыночная')
+        if limit_available and api_trade_available: available_types.append('Лимитная')
+        if not available_types:
+            raise ValueError(
+                'Для выбранного инструмента сейчас нет доступных типов заявок.\n\n'
+                f'api_trade_available_flag={api_trade_available}; '
+                f'market_order_available_flag={self._field(status,"market_order_available_flag",None)}; '
+                f'limit_order_available_flag={self._field(status,"limit_order_available_flag",None)}; '
+                f'trading_status={self._field(status,"trading_status",None)}'
+            )
+        default_type=available_types[0]
+        if 'Лимитная' in available_types and api_trade_available:
+            default_type='Лимитная'
+
+        fields=[('ticker','Инструмент',ins.get('ticker','')),('side','Операция','Покупка'),('order_type','Тип заявки',default_type),('quantity','Количество лотов','1'),('price','Цена',str(ins.get('last_price','')))]
         for r,(k,l,d) in enumerate(fields):
             ttk.Label(f,text=l,width=22).grid(row=r,column=0,sticky='w',pady=5); vars[k]=tk.StringVar(value=d)
             if k=='side':w=ttk.Combobox(f,textvariable=vars[k],state='readonly',values=['Покупка','Продажа'],width=37)
-            elif k=='order_type':w=ttk.Combobox(f,textvariable=vars[k],state='readonly',values=['Рыночная','Лимитная'],width=37)
+            elif k=='order_type':w=ttk.Combobox(f,textvariable=vars[k],state='readonly',values=available_types,width=37)
             elif k=='ticker':w=ttk.Entry(f,textvariable=vars[k],state='readonly',width=40)
             else:w=ttk.Entry(f,textvariable=vars[k],width=40)
             w.grid(row=r,column=1,sticky='w')
-        ttk.Label(self.content,text=f"Текущая цена: {ins.get('last_price','недоступна')} | Шаг цены: {ins.get('min_price_increment','неизвестен')}").pack(anchor='w',pady=12); ttk.Button(self.content,text='Проверить и подтвердить',command=lambda:self._submit(vars)).pack(anchor='w')
+        type_hint=' / '.join(available_types)
+        ttk.Label(self.content,text=f"Текущая цена: {ins.get('last_price','недоступна')} | Шаг цены: {ins.get('min_price_increment','неизвестен')} | Доступные типы: {type_hint}").pack(anchor='w',pady=12); ttk.Button(self.content,text='Проверить и подтвердить',command=lambda:self._submit(vars)).pack(anchor='w')
+
     def _submit(self,v):
         aid=self._require_account(); ins=self.selected_instrument
         if not aid or not ins:return
