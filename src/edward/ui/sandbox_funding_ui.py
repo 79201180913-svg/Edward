@@ -30,7 +30,7 @@ def install_sandbox_funding_ui(app_class: type[Any]) -> None:
         self._sandbox_pay_in_button.pack(fill="x", pady=2)
 
     def _get_sandbox_rub_balance(self: Any, account_id: str) -> Decimal:
-        positions = self.client.get_positions(account_id)
+        positions = self.client.get_sandbox_positions(account_id)
         money = BalanceService.get_money_positions(positions)
         rub = Decimal("0")
         for position in money:
