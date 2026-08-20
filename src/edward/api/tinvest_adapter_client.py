@@ -50,3 +50,34 @@ class TInvestAdapterClient:
 
     def get_positions(self, account_id: str) -> dict:
         return self._request("POST", "/positions", {"account_id": account_id})
+
+    def find_instrument(self, query: str, trade_available_only: bool = True) -> dict:
+        return self._request(
+            "POST",
+            "/instruments/search",
+            {"query": query, "api_trade_available_flag": trade_available_only},
+        )
+
+    def get_instrument(self, instrument_uid: str) -> dict:
+        return self._request("POST", "/instruments/get", {"instrument_uid": instrument_uid})
+
+    def get_last_prices(self, instrument_ids: list[str]) -> dict:
+        return self._request("POST", "/market/last-prices", {"instrument_ids": instrument_ids})
+
+    def get_trading_status(self, instrument_id: str) -> dict:
+        return self._request("POST", "/market/trading-status", {"instrument_id": instrument_id})
+
+    def get_orders(self, account_id: str) -> dict:
+        return self._request("POST", "/orders", {"account_id": account_id})
+
+    def get_order_state(self, account_id: str, order_id: str) -> dict:
+        return self._request("POST", "/orders/state", {"account_id": account_id, "order_id": order_id})
+
+    def post_order(self, request: dict) -> dict:
+        return self._request("POST", "/orders/create", request)
+
+    def cancel_order(self, account_id: str, order_id: str) -> dict:
+        return self._request("POST", "/orders/cancel", {"account_id": account_id, "order_id": order_id})
+
+    def replace_order(self, request: dict) -> dict:
+        return self._request("POST", "/orders/replace", request)
