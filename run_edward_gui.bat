@@ -37,7 +37,7 @@ echo Checking T-Invest adapter...
 .venv-tinvest\Scripts\python.exe -m pip install -r runtime\requirements.txt --extra-index-url https://opensource.tbank.ru/api/v4/projects/238/packages/pypi/simple
 if errorlevel 1 goto :tinvest_error
 
-.venv\Scripts\python.exe -m edward.ui.app
+.venv\Scripts\python.exe -m edward.ui.gui_launcher
 set EXIT_CODE=%ERRORLEVEL%
 if not "%EXIT_CODE%"=="0" (
     echo Edward GUI finished with error code %EXIT_CODE%.
