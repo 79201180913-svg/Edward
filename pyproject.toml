@@ -5,8 +5,16 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "edward"
 version = "0.1.0"
-description = "Edward Python project"
-requires-python = ">=3.11"
+description = "Edward trading platform"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "keyring>=25,<26",
+    "openpyxl>=3.1,<4",
+    "t-tech-investments==0.3.3",
+]
+
+[project.scripts]
+edward = "edward.main:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
