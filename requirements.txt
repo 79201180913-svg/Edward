@@ -1,3 +1,5 @@
+--extra-index-url https://opensource.tbank.ru/api/v4/projects/238/packages/pypi/simple
+
 keyring>=25.0
 openpyxl>=3.1
-t-tech-investments>=0.1
+t-tech-investments
