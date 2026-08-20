@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from decimal import Decimal
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from typing import Any
@@ -39,8 +40,36 @@ class TInvestAdapterClient:
         if str(self.health().get("environment", "")).lower() == "sandbox":
             return self.get_sandbox_portfolio(account_id)
         return self._request("POST", "/portfolio", {"account_id": account_id})
+
     def get_positions(self, account_id: str) -> dict:
-        return self._request("POST", "/positions", {"account_id": account_id})
+        if str(self.health().get("environment", "")).lower() != "sandbox":
+            return self._request("POST", "/positions", {"account_id": account_id})
+
+        positions = self.get_sandbox_positions(account_id)
+        portfolio = self.get_sandbox_portfolio(account_id)
+        cash = portfolio.get("total_amount_currencies")
+        if cash is None:
+            cash = portfolio.get("total_amount_portfolio")
+        if cash is None:
+            raise RuntimeError(
+                "GetSandboxPortfolio не вернул total_amount_currencies/total_amount_portfolio; "
+                f"ответ: {portfolio}"
+            )
+
+        if isinstance(cash, dict) and ("units" in cash or "nano" in cash):
+            amount = Decimal(str(cash.get("units", 0))) + Decimal(str(cash.get("nano", 0))) / Decimal("1000000000")
+        else:
+            amount = Decimal(str(cash))
+        whole = amount.quantize(Decimal("1"))
+        nano = int((amount - whole) * Decimal("1000000000"))
+        positions = dict(positions)
+        positions["money"] = [{
+            "currency": "RUB",
+            "available": {"units": str(whole), "nano": nano},
+            "blocked": {"units": "0", "nano": 0},
+        }]
+        return positions
+
     def find_instrument(self, query: str, trade_available_only: bool = True) -> dict: return self._request("POST", "/instruments/search", {"query": query, "api_trade_available_flag": trade_available_only})
     def list_instruments(self, instrument_kind: str = "SHARE", trade_available_only: bool = True) -> dict: return self._request("POST", "/instruments/list", {"instrument_kind": instrument_kind, "api_trade_available_flag": trade_available_only})
     def get_instrument(self, instrument_id: str) -> dict: return self._request("POST", "/instruments/get", {"instrument_id": instrument_id})
