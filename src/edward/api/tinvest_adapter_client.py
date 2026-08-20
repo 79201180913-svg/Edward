@@ -79,11 +79,7 @@ class TInvestAdapterClient:
         return self._request("POST", "/orders", {"account_id": account_id})
 
     def get_order_state(self, account_id: str, order_id: str) -> dict:
-        return self._request(
-            "POST",
-            "/orders/state",
-            {"account_id": account_id, "order_id": order_id},
-        )
+        return self._request("POST", "/orders/state", {"account_id": account_id, "order_id": order_id})
 
     @staticmethod
     def _order_payload(request: Any) -> dict:
