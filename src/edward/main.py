@@ -102,6 +102,8 @@ def _print_accounts(accounts: list[dict], active_id: str | None) -> None:
     for index, account in enumerate(accounts, start=1):
         marker = " *" if str(account.get("id", "")) == active_id else ""
         print(f"{index}. {_account_label(account)}{marker}")
+    if not accounts:
+        print("No accounts found.")
     print("----------------------------------------")
 
 
@@ -122,9 +124,15 @@ def _choose_account(accounts: list[dict], prompt: str) -> dict | None:
 
 
 def _account_management(client: TInvestAdapterClient, environment: Environment, accounts: list[dict]) -> tuple[list[dict], str | None]:
-    active_id = next((str(a.get("id")) for a in accounts if _is_open(a)), None)
+    open_accounts = [a for a in accounts if _is_open(a)]
+    active_id = str(open_accounts[0].get("id")) if open_accounts else None
 
     while True:
+        accounts = list(client.get_accounts().get("accounts", []))
+        open_accounts = [a for a in accounts if _is_open(a)]
+        if active_id and not any(str(a.get("id")) == active_id for a in open_accounts):
+            active_id = str(open_accounts[0].get("id")) if open_accounts else None
+
         _print_accounts(accounts, active_id)
         print("1. Show accounts")
         print("2. Switch active account")
@@ -138,10 +146,9 @@ def _account_management(client: TInvestAdapterClient, environment: Environment, 
         if choice == "0":
             return accounts, active_id
         if choice == "1":
-            accounts = list(client.get_accounts().get("accounts", []))
             continue
         if choice == "2":
-            selected = _choose_account([a for a in accounts if _is_open(a)], "Account number: ")
+            selected = _choose_account(open_accounts, "Open account number: ")
             if selected:
                 active_id = str(selected.get("id", ""))
                 print(f"Active account: {active_id}")
@@ -157,12 +164,10 @@ def _account_management(client: TInvestAdapterClient, environment: Environment, 
             response = client.create_sandbox_account(name)
             new_id = str(response.get("account_id", ""))
             print(f"Sandbox account created: {new_id}")
-            accounts = list(client.get_accounts().get("accounts", []))
             active_id = new_id
             continue
         if choice == "5" and environment is Environment.SANDBOX:
-            open_accounts = [a for a in accounts if _is_open(a)]
-            selected = _choose_account(open_accounts, "Account number to close: ")
+            selected = _choose_account(open_accounts, "Open account number to close: ")
             if not selected:
                 continue
             account_id = str(selected.get("id", ""))
@@ -172,9 +177,8 @@ def _account_management(client: TInvestAdapterClient, environment: Environment, 
                 continue
             client.close_sandbox_account(account_id)
             print(f"Sandbox account closed: {account_id}")
-            accounts = list(client.get_accounts().get("accounts", []))
             if active_id == account_id:
-                active_id = next((str(a.get("id")) for a in accounts if _is_open(a)), None)
+                active_id = None
             continue
         print("Unknown action.")
 
@@ -212,14 +216,11 @@ def main() -> None:
         _wait_for_adapter(client, adapter_process)
         accounts = list(client.get_accounts().get("accounts", []))
         print(f"Accounts found: {len(accounts)}")
-        open_accounts = [account for account in accounts if _is_open(account)]
-        if not open_accounts:
-            print("No open accounts found.")
-            if environment is Environment.SANDBOX:
-                print("Use the account management menu to create a sandbox account.")
-            return
         for account in accounts:
             print(f"- {_account_label(account)}")
+        if not any(_is_open(account) for account in accounts) and environment is Environment.PRODUCTION:
+            print("No open accounts found.")
+            return
         _account_management(client, environment, accounts)
     except (EOFError, KeyboardInterrupt):
         print()
