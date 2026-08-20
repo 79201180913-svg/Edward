@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import time
 from decimal import Decimal, InvalidOperation
 from tkinter import messagebox, simpledialog
 from typing import Any
 
+from edward.services.balance_service import BalanceService
+
 
 def install_sandbox_funding_ui(app_class: type[Any]) -> None:
-    """Add sandbox-only account funding controls to the existing GUI shell."""
+    """Add sandbox-only account funding controls with post-funding balance validation."""
     if getattr(app_class, "_sandbox_funding_installed", False):
         return
 
@@ -25,6 +28,17 @@ def install_sandbox_funding_ui(app_class: type[Any]) -> None:
             command=self._sandbox_pay_in,
         )
         self._sandbox_pay_in_button.pack(fill="x", pady=2)
+
+    def _get_sandbox_rub_balance(self, account_id: str) -> Decimal:
+        positions = self.client.get_positions(account_id)
+        money = BalanceService.get_money_positions(positions)
+        rub = Decimal("0")
+        for position in money:
+            currency = str(self._field(position, "currency", "")).upper()
+            if currency != "RUB":
+                continue
+            rub += BalanceService._decimal(self._field(position, "available"))
+        return rub
 
     def _sandbox_pay_in(self: Any) -> None:
         if str(self.environment.value).lower() != "sandbox":
@@ -69,25 +83,64 @@ def install_sandbox_funding_ui(app_class: type[Any]) -> None:
             return
 
         try:
+            self.status_var.set("Получение текущего баланса...")
+            self.update_idletasks()
+            balance_before = self._get_sandbox_rub_balance(account_id)
+            expected_balance = balance_before + amount
+
             self.status_var.set("Пополнение sandbox-счёта...")
             self.update_idletasks()
             result = self.client.sandbox_pay_in(account_id, amount)
-            self._refresh_accounts()
 
-            balance = self._field(result, "balance", None)
-            if balance is None:
-                raise RuntimeError(f"T-Invest не вернул поле balance. Ответ API: {result}")
+            # SandboxPayInResponse contains the current balance, but we also
+            # verify it independently through GetPositions to avoid false success.
+            response_balance = self._field(result, "balance", None)
+            if response_balance is not None:
+                response_balance = BalanceService._decimal(response_balance)
 
-            self.status_var.set("Sandbox-счёт пополнен")
+            actual_balance = None
+            last_error: Exception | None = None
+            for _ in range(6):
+                try:
+                    actual_balance = self._get_sandbox_rub_balance(account_id)
+                    if actual_balance == expected_balance:
+                        break
+                except Exception as exc:
+                    last_error = exc
+                time.sleep(0.5)
+
+            if actual_balance is None:
+                raise RuntimeError(
+                    f"Не удалось получить баланс после пополнения.\n"
+                    f"Баланс до: {balance_before} RUB\n"
+                    f"Ожидалось: {expected_balance} RUB\n"
+                    f"Ответ SandboxPayIn: {result}\n"
+                    f"Ошибка получения баланса: {last_error}"
+                )
+
+            if actual_balance != expected_balance:
+                raise RuntimeError(
+                    "Баланс после пополнения не совпал с ожидаемым.\n\n"
+                    f"Баланс до: {balance_before:,.2f} RUB\n"
+                    f"Пополнение: {amount:,.2f} RUB\n"
+                    f"Ожидаемый баланс: {expected_balance:,.2f} RUB\n"
+                    f"Фактический баланс: {actual_balance:,.2f} RUB\n"
+                    f"Баланс из SandboxPayIn: {response_balance if response_balance is not None else 'не передан'}\n"
+                    f"Ответ API: {result}"
+                )
+
+            self.status_var.set("Sandbox-счёт пополнен и проверен")
             self.refresh_current()
             messagebox.showinfo(
                 "Пополнение выполнено",
                 f"Счёт успешно пополнен на {amount_text} RUB.\n\n"
-                f"Баланс после пополнения: {self._money(balance, 'RUB')}",
+                f"Баланс до: {balance_before:,.2f} RUB\n"
+                f"Ожидаемый баланс: {expected_balance:,.2f} RUB\n"
+                f"Фактический баланс: {actual_balance:,.2f} RUB",
                 parent=self,
             )
         except Exception as exc:
-            self.status_var.set("Ошибка пополнения sandbox-счёта")
+            self.status_var.set("Ошибка проверки пополнения sandbox-счёта")
             self._show_error(exc, "пополнение sandbox-счёта")
 
     app_class._shell = _shell
