@@ -10,20 +10,26 @@ from edward.validation.trading_validator import ValidationContext
 
 
 class AdapterTradingDataProvider:
-    """Builds last-moment trading validation data from the adapter."""
+    """Builds last-moment trading validation data from authoritative adapter data."""
 
     def __init__(self, client: TInvestAdapterClient) -> None:
         self._client = client
 
     def get_validation_context(self, request: OrderRequest) -> ValidationContext:
-        instruments = self._items(self._client.find_instrument(request.instrument_uid, False), "instruments")
-        instrument = instruments[0] if instruments else {}
+        response = self._client.list_instruments(request.instrument_kind, trade_available_only=False)
+        instruments = self._items(response, "instruments")
+        instrument = next((item for item in instruments if self._uid(item) == request.instrument_uid), None)
+
         status = self._client.get_trading_status(request.instrument_uid)
         available = bool(self._field(status, "api_trade_available_flag", False))
+        trading_status = str(self._field(status, "trading_status", self._field(status, "status", ""))).upper()
+        if trading_status and any(value in trading_status for value in ("CLOSED", "NOT_AVAILABLE", "UNSPECIFIED")):
+            available = False
+
         current = self._items(self._client.get_last_prices([request.instrument_uid]), "last_prices")
         market_price = self._decimal(self._field(current[0], "price")) if current else None
-        increment = self._decimal(self._field(instrument, "min_price_increment"))
-        if increment is None:
+        increment = self._decimal(self._field(instrument, "min_price_increment")) if instrument else None
+        if increment is None and instrument is not None:
             increment = self._decimal(self._field(instrument, "min_price_increment_value"))
 
         positions = self._client.get_positions(request.account_id)
@@ -32,21 +38,21 @@ class AdapterTradingDataProvider:
         available_money = Decimal("0")
         for item in money:
             if str(self._field(item, "currency", "")).lower() == "rub":
-                available_money += self._decimal(self._field(item, "available"))
+                available_money += self._decimal(self._field(item, "available")) or Decimal("0")
 
         available_position = None
         for item in securities:
             uid = str(self._field(item, "instrument_uid", self._field(item, "figi", "")))
             if uid == request.instrument_uid:
-                balance = self._decimal(self._field(item, "balance"))
-                blocked = self._decimal(self._field(item, "blocked"))
+                balance = self._decimal(self._field(item, "balance")) or Decimal("0")
+                blocked = self._decimal(self._field(item, "blocked")) or Decimal("0")
                 available_position = max(0, int(balance - blocked))
                 break
 
         unit_price = request.price or market_price
         estimated_total = unit_price * request.quantity if unit_price is not None else None
         return ValidationContext(
-            instrument_available=bool(instrument),
+            instrument_available=instrument is not None,
             trading_allowed=available,
             price_increment=increment,
             market_price=market_price,
@@ -68,6 +74,10 @@ class AdapterTradingDataProvider:
         if isinstance(value, dict):
             return value.get(name, default)
         return getattr(value, name, default)
+
+    @classmethod
+    def _uid(cls, value: Any) -> str:
+        return str(cls._field(value, "uid", cls._field(value, "instrument_uid", "")))
 
     @staticmethod
     def _decimal(value: Any) -> Decimal | None:
