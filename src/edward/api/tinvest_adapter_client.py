@@ -39,6 +39,12 @@ class TInvestAdapterClient:
     def get_accounts(self) -> dict:
         return self._request("POST", "/accounts", {})
 
+    def create_sandbox_account(self, name: str | None = None) -> dict:
+        return self._request("POST", "/accounts/create", {"name": name} if name else {})
+
+    def close_sandbox_account(self, account_id: str) -> dict:
+        return self._request("POST", "/accounts/close", {"account_id": account_id})
+
     def get_portfolio(self, account_id: str) -> dict:
         return self._request("POST", "/portfolio", {"account_id": account_id})
 
