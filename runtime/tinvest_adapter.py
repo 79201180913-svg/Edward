@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
+import ssl
 import sys
+import tempfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 
 from t_tech.invest import Client
@@ -14,6 +18,61 @@ HOST = "127.0.0.1"
 PORT = int(os.getenv("EDWARD_TINVEST_PORT", "8765"))
 TOKEN = os.getenv("EDWARD_TINVEST_TOKEN", "").strip()
 ENVIRONMENT = os.getenv("EDWARD_TINVEST_ENV", "sandbox").lower()
+
+
+def _configure_windows_ca_bundle() -> None:
+    """Make gRPC/OpenSSL trust certificates installed in Windows.
+
+    On some corporate Windows networks HTTPS traffic is inspected by a
+    company proxy which adds its own root CA. Python/gRPC may not use the
+    Windows certificate store automatically, causing CERTIFICATE_VERIFY_FAILED.
+    We export the trusted Windows ROOT and CA stores to a temporary PEM bundle
+    and tell gRPC/OpenSSL to use it. TLS verification remains enabled.
+    """
+    if os.name != "nt":
+        return
+
+    # Respect an explicitly configured gRPC CA bundle.
+    if os.environ.get("GRPC_DEFAULT_SSL_ROOTS_FILE_PATH"):
+        return
+
+    certs: list[bytes] = []
+    seen: set[bytes] = set()
+
+    for store_name in ("ROOT", "CA"):
+        try:
+            entries = ssl.enum_certificates(store_name)
+        except Exception:
+            continue
+
+        for cert_der, encoding, trust in entries:
+            if encoding != "x509_asn":
+                continue
+            if not isinstance(cert_der, bytes) or cert_der in seen:
+                continue
+            seen.add(cert_der)
+            certs.append(cert_der)
+
+    if not certs:
+        return
+
+    bundle_dir = Path(tempfile.gettempdir()) / "Edward"
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+    bundle_path = bundle_dir / "windows-ca-bundle.pem"
+
+    with bundle_path.open("w", encoding="ascii") as fh:
+        for cert_der in certs:
+            encoded = base64.b64encode(cert_der).decode("ascii")
+            fh.write("-----BEGIN CERTIFICATE-----\n")
+            for i in range(0, len(encoded), 64):
+                fh.write(encoded[i : i + 64] + "\n")
+            fh.write("-----END CERTIFICATE-----\n")
+
+    os.environ["GRPC_DEFAULT_SSL_ROOTS_FILE_PATH"] = str(bundle_path)
+
+
+# Must happen before creating the T-Invest gRPC Client.
+_configure_windows_ca_bundle()
 
 
 def message_to_dict(message: Any) -> dict[str, Any]:
