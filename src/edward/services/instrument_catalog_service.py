@@ -11,43 +11,26 @@ class InstrumentCatalogService:
     client: Any
 
     def list(self, instrument_kind: str = "SHARE", trade_available_only: bool = True) -> list[Any]:
-        response = self.client.list_instruments(
-            instrument_kind=instrument_kind,
-            trade_available_only=trade_available_only,
-        )
+        response = self.client.list_instruments(instrument_kind=instrument_kind, trade_available_only=trade_available_only)
         instruments = self._as_list(response, "instruments")
-        return self._enrich(instruments)
+        return self._enrich(instruments, instrument_kind)
 
-    def search(
-        self,
-        query: str,
-        instrument_kind: str = "SHARE",
-        trade_available_only: bool = True,
-    ) -> list[Any]:
+    def search(self, query: str, instrument_kind: str = "SHARE", trade_available_only: bool = True) -> list[Any]:
         """Filter the already loaded authoritative catalog locally."""
         query = query.strip().casefold()
         instruments = self.list(instrument_kind, trade_available_only)
         if not query:
             return instruments
         return [
-            instrument
-            for instrument in instruments
-            if any(
-                query in str(_field(instrument, name, "")).casefold()
-                for name in ("ticker", "name", "uid", "instrument_uid", "figi", "isin")
-            )
+            instrument for instrument in instruments
+            if any(query in str(_field(instrument, name, "")).casefold() for name in ("ticker", "name", "uid", "instrument_uid", "figi", "isin"))
         ]
 
     def trading_status(self, instrument_uid: str) -> Any:
-        """Fetch current trading status for one selected instrument."""
         return self.client.get_trading_status(instrument_uid)
 
-    def _enrich(self, instruments: list[Any]) -> list[Any]:
-        """Add latest prices with one bulk market-data request.
-
-        Trading status is fetched only after a user selects an instrument. This
-        avoids generating one API request per catalog row.
-        """
+    def _enrich(self, instruments: list[Any], instrument_kind: str) -> list[Any]:
+        """Add bulk prices and stable metadata without per-row trading-status calls."""
         ids = [_uid(item) for item in instruments if _uid(item)]
         prices: dict[str, Any] = {}
         if ids:
@@ -62,10 +45,12 @@ class InstrumentCatalogService:
             uid = _uid(instrument)
             price = prices.get(uid)
             if isinstance(item, dict):
+                item["instrument_kind"] = instrument_kind
                 item["last_price"] = _field(price, "price", _field(price, "last_price", ""))
                 item["buy_available"] = _field(instrument, "buy_available_flag", False)
                 item["sell_available"] = _field(instrument, "sell_available_flag", False)
                 item["api_trade_available"] = _field(instrument, "api_trade_available_flag", False)
+                item["min_price_increment"] = _field(instrument, "min_price_increment", _field(instrument, "min_price_increment_value", ""))
             result.append(item)
         return result
 
