@@ -148,6 +148,51 @@ class AdapterState:
     def positions(self, account_id: str) -> Any:
         return self._service("operations").get_positions(account_id=account_id)
 
+    def find_instrument(self, query: str, trade_available_only: bool = True) -> Any:
+        return self._service("instruments").find_instrument(
+            query=query,
+            api_trade_available_flag=trade_available_only,
+        )
+
+    def last_prices(self, instrument_ids: list[str]) -> Any:
+        return self._service("market_data").get_last_prices(instrument_id=instrument_ids)
+
+    def trading_status(self, instrument_id: str) -> Any:
+        return self._service("market_data").get_trading_status(instrument_id=instrument_id)
+
+    def orders(self, account_id: str) -> Any:
+        return self._service("orders").get_orders(account_id=account_id)
+
+    def order_state(self, account_id: str, order_id: str) -> Any:
+        return self._service("orders").get_order_state(account_id=account_id, order_id=order_id)
+
+    def create_order(self, payload: dict[str, Any]) -> Any:
+        kwargs = {
+            "quantity": payload["quantity"],
+            "direction": payload["direction"],
+            "account_id": payload["account_id"],
+            "order_type": payload["order_type"],
+            "instrument_id": payload["instrument_uid"],
+            "order_id": payload["request_id"],
+        }
+        for name in ("price", "stop_price"):
+            if payload.get(name) is not None:
+                kwargs[name] = payload[name]
+        return self._service("orders").post_order(**kwargs)
+
+    def cancel_order(self, account_id: str, order_id: str) -> Any:
+        return self._service("orders").cancel_order(account_id=account_id, order_id=order_id)
+
+    def replace_order(self, payload: dict[str, Any]) -> Any:
+        kwargs = {
+            "order_id": payload["order_id"],
+            "quantity": payload["quantity"],
+            "account_id": payload["account_id"],
+        }
+        if payload.get("price") is not None:
+            kwargs["price"] = payload["price"]
+        return self._service("orders").replace_order(**kwargs)
+
 
 STATE = AdapterState()
 
@@ -208,6 +253,39 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(400, {"error": "account_id is required"})
                     return
                 self._send(200, message_to_dict(STATE.positions(account_id)))
+                return
+            if self.path == "/instruments/search":
+                query = str(payload.get("query", "")).strip()
+                if not query:
+                    self._send(400, {"error": "query is required"})
+                    return
+                self._send(200, message_to_dict(STATE.find_instrument(query, bool(payload.get("api_trade_available_flag", True)))))
+                return
+            if self.path == "/market/last-prices":
+                instrument_ids = [str(value) for value in payload.get("instrument_ids", [])]
+                self._send(200, message_to_dict(STATE.last_prices(instrument_ids)))
+                return
+            if self.path == "/market/trading-status":
+                instrument_id = str(payload.get("instrument_id", "")).strip()
+                if not instrument_id:
+                    self._send(400, {"error": "instrument_id is required"})
+                    return
+                self._send(200, message_to_dict(STATE.trading_status(instrument_id)))
+                return
+            if self.path == "/orders":
+                self._send(200, message_to_dict(STATE.orders(str(payload.get("account_id", "")).strip())))
+                return
+            if self.path == "/orders/state":
+                self._send(200, message_to_dict(STATE.order_state(str(payload.get("account_id", "")).strip(), str(payload.get("order_id", "")).strip())))
+                return
+            if self.path == "/orders/create":
+                self._send(200, message_to_dict(STATE.create_order(payload)))
+                return
+            if self.path == "/orders/cancel":
+                self._send(200, message_to_dict(STATE.cancel_order(str(payload.get("account_id", "")).strip(), str(payload.get("order_id", "")).strip())))
+                return
+            if self.path == "/orders/replace":
+                self._send(200, message_to_dict(STATE.replace_order(payload)))
                 return
             self._send(404, {"error": "not_found"})
         except Exception as exc:
