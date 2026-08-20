@@ -7,7 +7,7 @@ from edward.security.token_store import TokenStore
 
 
 def request_and_save_token(store: TokenStore) -> str | None:
-    """Show a native Windows-friendly token dialog and save the token securely."""
+    """Show a Windows-friendly token dialog and save the token securely."""
     result: dict[str, str | None] = {"token": None}
 
     root = tk.Tk()
@@ -43,6 +43,53 @@ def request_and_save_token(store: TokenStore) -> str | None:
     )
     entry.pack(fill="x")
     entry.focus_set()
+
+    # Explicitly wire clipboard shortcuts. This makes paste work reliably
+    # when Edward is started from run_edward.bat / Git Bash on Windows.
+    def paste(_event=None):
+        try:
+            value = root.clipboard_get()
+        except tk.TclError:
+            return "break"
+        try:
+            entry.delete("sel.first", "sel.last")
+        except tk.TclError:
+            pass
+        entry.insert("insert", value)
+        return "break"
+
+    def copy(_event=None):
+        try:
+            selected = entry.selection_get()
+        except tk.TclError:
+            return "break"
+        root.clipboard_clear()
+        root.clipboard_append(selected)
+        root.update()
+        return "break"
+
+    def cut(_event=None):
+        copy()
+        try:
+            entry.delete("sel.first", "sel.last")
+        except tk.TclError:
+            pass
+        return "break"
+
+    def select_all(_event=None):
+        entry.select_range(0, "end")
+        entry.icursor("end")
+        return "break"
+
+    root.bind_all("<Control-Key-v>", paste)
+    root.bind_all("<Control-Key-V>", paste)
+    root.bind_all("<Control-Key-c>", copy)
+    root.bind_all("<Control-Key-C>", copy)
+    root.bind_all("<Control-Key-x>", cut)
+    root.bind_all("<Control-Key-X>", cut)
+    root.bind_all("<Control-Key-a>", select_all)
+    root.bind_all("<Control-Key-A>", select_all)
+    root.bind_all("<Shift-Insert>", paste)
 
     def cancel() -> None:
         result["token"] = None
