@@ -25,6 +25,11 @@ class AdapterTradingDataProvider:
         api_trade_available = bool(self._field(status, "api_trade_available_flag", False))
         limit_order_available = bool(self._field(status, "limit_order_available_flag", True))
         available = api_trade_available and (request.order_type != OrderType.LIMIT or limit_order_available)
+        trading_diagnostic = (
+            f"api_trade_available_flag={self._field(status, 'api_trade_available_flag', None)!r}; "
+            f"limit_order_available_flag={self._field(status, 'limit_order_available_flag', None)!r}; "
+            f"trading_status={self._field(status, 'trading_status', self._field(status, 'status', None))!r}"
+        )
 
         logger.info(
             "[TRADING DEBUG] uid=%s ticker=%s order_type=%s api_trade_available_flag=%r limit_order_available_flag=%r trading_allowed=%r status=%r",
@@ -100,6 +105,7 @@ class AdapterTradingDataProvider:
             available_position=available_position if request.side == OrderSide.SELL else None,
             estimated_total=estimated_total,
             estimated_commission=estimated_commission,
+            trading_diagnostic=trading_diagnostic,
         )
 
     @staticmethod
