@@ -38,8 +38,16 @@ class InstrumentCatalogService:
             )
         ]
 
+    def trading_status(self, instrument_uid: str) -> Any:
+        """Fetch current trading status for one selected instrument."""
+        return self.client.get_trading_status(instrument_uid)
+
     def _enrich(self, instruments: list[Any]) -> list[Any]:
-        """Add latest price and trading capability without making catalog loading fragile."""
+        """Add latest prices with one bulk market-data request.
+
+        Trading status is fetched only after a user selects an instrument. This
+        avoids generating one API request per catalog row.
+        """
         ids = [_uid(item) for item in instruments if _uid(item)]
         prices: dict[str, Any] = {}
         if ids:
@@ -54,12 +62,7 @@ class InstrumentCatalogService:
             uid = _uid(instrument)
             price = prices.get(uid)
             if isinstance(item, dict):
-                item.setdefault("last_price", _field(price, "price", _field(price, "last_price", "")))
-                try:
-                    status = self.client.get_trading_status(uid) if uid else {}
-                except Exception:
-                    status = {}
-                item["trading_status"] = _field(status, "trading_status", _field(status, "status", ""))
+                item["last_price"] = _field(price, "price", _field(price, "last_price", ""))
                 item["buy_available"] = _field(instrument, "buy_available_flag", False)
                 item["sell_available"] = _field(instrument, "sell_available_flag", False)
                 item["api_trade_available"] = _field(instrument, "api_trade_available_flag", False)
