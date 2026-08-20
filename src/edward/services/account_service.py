@@ -40,9 +40,8 @@ class AccountService:
             self._selected_account_id = None
         return response
 
-    def select_account(self, account_id: str) -> Any:
-        accounts = self.get_accounts()
-        account = self.select_account_from(accounts, account_id)
+    def select_active_account(self, account_id: str) -> Any:
+        account = self.select_account(self.get_accounts(), account_id)
         self._selected_account_id = str(self._field(account, "id"))
         return account
 
@@ -50,7 +49,7 @@ class AccountService:
         return self._selected_account_id
 
     @staticmethod
-    def select_account_from(accounts: Any, account_id: str) -> Any:
+    def select_account(accounts: Any, account_id: str) -> Any:
         source = accounts.accounts if hasattr(accounts, "accounts") else accounts
         if isinstance(accounts, dict):
             source = accounts.get("accounts", [])
