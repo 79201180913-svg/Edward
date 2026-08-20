@@ -17,6 +17,7 @@ from edward.services.account_service import AccountService
 from edward.services.balance_service import BalanceService
 from edward.services.order_service import OrderRequest, OrderService, OrderSide, OrderType
 from edward.services.trading_data_provider import AdapterTradingDataProvider
+from edward.ui.instrument_catalog import show_catalog
 from edward.ui.token_dialog import request_and_save_token
 from edward.validation.trading_validator import TradingValidator
 
@@ -131,49 +132,37 @@ def _print_financials(client: TInvestAdapterClient, context: AccountContext) -> 
     print("----------------------------------------")
 
 
-def _search_instruments(client: TInvestAdapterClient) -> None:
-    query = input("Instrument / ticker / name: ").strip()
-    if not query:
-        return
-    instruments = _items(client.find_instrument(query, True), "instruments")
-    print("\nINSTRUMENTS")
+def _show_selected_instrument(instrument: Any) -> None:
+    uid = _field(instrument, "uid", _field(instrument, "instrument_uid", ""))
+    print("\nINSTRUMENT")
     print("----------------------------------------")
-    if not instruments:
-        print("No instruments found.")
-        return
-    for index, instrument in enumerate(instruments[:20], start=1):
-        print(f"{index}. {_field(instrument, 'ticker', '')} | {_field(instrument, 'name', '')} | uid={_field(instrument, 'uid', _field(instrument, 'instrument_uid', ''))} | trade={_field(instrument, 'api_trade_available_flag', '')}")
-
-
-def _show_positions(client: TInvestAdapterClient, context: AccountContext) -> None:
-    account_id = context.require_account_id()
-    securities = _items(client.get_positions(account_id), "securities")
-    print("\nPORTFOLIO POSITIONS")
+    print(f"Ticker:   {_field(instrument, 'ticker', '')}")
+    print(f"Name:     {_field(instrument, 'name', '')}")
+    print(f"UID:      {uid}")
+    print(f"FIGI:     {_field(instrument, 'figi', '')}")
+    print(f"ISIN:     {_field(instrument, 'isin', '')}")
+    print(f"Currency: {_field(instrument, 'currency', '')}")
+    print(f"Trading:  {_field(instrument, 'api_trade_available_flag', '')}")
     print("----------------------------------------")
-    if not securities:
-        print("No security positions.")
-        return
-    for position in securities:
-        print(f"{_field(position, 'ticker', _field(position, 'instrument_uid', ''))}: balance={_field(position, 'balance', '')}, blocked={_field(position, 'blocked', '')}, yield={_field(position, 'expected_yield', '')}")
 
 
-def _create_order(client: TInvestAdapterClient, context: AccountContext) -> None:
+def _create_order(client: TInvestAdapterClient, context: AccountContext, instrument: Any | None = None) -> None:
     account_id = context.require_account_id()
-    query = input("Instrument / ticker / name: ").strip()
-    if not query:
-        return
-    found = _items(client.find_instrument(query, True), "instruments")
-    if not found:
-        print("Instrument not found or not available for trading.")
-        return
-    for index, instrument in enumerate(found[:10], start=1):
-        print(f"{index}. {_field(instrument, 'ticker', '')} — {_field(instrument, 'name', '')} — {_field(instrument, 'uid', _field(instrument, 'instrument_uid', ''))}")
-    try:
-        instrument = found[int(input("Instrument number: ").strip()) - 1]
-    except (ValueError, IndexError):
-        print("Invalid instrument.")
-        return
+    if instrument is None:
+        selected: list[Any] = []
+
+        def capture(value: Any) -> None:
+            selected.append(value)
+
+        show_catalog(client, on_selected=capture)
+        if not selected:
+            return
+        instrument = selected[0]
+
     uid = str(_field(instrument, "uid", _field(instrument, "instrument_uid", "")))
+    if not uid:
+        print("Selected instrument has no instrument_uid.")
+        return
     prices = _items(client.get_last_prices([uid]), "last_prices")
     current_price = _field(prices[0], "price") if prices else None
     print(f"Current price: {current_price}")
@@ -208,7 +197,15 @@ def _create_order(client: TInvestAdapterClient, context: AccountContext) -> None
             print("Invalid stop price.")
             return
 
-    request = OrderRequest(account_id=account_id, instrument_uid=uid, side=OrderSide(side_value), order_type=OrderType(type_value), quantity=quantity, price=price, stop_price=stop_price)
+    request = OrderRequest(
+        account_id=account_id,
+        instrument_uid=uid,
+        side=OrderSide(side_value),
+        order_type=OrderType(type_value),
+        quantity=quantity,
+        price=price,
+        stop_price=stop_price,
+    )
     try:
         validation = TradingValidator(AdapterTradingDataProvider(client)).validate(request)
     except Exception as exc:
@@ -276,7 +273,7 @@ def _account_management(client: TInvestAdapterClient, environment: Environment, 
         print("2. Switch active account")
         print("3. Show active account financials")
         print("4. Show portfolio positions")
-        print("5. Search instruments")
+        print("5. Instruments")
         print("6. Create order")
         print("7. Show / cancel active orders")
         if environment is Environment.SANDBOX:
@@ -302,12 +299,18 @@ def _account_management(client: TInvestAdapterClient, environment: Environment, 
             continue
         if choice == "4":
             try:
-                _show_positions(client, context)
+                securities = _items(client.get_positions(context.require_account_id()), "securities")
+                print("\nPORTFOLIO POSITIONS")
+                print("----------------------------------------")
+                if not securities:
+                    print("No security positions.")
+                for position in securities:
+                    print(f"{_field(position, 'ticker', _field(position, 'instrument_uid', ''))}: balance={_field(position, 'balance', '')}, blocked={_field(position, 'blocked', '')}, yield={_field(position, 'expected_yield', '')}")
             except Exception as exc:
                 print(f"ERROR: {exc}")
             continue
         if choice == "5":
-            _search_instruments(client)
+            show_catalog(client, on_selected=_show_selected_instrument)
             continue
         if choice == "6":
             try:
