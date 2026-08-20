@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from t_tech.invest import Client
+from t_tech.invest.constants import INVEST_GRPC_API, INVEST_GRPC_API_SANDBOX
 
 from edward.config.settings import Environment, Settings
 
@@ -21,7 +22,13 @@ class TInvestClient:
         self._client: Any | None = None
 
     def __enter__(self) -> Any:
-        self._client = Client(self.token, target=self.settings.api_endpoint)
+        target = (
+            INVEST_GRPC_API
+            if self.settings.environment is Environment.PRODUCTION
+            else INVEST_GRPC_API_SANDBOX
+        )
+        self._client = Client(self.token, target=target)
+        self._client.__enter__()
         return self._client
 
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
