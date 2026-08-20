@@ -16,7 +16,9 @@ from edward.services.account_context import AccountContext
 from edward.services.account_service import AccountService
 from edward.services.balance_service import BalanceService
 from edward.services.order_service import OrderRequest, OrderService, OrderSide, OrderType
+from edward.services.trading_data_provider import AdapterTradingDataProvider
 from edward.ui.token_dialog import request_and_save_token
+from edward.validation.trading_validator import TradingValidator
 
 
 def _project_root() -> Path:
@@ -175,39 +177,58 @@ def _create_order(client: TInvestAdapterClient, context: AccountContext) -> None
     prices = _items(client.get_last_prices([uid]), "last_prices")
     current_price = _field(prices[0], "price") if prices else None
     print(f"Current price: {current_price}")
+
     side_value = input("Operation (BUY/SELL): ").strip().upper()
     if side_value not in {"BUY", "SELL"}:
         print("Invalid operation.")
         return
-    type_value = input("Order type (MARKET/LIMIT): ").strip().upper()
-    if type_value not in {"MARKET", "LIMIT"}:
-        print("This interactive release supports MARKET and LIMIT.")
+    type_value = input("Order type (MARKET/LIMIT/STOP/STOP_LIMIT): ").strip().upper()
+    if type_value not in {"MARKET", "LIMIT", "STOP", "STOP_LIMIT"}:
+        print("Invalid order type.")
         return
     try:
         quantity = int(input("Quantity: ").strip())
     except ValueError:
         print("Quantity must be an integer.")
         return
+
     price = None
-    if type_value == "LIMIT":
-        raw_price = input(f"Price [{current_price}]: ").strip() or str(current_price or "0")
+    stop_price = None
+    if type_value in {"LIMIT", "STOP_LIMIT"}:
+        raw_price = input(f"Limit price [{current_price}]: ").strip() or str(current_price or "0")
         try:
             price = Decimal(raw_price)
         except Exception:
             print("Invalid price.")
             return
-    request = OrderRequest(account_id=account_id, instrument_uid=uid, side=OrderSide(side_value), order_type=OrderType(type_value), quantity=quantity, price=price)
-    total = (price * quantity) if price is not None else None
+    if type_value in {"STOP", "STOP_LIMIT"}:
+        try:
+            stop_price = Decimal(input("Stop price: ").strip())
+        except Exception:
+            print("Invalid stop price.")
+            return
+
+    request = OrderRequest(account_id=account_id, instrument_uid=uid, side=OrderSide(side_value), order_type=OrderType(type_value), quantity=quantity, price=price, stop_price=stop_price)
+    try:
+        validation = TradingValidator(AdapterTradingDataProvider(client)).validate(request)
+    except Exception as exc:
+        print(f"Order rejected before submission: {exc}")
+        return
+
+    total = validation.estimated_total
+    commission = validation.estimated_commission or Decimal("0")
     print("\nORDER CONFIRMATION")
     print("----------------------------------------")
-    print(f"Account:    {account_id}")
-    print(f"Instrument: {_field(instrument, 'ticker', uid)}")
-    print(f"Operation:  {side_value}")
-    print(f"Type:       {type_value}")
-    print(f"Quantity:   {quantity}")
-    print(f"Price:      {price if price is not None else current_price}")
+    print(f"Account:     {account_id}")
+    print(f"Instrument:  {_field(instrument, 'ticker', uid)}")
+    print(f"Operation:   {side_value}")
+    print(f"Type:        {type_value}")
+    print(f"Quantity:    {quantity}")
+    print(f"Price:       {price if price is not None else current_price}")
+    print(f"Commission*: {_money(commission)}")
     if total is not None:
-        print(f"Estimated:  {_money(total)}")
+        print(f"Estimated*:  {_money(total + commission)}")
+    print("* Preliminary estimate; exact commission is defined by T-Invest execution data.")
     print("----------------------------------------")
     if input("Confirm order? [y/N]: ").strip().lower() != "y":
         print("Cancelled.")
