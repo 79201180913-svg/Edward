@@ -28,28 +28,26 @@ class InstrumentCatalogService:
         instrument_kind: str = "SHARE",
         trade_available_only: bool = True,
     ) -> list[Any]:
-        """Search the catalog locally after loading the authoritative instrument list.
+        """Search the authoritative catalog locally.
 
-        T-Invest FindInstrument is treated as an optimization, not as the only source
-        of truth. This prevents a transient/not-found response from breaking the UI.
+        The catalog list is the source of truth for the UI. We deliberately do not
+        call FindInstrument here because a transient/not-found response must not make
+        the instrument screen fail when the full catalog is available.
         """
         query = query.strip().casefold()
+        instruments = self.list(instrument_kind, trade_available_only)
         if not query:
-            return self.list(instrument_kind, trade_available_only)
-
-        result = self.client.find_instrument(query, trade_available_only)
-        if isinstance(result, dict):
-            instruments = result.get("instruments")
-            if instruments:
-                return list(instruments)
+            return instruments
 
         return [
             instrument
-            for instrument in self.list(instrument_kind, trade_available_only)
+            for instrument in instruments
             if query in str(_field(instrument, "ticker", "")).casefold()
             or query in str(_field(instrument, "name", "")).casefold()
             or query in str(_field(instrument, "uid", "")).casefold()
+            or query in str(_field(instrument, "instrument_uid", "")).casefold()
             or query in str(_field(instrument, "figi", "")).casefold()
+            or query in str(_field(instrument, "isin", "")).casefold()
         ]
 
 
