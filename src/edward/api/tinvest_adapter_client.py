@@ -16,12 +16,7 @@ class TInvestAdapterClient:
 
     def _request(self, method: str, path: str, payload: dict | None = None) -> dict:
         data = None if payload is None else json.dumps(payload).encode("utf-8")
-        request = Request(
-            f"{self.base_url}{path}",
-            data=data,
-            method=method,
-            headers={"Content-Type": "application/json"},
-        )
+        request = Request(f"{self.base_url}{path}", data=data, method=method, headers={"Content-Type": "application/json"})
         try:
             with urlopen(request, timeout=self.timeout) as response:
                 return json.loads(response.read().decode("utf-8"))
@@ -53,21 +48,13 @@ class TInvestAdapterClient:
         return self._request("POST", "/positions", {"account_id": account_id})
 
     def find_instrument(self, query: str, trade_available_only: bool = True) -> dict:
-        return self._request(
-            "POST",
-            "/instruments/search",
-            {"query": query, "api_trade_available_flag": trade_available_only},
-        )
+        return self._request("POST", "/instruments/search", {"query": query, "api_trade_available_flag": trade_available_only})
 
     def list_instruments(self, instrument_kind: str = "SHARE", trade_available_only: bool = True) -> dict:
-        return self._request(
-            "POST",
-            "/instruments/list",
-            {
-                "instrument_kind": instrument_kind,
-                "api_trade_available_flag": trade_available_only,
-            },
-        )
+        return self._request("POST", "/instruments/list", {"instrument_kind": instrument_kind, "api_trade_available_flag": trade_available_only})
+
+    def get_instrument(self, instrument_id: str) -> dict:
+        return self._request("POST", "/instruments/get", {"instrument_id": instrument_id})
 
     def get_last_prices(self, instrument_ids: list[str]) -> dict:
         return self._request("POST", "/market/last-prices", {"instrument_ids": instrument_ids})
