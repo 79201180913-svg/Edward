@@ -23,19 +23,14 @@ def _start_adapter(token: str, environment: Environment) -> subprocess.Popen[byt
     root = _project_root()
     python_exe = root / ".venv-tinvest" / "Scripts" / "python.exe"
     adapter_script = root / "runtime" / "tinvest_adapter.py"
-
     if not python_exe.exists():
-        raise RuntimeError(
-            "T-Invest runtime is not configured. Run run_edward.bat to create .venv-tinvest."
-        )
+        raise RuntimeError("T-Invest runtime is not configured. Run run_edward.bat to create .venv-tinvest.")
     if not adapter_script.exists():
         raise RuntimeError("T-Invest adapter script is missing: runtime/tinvest_adapter.py")
-
     env = os.environ.copy()
     env["EDWARD_TINVEST_TOKEN"] = token
     env["EDWARD_TINVEST_ENV"] = environment.value
     env["EDWARD_TINVEST_PORT"] = "8765"
-
     return subprocess.Popen(
         [str(python_exe), str(adapter_script)],
         env=env,
@@ -78,12 +73,10 @@ def _money(value: Decimal) -> str:
 
 
 def _print_financials(client: TInvestAdapterClient, account_id: str) -> None:
-    """Read and display normalized financial state for the active account."""
     balance_service = BalanceService()
     positions_response = client.get_positions(account_id)
     portfolio_response = client.get_portfolio(account_id)
     summary = balance_service.build_summary(positions_response, portfolio_response)
-
     print()
     print("FINANCIALS")
     print("----------------------------------------")
@@ -94,12 +87,96 @@ def _print_financials(client: TInvestAdapterClient, account_id: str) -> None:
     print(f"Securities:        {_money(summary.securities)}")
     print(f"Portfolio value:   {_money(summary.portfolio_value)}")
     print("----------------------------------------")
-    print(
-        f"Money positions: {len(balance_service.get_money_positions(positions_response))}"
-    )
-    print(
-        f"Security positions: {len(balance_service.get_security_positions(positions_response))}"
-    )
+    print(f"Money positions: {len(balance_service.get_money_positions(positions_response))}")
+    print(f"Security positions: {len(balance_service.get_security_positions(positions_response))}")
+
+
+def _account_label(account: dict) -> str:
+    return f"{account.get('id', '')}: {account.get('name', '')} [{account.get('status', '')}]"
+
+
+def _print_accounts(accounts: list[dict], active_id: str | None) -> None:
+    print()
+    print("ACCOUNTS")
+    print("----------------------------------------")
+    for index, account in enumerate(accounts, start=1):
+        marker = " *" if str(account.get("id", "")) == active_id else ""
+        print(f"{index}. {_account_label(account)}{marker}")
+    print("----------------------------------------")
+
+
+def _choose_account(accounts: list[dict], prompt: str) -> dict | None:
+    if not accounts:
+        print("No accounts available.")
+        return None
+    value = input(prompt).strip()
+    try:
+        index = int(value) - 1
+    except ValueError:
+        print("Invalid account number.")
+        return None
+    if not 0 <= index < len(accounts):
+        print("Invalid account number.")
+        return None
+    return accounts[index]
+
+
+def _account_management(client: TInvestAdapterClient, environment: Environment, accounts: list[dict]) -> tuple[list[dict], str | None]:
+    active_id = next((str(a.get("id")) for a in accounts if _is_open(a)), None)
+
+    while True:
+        _print_accounts(accounts, active_id)
+        print("1. Show accounts")
+        print("2. Switch active account")
+        print("3. Show active account financials")
+        if environment is Environment.SANDBOX:
+            print("4. Create sandbox account")
+            print("5. Close sandbox account")
+        print("0. Exit")
+
+        choice = input("Select action: ").strip()
+        if choice == "0":
+            return accounts, active_id
+        if choice == "1":
+            accounts = list(client.get_accounts().get("accounts", []))
+            continue
+        if choice == "2":
+            selected = _choose_account([a for a in accounts if _is_open(a)], "Account number: ")
+            if selected:
+                active_id = str(selected.get("id", ""))
+                print(f"Active account: {active_id}")
+            continue
+        if choice == "3":
+            if not active_id:
+                print("No active account selected.")
+            else:
+                _print_financials(client, active_id)
+            continue
+        if choice == "4" and environment is Environment.SANDBOX:
+            name = input("Account name (optional): ").strip() or None
+            response = client.create_sandbox_account(name)
+            new_id = str(response.get("account_id", ""))
+            print(f"Sandbox account created: {new_id}")
+            accounts = list(client.get_accounts().get("accounts", []))
+            active_id = new_id
+            continue
+        if choice == "5" and environment is Environment.SANDBOX:
+            open_accounts = [a for a in accounts if _is_open(a)]
+            selected = _choose_account(open_accounts, "Account number to close: ")
+            if not selected:
+                continue
+            account_id = str(selected.get("id", ""))
+            confirmation = input(f"Close account {account_id}? [y/N]: ").strip().lower()
+            if confirmation != "y":
+                print("Cancelled.")
+                continue
+            client.close_sandbox_account(account_id)
+            print(f"Sandbox account closed: {account_id}")
+            accounts = list(client.get_accounts().get("accounts", []))
+            if active_id == account_id:
+                active_id = next((str(a.get("id")) for a in accounts if _is_open(a)), None)
+            continue
+        print("Unknown action.")
 
 
 def main() -> None:
@@ -110,12 +187,10 @@ def main() -> None:
     args = parser.parse_args()
 
     store = TokenStore()
-
     if args.clear_token:
         store.delete()
         print("T-Invest API token removed from local credential storage.")
         return
-
     if args.set_token:
         _request_and_save_token(store)
         return
@@ -126,7 +201,6 @@ def main() -> None:
 
     environment = Environment.PRODUCTION if args.production else Environment.SANDBOX
     settings = Settings(environment=environment)
-
     print("Edward Trading Platform v0.1")
     print(f"Environment: {environment.value.upper()}")
     print(f"Endpoint: {settings.api_endpoint}")
@@ -134,31 +208,22 @@ def main() -> None:
 
     adapter_process = _start_adapter(token, environment)
     client = TInvestAdapterClient()
-
     try:
         _wait_for_adapter(client, adapter_process)
-
-        accounts_response = client.get_accounts()
-        accounts = list(accounts_response.get("accounts", []))
+        accounts = list(client.get_accounts().get("accounts", []))
         print(f"Accounts found: {len(accounts)}")
-
-        for account in accounts:
-            print(
-                f"- {account.get('id', '')}: {account.get('name', '')} "
-                f"[{account.get('status', '')}]"
-            )
-
         open_accounts = [account for account in accounts if _is_open(account)]
         if not open_accounts:
             print("No open accounts found.")
+            if environment is Environment.SANDBOX:
+                print("Use the account management menu to create a sandbox account.")
             return
-
-        account = open_accounts[0]
-        account_id = str(account.get("id", ""))
-        print(f"Active account: {account_id}")
-
-        _print_financials(client, account_id)
-
+        for account in accounts:
+            print(f"- {_account_label(account)}")
+        _account_management(client, environment, accounts)
+    except (EOFError, KeyboardInterrupt):
+        print()
+        print("Edward stopped by user.")
     except Exception as exc:
         print(f"ERROR: {type(exc).__name__}: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
