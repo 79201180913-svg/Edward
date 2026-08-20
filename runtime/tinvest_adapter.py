@@ -21,15 +21,12 @@ ENVIRONMENT = os.getenv("EDWARD_TINVEST_ENV", "sandbox").lower()
 
 
 def _configure_windows_ca_bundle() -> None:
-    """Make gRPC/OpenSSL trust certificates installed in Windows."""
     if os.name != "nt":
         return
     if os.environ.get("GRPC_DEFAULT_SSL_ROOTS_FILE_PATH"):
         return
-
     certs: list[bytes] = []
     seen: set[bytes] = set()
-
     for store_name in ("ROOT", "CA"):
         try:
             entries = ssl.enum_certificates(store_name)
@@ -42,14 +39,11 @@ def _configure_windows_ca_bundle() -> None:
                 continue
             seen.add(cert_der)
             certs.append(cert_der)
-
     if not certs:
         return
-
     bundle_dir = Path(tempfile.gettempdir()) / "Edward"
     bundle_dir.mkdir(parents=True, exist_ok=True)
     bundle_path = bundle_dir / "windows-ca-bundle.pem"
-
     with bundle_path.open("w", encoding="ascii") as fh:
         for cert_der in certs:
             encoded = base64.b64encode(cert_der).decode("ascii")
@@ -57,7 +51,6 @@ def _configure_windows_ca_bundle() -> None:
             for i in range(0, len(encoded), 64):
                 fh.write(encoded[i : i + 64] + "\n")
             fh.write("-----END CERTIFICATE-----\n")
-
     os.environ["GRPC_DEFAULT_SSL_ROOTS_FILE_PATH"] = str(bundle_path)
 
 
@@ -65,35 +58,21 @@ _configure_windows_ca_bundle()
 
 
 def _protobuf_to_dict(value: Any) -> Any:
-    """Convert SDK/protobuf responses to JSON-safe Python values.
-
-    t-tech-investments 0.3.x can return response wrapper objects rather than
-    raw protobuf Messages. In that case MessageToDict(response) raises because
-    the wrapper has no DESCRIPTOR. We unwrap common response attributes first.
-    """
     from google.protobuf.json_format import MessageToDict
     from google.protobuf.message import Message
 
     if value is None:
         return None
-
     if isinstance(value, Message):
         return MessageToDict(value, preserving_proto_field_name=True)
-
     if isinstance(value, (str, int, float, bool)):
         return value
-
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
-
     if isinstance(value, dict):
         return {str(k): _protobuf_to_dict(v) for k, v in value.items()}
-
     if isinstance(value, (list, tuple)):
         return [_protobuf_to_dict(v) for v in value]
-
-    # SDK response wrappers commonly expose the actual protobuf payload under
-    # response/result/data. Try those before inspecting object attributes.
     for attr in ("response", "result", "data"):
         nested = getattr(value, attr, None)
         if nested is not None and nested is not value:
@@ -101,15 +80,11 @@ def _protobuf_to_dict(value: Any) -> Any:
                 return _protobuf_to_dict(nested)
             except Exception:
                 pass
-
-    # Some SDK response objects are iterable/mapping-like.
     try:
         if hasattr(value, "items"):
             return {str(k): _protobuf_to_dict(v) for k, v in value.items()}
     except Exception:
         pass
-
-    # Last resort: serialize public attributes without exposing private state.
     result: dict[str, Any] = {}
     for name in dir(value):
         if name.startswith("_"):
@@ -122,10 +97,8 @@ def _protobuf_to_dict(value: Any) -> Any:
             continue
         if isinstance(attr, (str, int, float, bool, type(None), bytes, list, tuple, dict)):
             result[name] = _protobuf_to_dict(attr)
-
     if result:
         return result
-
     return {"value": str(value)}
 
 
@@ -140,7 +113,6 @@ class AdapterState:
     def __init__(self) -> None:
         if not TOKEN:
             raise RuntimeError("T-Invest API token is not configured")
-
         target = INVEST_GRPC_API if ENVIRONMENT == "production" else INVEST_GRPC_API_SANDBOX
         client = Client(TOKEN, target=target)
         entered_client = client.__enter__()
@@ -160,6 +132,15 @@ class AdapterState:
 
     def accounts(self) -> Any:
         return self._service("users").get_accounts()
+
+    def open_sandbox_account(self, name: str | None = None) -> Any:
+        request: dict[str, Any] = {}
+        if name:
+            request["name"] = name
+        return self._service("sandbox").open_sandbox_account(**request)
+
+    def close_sandbox_account(self, account_id: str) -> Any:
+        return self._service("sandbox").close_sandbox_account(account_id=account_id)
 
     def portfolio(self, account_id: str) -> Any:
         return self._service("operations").get_portfolio(account_id=account_id)
@@ -202,6 +183,17 @@ class Handler(BaseHTTPRequestHandler):
             payload = self._read_json()
             if self.path == "/accounts":
                 self._send(200, message_to_dict(STATE.accounts()))
+                return
+            if self.path == "/accounts/create":
+                name = str(payload.get("name", "")).strip() or None
+                self._send(200, message_to_dict(STATE.open_sandbox_account(name)))
+                return
+            if self.path == "/accounts/close":
+                account_id = str(payload.get("account_id", "")).strip()
+                if not account_id:
+                    self._send(400, {"error": "account_id is required"})
+                    return
+                self._send(200, message_to_dict(STATE.close_sandbox_account(account_id)))
                 return
             if self.path == "/portfolio":
                 account_id = str(payload.get("account_id", "")).strip()
