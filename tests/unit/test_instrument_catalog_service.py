@@ -4,6 +4,7 @@ from edward.services.instrument_catalog_service import InstrumentCatalogService
 class FakeClient:
     def __init__(self):
         self.find_called = False
+        self.price_requests = []
         self.catalog = {
             "instruments": [
                 {"ticker": "SBER", "name": "Сбербанк", "uid": "uid-sber", "figi": "figi-sber"},
@@ -14,18 +15,30 @@ class FakeClient:
     def list_instruments(self, instrument_kind="SHARE", trade_available_only=True):
         return self.catalog
 
+    def get_last_prices(self, instrument_ids):
+        self.price_requests.append(instrument_ids)
+        return {
+            "last_prices": [
+                {"instrument_uid": "uid-sber", "price": "321.45"},
+                {"instrument_uid": "uid-gazp", "price": "164.20"},
+            ]
+        }
+
     def find_instrument(self, query, trade_available_only=True):
         self.find_called = True
         raise RuntimeError("not_found")
 
 
-def test_instrument_catalog_returns_list():
-    service = InstrumentCatalogService(FakeClient())
+def test_instrument_catalog_returns_list_and_bulk_price():
+    client = FakeClient()
+    service = InstrumentCatalogService(client)
 
     instruments = service.list()
 
     assert len(instruments) == 2
     assert instruments[0]["ticker"] == "SBER"
+    assert instruments[0]["last_price"] == "321.45"
+    assert client.price_requests == [["uid-sber", "uid-gazp"]]
 
 
 def test_instrument_catalog_search_filters_locally_without_find_endpoint():
