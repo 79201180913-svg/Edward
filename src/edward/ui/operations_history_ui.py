@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
+from tkinter import ttk
 from typing import Any
 
 
@@ -37,12 +38,11 @@ def install_operations_history_ui(app_class: type[Any]) -> None:
 
     def _decimal_text(value: Any) -> str:
         try:
-            return self._money(value)
+            return app_class._money(value)
         except Exception:
             return str(value or "")
 
     def _page_history(self: Any) -> None:
-        ttk = __import__("tkinter.ttk", fromlist=["ttk"]).ttk
         ttk.Label(self.content, text="История операций", style="Title.TLabel").pack(anchor="w", pady=(0, 12))
         aid = self._require_account()
         if not aid:
@@ -105,8 +105,6 @@ def install_operations_history_ui(app_class: type[Any]) -> None:
                 ),
             )
 
-        # Keep the locally saved completed trades visible as well. They are
-        # useful for cross-checking API history and Excel history.
         for row in self.history.read_all():
             tree.insert(
                 "",
