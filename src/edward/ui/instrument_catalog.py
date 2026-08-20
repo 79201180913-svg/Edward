@@ -41,7 +41,7 @@ def _print_instruments(instruments: list[Any], start: int = 1) -> None:
 
 
 def show_catalog(client: Any, on_selected: Callable[[Any], None] | None = None) -> None:
-    """Interactive catalog: type -> authoritative list -> optional local filter -> selection."""
+    """Interactive catalog: type -> authoritative list -> local filter -> selection."""
     catalog = InstrumentCatalogService(client)
 
     print("\nINSTRUMENT CATALOG")
@@ -78,7 +78,6 @@ def show_catalog(client: Any, on_selected: Callable[[Any], None] | None = None) 
             or query in str(_field(instrument, "name", "")).casefold()
         ]
 
-    # Console UI is intentionally paged: the API catalog can contain thousands of instruments.
     page_size = 20
     page = 0
     while True:
@@ -88,13 +87,14 @@ def show_catalog(client: Any, on_selected: Callable[[Any], None] | None = None) 
             print("No instruments on this page.")
             return
         _print_instruments(current, start + 1)
-        print(f"Page {page + 1}/{max(1, (len(instruments) + page_size - 1) // page_size)}")
+        total_pages = max(1, (len(instruments) + page_size - 1) // page_size)
+        print(f"Page {page + 1}/{total_pages}")
         print("Enter number to select, N next, P previous, F new filter, B back")
         choice = input("Select: ").strip().casefold()
         if choice == "b":
             return
         if choice == "n":
-            if start + page_size < len(instruments):
+            if page + 1 < total_pages:
                 page += 1
             continue
         if choice == "p":
@@ -113,11 +113,14 @@ def show_catalog(client: Any, on_selected: Callable[[Any], None] | None = None) 
             page = 0
             continue
         try:
-            selected_index = int(choice) - 1
-            selected = instruments[selected_index]
+            absolute_index = int(choice) - 1
+            if not start <= absolute_index < start + len(current):
+                raise IndexError
+            selected = instruments[absolute_index]
         except (ValueError, IndexError):
             print("Invalid instrument selection.")
             continue
+
         print("\nINSTRUMENT")
         print("----------------------------------------")
         print(f"Ticker:   {_field(selected, 'ticker', '')}")
