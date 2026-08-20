@@ -21,18 +21,9 @@ ENVIRONMENT = os.getenv("EDWARD_TINVEST_ENV", "sandbox").lower()
 
 
 def _configure_windows_ca_bundle() -> None:
-    """Make gRPC/OpenSSL trust certificates installed in Windows.
-
-    On some corporate Windows networks HTTPS traffic is inspected by a
-    company proxy which adds its own root CA. Python/gRPC may not use the
-    Windows certificate store automatically, causing CERTIFICATE_VERIFY_FAILED.
-    We export the trusted Windows ROOT and CA stores to a temporary PEM bundle
-    and tell gRPC/OpenSSL to use it. TLS verification remains enabled.
-    """
+    """Make gRPC/OpenSSL trust certificates installed in Windows."""
     if os.name != "nt":
         return
-
-    # Respect an explicitly configured gRPC CA bundle.
     if os.environ.get("GRPC_DEFAULT_SSL_ROOTS_FILE_PATH"):
         return
 
@@ -44,7 +35,6 @@ def _configure_windows_ca_bundle() -> None:
             entries = ssl.enum_certificates(store_name)
         except Exception:
             continue
-
         for cert_der, encoding, trust in entries:
             if encoding != "x509_asn":
                 continue
@@ -71,14 +61,79 @@ def _configure_windows_ca_bundle() -> None:
     os.environ["GRPC_DEFAULT_SSL_ROOTS_FILE_PATH"] = str(bundle_path)
 
 
-# Must happen before creating the T-Invest gRPC Client.
 _configure_windows_ca_bundle()
 
 
-def message_to_dict(message: Any) -> dict[str, Any]:
-    from google.protobuf.json_format import MessageToDict
+def _protobuf_to_dict(value: Any) -> Any:
+    """Convert SDK/protobuf responses to JSON-safe Python values.
 
-    return MessageToDict(message, preserving_proto_field_name=True)
+    t-tech-investments 0.3.x can return response wrapper objects rather than
+    raw protobuf Messages. In that case MessageToDict(response) raises because
+    the wrapper has no DESCRIPTOR. We unwrap common response attributes first.
+    """
+    from google.protobuf.json_format import MessageToDict
+    from google.protobuf.message import Message
+
+    if value is None:
+        return None
+
+    if isinstance(value, Message):
+        return MessageToDict(value, preserving_proto_field_name=True)
+
+    if isinstance(value, (str, int, float, bool)):
+        return value
+
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+
+    if isinstance(value, dict):
+        return {str(k): _protobuf_to_dict(v) for k, v in value.items()}
+
+    if isinstance(value, (list, tuple)):
+        return [_protobuf_to_dict(v) for v in value]
+
+    # SDK response wrappers commonly expose the actual protobuf payload under
+    # response/result/data. Try those before inspecting object attributes.
+    for attr in ("response", "result", "data"):
+        nested = getattr(value, attr, None)
+        if nested is not None and nested is not value:
+            try:
+                return _protobuf_to_dict(nested)
+            except Exception:
+                pass
+
+    # Some SDK response objects are iterable/mapping-like.
+    try:
+        if hasattr(value, "items"):
+            return {str(k): _protobuf_to_dict(v) for k, v in value.items()}
+    except Exception:
+        pass
+
+    # Last resort: serialize public attributes without exposing private state.
+    result: dict[str, Any] = {}
+    for name in dir(value):
+        if name.startswith("_"):
+            continue
+        try:
+            attr = getattr(value, name)
+        except Exception:
+            continue
+        if callable(attr):
+            continue
+        if isinstance(attr, (str, int, float, bool, type(None), bytes, list, tuple, dict)):
+            result[name] = _protobuf_to_dict(attr)
+
+    if result:
+        return result
+
+    return {"value": str(value)}
+
+
+def message_to_dict(message: Any) -> dict[str, Any]:
+    converted = _protobuf_to_dict(message)
+    if isinstance(converted, dict):
+        return converted
+    return {"value": converted}
 
 
 class AdapterState:
@@ -88,10 +143,6 @@ class AdapterState:
 
         target = INVEST_GRPC_API if ENVIRONMENT == "production" else INVEST_GRPC_API_SANDBOX
         client = Client(TOKEN, target=target)
-
-        # Some SDK releases return the active client from __enter__ instead
-        # of mutating the original object. Keep the returned instance when
-        # available; otherwise retain the original client.
         entered_client = client.__enter__()
         self.client = entered_client if entered_client is not None else client
 
@@ -124,7 +175,6 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "EdwardTInvestAdapter/0.1"
 
     def log_message(self, format: str, *args: Any) -> None:
-        # Do not log request bodies because they may contain sensitive data.
         sys.stderr.write("Edward T-Invest adapter: " + format % args + "\n")
 
     def _send(self, status: int, payload: dict[str, Any]) -> None:
@@ -151,28 +201,24 @@ class Handler(BaseHTTPRequestHandler):
         try:
             payload = self._read_json()
             if self.path == "/accounts":
-                response = STATE.accounts()
-                self._send(200, message_to_dict(response))
+                self._send(200, message_to_dict(STATE.accounts()))
                 return
             if self.path == "/portfolio":
                 account_id = str(payload.get("account_id", "")).strip()
                 if not account_id:
                     self._send(400, {"error": "account_id is required"})
                     return
-                response = STATE.portfolio(account_id)
-                self._send(200, message_to_dict(response))
+                self._send(200, message_to_dict(STATE.portfolio(account_id)))
                 return
             if self.path == "/positions":
                 account_id = str(payload.get("account_id", "")).strip()
                 if not account_id:
                     self._send(400, {"error": "account_id is required"})
                     return
-                response = STATE.positions(account_id)
-                self._send(200, message_to_dict(response))
+                self._send(200, message_to_dict(STATE.positions(account_id)))
                 return
             self._send(404, {"error": "not_found"})
         except Exception as exc:
-            # Return only the technical error text. Never return the token.
             self._send(502, {"error": type(exc).__name__, "message": str(exc)})
 
 
