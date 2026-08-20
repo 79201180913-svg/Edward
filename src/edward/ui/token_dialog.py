@@ -16,13 +16,11 @@ WM_COMMAND = 0x0111
 WM_GETTEXT = 0x000D
 WM_GETTEXTLENGTH = 0x000E
 EM_SETPASSWORDCHAR = 0x00CC
-EM_SETSEL = 0x00B1
 ES_PASSWORD = 0x0020
 ES_AUTOHSCROLL = 0x0080
 ES_LEFT = 0x0000
 WS_CHILD = 0x40000000
 WS_VISIBLE = 0x10000000
-WS_BORDER = 0x00800000
 WS_TABSTOP = 0x00010000
 WS_CAPTION = 0x00C00000
 WS_SYSMENU = 0x00080000
@@ -55,7 +53,7 @@ class TokenDialog:
     def show(self) -> str | None:
         hinstance = kernel32.GetModuleHandleW(None)
         wnd_proc_type = ctypes.WINFUNCTYPE(
-            wintypes.LRESULT,
+            ctypes.c_ssize_t,
             wintypes.HWND,
             wintypes.UINT,
             wintypes.WPARAM,
