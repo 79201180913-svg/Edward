@@ -168,15 +168,28 @@ class AdapterState:
         if method_name is None:
             raise ValueError(f"Unsupported instrument kind: {instrument_kind}")
 
-        service = self._service("instruments")
-        method = getattr(service, method_name, None)
+        method = getattr(self._service("instruments"), method_name, None)
         if method is None:
             raise RuntimeError(f"T-Invest SDK instrument method '{method_name}' is unavailable")
 
-        # BASE is the API-tradable catalog according to T-Invest documentation.
-        status = "INSTRUMENT_STATUS_BASE" if trade_available_only else "INSTRUMENT_STATUS_ALL"
-        kwargs: dict[str, Any] = {"instrument_status": status}
-        return method(**kwargs)
+        # The SDK expects the generated protobuf enum, not its string name.
+        # Keep the conversion here, at the adapter boundary, so the rest of Edward
+        # works with simple domain strings and does not depend on protobuf types.
+        try:
+            from t_tech.invest.grpc.common_pb2 import InstrumentStatus
+
+            status = (
+                InstrumentStatus.INSTRUMENT_STATUS_BASE
+                if trade_available_only
+                else InstrumentStatus.INSTRUMENT_STATUS_ALL
+            )
+            return method(instrument_status=status)
+        except (ImportError, AttributeError):
+            # Older SDK builds may expose the enum through a different generated
+            # module. The API defaults to the base catalog when status is omitted.
+            if trade_available_only:
+                return method()
+            return method(instrument_status=2)
 
     def last_prices(self, instrument_ids: list[str]) -> Any:
         return self._service("market_data").get_last_prices(instrument_id=instrument_ids)
@@ -287,8 +300,6 @@ class Handler(BaseHTTPRequestHandler):
                     result = STATE.find_instrument(query, bool(payload.get("api_trade_available_flag", True)))
                     self._send(200, message_to_dict(result))
                 except Exception as exc:
-                    # FindInstrument may return a transport-level not_found for a
-                    # query with no matches. That is a normal empty-result state.
                     if "not_found" in str(exc).lower():
                         self._send(200, {"instruments": []})
                     else:
