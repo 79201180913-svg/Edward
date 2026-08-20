@@ -9,6 +9,8 @@ import tempfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 from t_tech.invest import Client
 from t_tech.invest.constants import INVEST_GRPC_API, INVEST_GRPC_API_SANDBOX
@@ -18,6 +20,7 @@ HOST = "127.0.0.1"
 PORT = int(os.getenv("EDWARD_TINVEST_PORT", "8765"))
 TOKEN = os.getenv("EDWARD_TINVEST_TOKEN", "").strip()
 ENVIRONMENT = os.getenv("EDWARD_TINVEST_ENV", "sandbox").lower()
+REST_TARGET = "https://invest-public-api.tbank.ru" if ENVIRONMENT == "production" else "https://sandbox-invest-public-api.tbank.ru"
 
 
 def _configure_windows_ca_bundle() -> None:
@@ -109,6 +112,18 @@ def message_to_dict(message: Any) -> dict[str, Any]:
     return {"value": converted}
 
 
+def _camel_to_snake(value: Any) -> Any:
+    if isinstance(value, list):
+        return [_camel_to_snake(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    result: dict[str, Any] = {}
+    for key, item in value.items():
+        snake = "".join("_" + char.lower() if char.isupper() else char for char in str(key)).lstrip("_")
+        result[snake] = _camel_to_snake(item)
+    return result
+
+
 class AdapterState:
     def __init__(self) -> None:
         if not TOKEN:
@@ -130,6 +145,30 @@ class AdapterState:
             )
         return service
 
+    def _rest_request(self, service_method: str, payload: dict[str, Any]) -> dict[str, Any]:
+        url = f"{REST_TARGET}/rest/tinkoff.public.invest.api.contract.v1.{service_method}"
+        request = Request(
+            url,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {TOKEN}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+        )
+        try:
+            with urlopen(request, timeout=30.0) as response:
+                return _camel_to_snake(json.loads(response.read().decode("utf-8")))
+        except HTTPError as exc:
+            try:
+                body = json.loads(exc.read().decode("utf-8"))
+            except Exception:
+                body = {"error": "http_error", "message": str(exc)}
+            raise RuntimeError(body.get("message", body.get("error", str(exc)))) from exc
+        except URLError as exc:
+            raise RuntimeError(f"T-Invest REST API is unavailable: {exc.reason}") from exc
+
     def accounts(self) -> Any:
         return self._service("users").get_accounts()
 
@@ -149,47 +188,34 @@ class AdapterState:
         return self._service("operations").get_positions(account_id=account_id)
 
     def find_instrument(self, query: str, trade_available_only: bool = True) -> Any:
-        return self._service("instruments").find_instrument(
-            query=query,
-            api_trade_available_flag=trade_available_only,
+        return self._rest_request(
+            "InstrumentsService/FindInstrument",
+            {
+                "query": query,
+                "instrumentKind": "INSTRUMENT_TYPE_UNSPECIFIED",
+                "apiTradeAvailableFlag": trade_available_only,
+            },
         )
 
     def list_instruments(self, instrument_kind: str = "SHARE", trade_available_only: bool = True) -> Any:
-        """Return an authoritative catalog list for a supported instrument kind."""
         method_map = {
-            "SHARE": "shares",
-            "BOND": "bonds",
-            "ETF": "etfs",
-            "CURRENCY": "currencies",
-            "FUTURES": "futures",
-            "OPTION": "options",
+            "SHARE": "Shares",
+            "BOND": "Bonds",
+            "ETF": "Etfs",
+            "CURRENCY": "Currencies",
+            "FUTURES": "Futures",
+            "OPTION": "Options",
         }
         method_name = method_map.get(instrument_kind.upper())
         if method_name is None:
             raise ValueError(f"Unsupported instrument kind: {instrument_kind}")
-
-        method = getattr(self._service("instruments"), method_name, None)
-        if method is None:
-            raise RuntimeError(f"T-Invest SDK instrument method '{method_name}' is unavailable")
-
-        # The SDK expects the generated protobuf enum, not its string name.
-        # Keep the conversion here, at the adapter boundary, so the rest of Edward
-        # works with simple domain strings and does not depend on protobuf types.
-        try:
-            from t_tech.invest.grpc.common_pb2 import InstrumentStatus
-
-            status = (
-                InstrumentStatus.INSTRUMENT_STATUS_BASE
-                if trade_available_only
-                else InstrumentStatus.INSTRUMENT_STATUS_ALL
-            )
-            return method(instrument_status=status)
-        except (ImportError, AttributeError):
-            # Older SDK builds may expose the enum through a different generated
-            # module. The API defaults to the base catalog when status is omitted.
-            if trade_available_only:
-                return method()
-            return method(instrument_status=2)
+        return self._rest_request(
+            f"InstrumentsService/{method_name}",
+            {
+                "instrumentStatus": "INSTRUMENT_STATUS_BASE" if trade_available_only else "INSTRUMENT_STATUS_ALL",
+                "instrumentExchange": "INSTRUMENT_EXCHANGE_UNSPECIFIED",
+            },
+        )
 
     def last_prices(self, instrument_ids: list[str]) -> Any:
         return self._service("market_data").get_last_prices(instrument_id=instrument_ids)
@@ -296,14 +322,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not query:
                     self._send(400, {"error": "query is required"})
                     return
-                try:
-                    result = STATE.find_instrument(query, bool(payload.get("api_trade_available_flag", True)))
-                    self._send(200, message_to_dict(result))
-                except Exception as exc:
-                    if "not_found" in str(exc).lower():
-                        self._send(200, {"instruments": []})
-                    else:
-                        raise
+                self._send(200, message_to_dict(STATE.find_instrument(query, bool(payload.get("api_trade_available_flag", True)))))
                 return
             if self.path == "/instruments/list":
                 kind = str(payload.get("instrument_kind", "SHARE")).strip().upper()
