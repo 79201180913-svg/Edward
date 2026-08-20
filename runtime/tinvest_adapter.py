@@ -226,7 +226,21 @@ class AdapterState:
     def order_state(self, account_id, order_id): return self._service("orders").get_order_state(account_id=account_id, order_id=order_id)
     def order_price(self, payload): return self._rest_request("OrdersService/GetOrderPrice", payload)
     def max_lots(self, payload): return self._rest_request("OrdersService/GetMaxLots", payload)
-    def operations(self, account_id, limit=1000): return self._rest_request("OperationsService/GetOperationsByCursor", {"accountId": account_id, "limit": max(1, min(limit, 1000)), "withoutCommissions": False, "withoutTrades": False})
+    def operations(self, account_id, limit=1000):
+        limit = max(1, min(limit, 1000))
+        if ENVIRONMENT == "sandbox":
+            return self._rest_request(
+                "SandboxService/GetSandboxOperationsByCursor",
+                {
+                    "accountId": str(account_id),
+                    "limit": limit,
+                    "withoutCommissions": False,
+                    "withoutTrades": False,
+                    "withoutOvernights": False,
+                },
+                target="https://invest-public-api.tbank.ru",
+            )
+        return self._rest_request("OperationsService/GetOperationsByCursor", {"accountId": account_id, "limit": limit, "withoutCommissions": False, "withoutTrades": False})
     def create_order(self, payload):
         kwargs = {"quantity": payload["quantity"], "direction": payload["direction"], "account_id": payload["account_id"], "order_type": payload["order_type"], "instrument_id": payload["instrument_uid"], "order_id": payload["request_id"]}
         if payload.get("price") is not None: kwargs["price"] = payload["price"]
