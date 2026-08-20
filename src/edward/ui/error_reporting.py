@@ -112,12 +112,18 @@ def show_error_dialog(parent: tk.Misc, exc: BaseException, context: str = "GUI")
 
 def install_error_reporting(app_class: type[Any]) -> None:
     """Install detailed error handling in the existing GUI presentation class."""
-    original_show_error = app_class._show_error
     original_report_callback_exception = getattr(app_class, "report_callback_exception", None)
 
-    def _show_error(self: Any, exc: Exception) -> None:
+    def _show_error(self: Any, exc: Exception, context: str = "") -> None:
+        """Compatibility wrapper for existing calls that pass an error context.
+
+        The GUI already calls ``_show_error(exc, context)`` in several places.
+        The previous wrapper accepted only ``exc``, which caused the real trading
+        error to be replaced by a secondary TypeError. Keep the existing context
+        and pass it to the detailed error dialog.
+        """
         self.status_var.set("Ошибка")
-        show_error_dialog(self, exc, self.current_page)
+        show_error_dialog(self, exc, context or getattr(self, "current_page", "GUI"))
 
     def report_callback_exception(self: Any, exc_type: type[BaseException], exc_value: BaseException, exc_tb: Any) -> None:
         exc = exc_value
@@ -125,8 +131,6 @@ def install_error_reporting(app_class: type[Any]) -> None:
             exc = RuntimeError("Неизвестная ошибка Tkinter callback")
         show_error_dialog(self, exc, "Tkinter callback")
         if original_report_callback_exception is not None:
-            # Keep Tkinter's standard reporting behavior available without
-            # replacing the user-facing diagnostic dialog.
             try:
                 original_report_callback_exception(self, exc_type, exc_value, exc_tb)
             except Exception:
