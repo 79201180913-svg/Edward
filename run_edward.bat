@@ -28,7 +28,7 @@ if errorlevel 1 goto :install_error
 echo.
 echo Starting Edward...
 echo.
-.venv\Scripts\python.exe -m edward
+.venv\Scripts\python.exe -m edward.main
 set EXIT_CODE=%ERRORLEVEL%
 
 echo.
