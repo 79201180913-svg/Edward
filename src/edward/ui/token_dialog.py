@@ -5,6 +5,7 @@ from __future__ import annotations
 import ctypes
 from ctypes import wintypes
 
+from edward.security.token_store import TokenStore
 
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
@@ -12,17 +13,10 @@ kernel32 = ctypes.windll.kernel32
 WM_CLOSE = 0x0010
 WM_DESTROY = 0x0002
 WM_COMMAND = 0x0111
-WM_KEYDOWN = 0x0100
-WM_CHAR = 0x0102
-WM_PASTE = 0x0302
-WM_COPY = 0x0301
-WM_CUT = 0x0300
-WM_CLEAR = 0x0303
 WM_GETTEXT = 0x000D
 WM_GETTEXTLENGTH = 0x000E
 EM_SETPASSWORDCHAR = 0x00CC
 EM_SETSEL = 0x00B1
-EM_REPLACESEL = 0x00C2
 ES_PASSWORD = 0x0020
 ES_AUTOHSCROLL = 0x0080
 ES_LEFT = 0x0000
@@ -30,6 +24,9 @@ WS_CHILD = 0x40000000
 WS_VISIBLE = 0x10000000
 WS_BORDER = 0x00800000
 WS_TABSTOP = 0x00010000
+WS_CAPTION = 0x00C00000
+WS_SYSMENU = 0x00080000
+WS_MINIMIZEBOX = 0x00020000
 WS_EX_CLIENTEDGE = 0x00000200
 BS_DEFPUSHBUTTON = 0x00000001
 BS_PUSHBUTTON = 0x00000000
@@ -43,10 +40,9 @@ CANCEL_ID = 1003
 
 
 class TokenDialog:
-    """Small native Win32 dialog.
+    """Native Win32 token dialog using the standard Windows EDIT control.
 
-    Uses the Windows EDIT control directly, so clipboard operations such as
-    Ctrl+V are handled by Windows itself rather than by Tkinter bindings.
+    Clipboard shortcuts (including Ctrl+V) are handled by Windows itself.
     """
 
     def __init__(self, title: str = "Edward Trading Platform") -> None:
@@ -54,25 +50,19 @@ class TokenDialog:
         self.token: str | None = None
         self.hwnd = None
         self.edit = None
+        self._wnd_proc = None
 
     def show(self) -> str | None:
         hinstance = kernel32.GetModuleHandleW(None)
+        wnd_proc_type = ctypes.WINFUNCTYPE(
+            wintypes.LRESULT,
+            wintypes.HWND,
+            wintypes.UINT,
+            wintypes.WPARAM,
+            wintypes.LPARAM,
+        )
 
-        class WNDCLASSW(ctypes.Structure):
-            _fields_ = [
-                ("style", wintypes.UINT),
-                ("lpfnWndProc", wintypes.WINFUNCTYPE(wintypes.LRESULT, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)),
-                ("cbClsExtra", ctypes.c_int),
-                ("cbWndExtra", ctypes.c_int),
-                ("hInstance", wintypes.HINSTANCE),
-                ("hIcon", wintypes.HICON),
-                ("hCursor", wintypes.HCURSOR),
-                ("hbrBackground", wintypes.HBRUSH),
-                ("lpszMenuName", wintypes.LPCWSTR),
-                ("lpszClassName", wintypes.LPCWSTR),
-            ]
-
-        @wintypes.WINFUNCTYPE(wintypes.LRESULT, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
+        @wnd_proc_type
         def wnd_proc(hwnd, msg, wparam, lparam):
             if msg == WM_COMMAND:
                 control_id = wparam & 0xFFFF
@@ -93,21 +83,35 @@ class TokenDialog:
             return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
 
         self._wnd_proc = wnd_proc
+
+        class WNDCLASSW(ctypes.Structure):
+            _fields_ = [
+                ("style", wintypes.UINT),
+                ("lpfnWndProc", wnd_proc_type),
+                ("cbClsExtra", ctypes.c_int),
+                ("cbWndExtra", ctypes.c_int),
+                ("hInstance", wintypes.HINSTANCE),
+                ("hIcon", wintypes.HICON),
+                ("hCursor", wintypes.HCURSOR),
+                ("hbrBackground", wintypes.HBRUSH),
+                ("lpszMenuName", wintypes.LPCWSTR),
+                ("lpszClassName", wintypes.LPCWSTR),
+            ]
+
         class_name = "EdwardTokenDialog"
         wc = WNDCLASSW()
         wc.lpfnWndProc = wnd_proc
         wc.hInstance = hinstance
         wc.hCursor = user32.LoadCursorW(None, IDC_ARROW)
-        wc.hbrBackground = ctypes.c_void_p(5)
+        wc.hbrBackground = ctypes.cast(5, wintypes.HBRUSH)
         wc.lpszClassName = class_name
-
         user32.RegisterClassW(ctypes.byref(wc))
 
         self.hwnd = user32.CreateWindowExW(
             0,
             class_name,
             self.title,
-            WS_VISIBLE | 0x00CF0000,
+            WS_VISIBLE | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
             560,
@@ -123,42 +127,77 @@ class TokenDialog:
             "STATIC",
             "Введите T-Invest API Token:",
             WS_CHILD | WS_VISIBLE,
-            30, 30, 480, 25,
-            self.hwnd, None, hinstance, None,
+            30,
+            30,
+            480,
+            25,
+            self.hwnd,
+            None,
+            hinstance,
+            None,
         )
 
         self.edit = user32.CreateWindowExW(
             WS_EX_CLIENTEDGE,
             "EDIT",
             "",
-            WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL | ES_PASSWORD | ES_LEFT,
-            30, 65, 480, 30,
-            self.hwnd, EDIT_ID, hinstance, None,
+            WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL | ES_PASSWORD | ES_LEFT,
+            30,
+            65,
+            480,
+            30,
+            self.hwnd,
+            EDIT_ID,
+            hinstance,
+            None,
         )
         user32.SendMessageW(self.edit, EM_SETPASSWORDCHAR, ord("•"), 0)
 
         user32.CreateWindowExW(
             0,
             "STATIC",
-            "Токен будет сохранён в защищённом хранилище Windows.",
+            "Ctrl+V — вставить токен. Токен сохранится локально.",
             WS_CHILD | WS_VISIBLE,
-            30, 105, 480, 25,
-            self.hwnd, None, hinstance, None,
+            30,
+            105,
+            480,
+            25,
+            self.hwnd,
+            None,
+            hinstance,
+            None,
         )
 
-        ok = user32.CreateWindowExW(
-            0, "BUTTON", "Сохранить и продолжить",
+        user32.CreateWindowExW(
+            0,
+            "BUTTON",
+            "Сохранить и продолжить",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
-            250, 145, 170, 35, self.hwnd, OK_ID, hinstance, None,
+            250,
+            145,
+            170,
+            35,
+            self.hwnd,
+            OK_ID,
+            hinstance,
+            None,
         )
         user32.CreateWindowExW(
-            0, "BUTTON", "Отмена",
+            0,
+            "BUTTON",
+            "Отмена",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-            430, 145, 80, 35, self.hwnd, CANCEL_ID, hinstance, None,
+            430,
+            145,
+            80,
+            35,
+            self.hwnd,
+            CANCEL_ID,
+            hinstance,
+            None,
         )
 
         user32.SetFocus(self.edit)
-        user32.SendMessageW(self.edit, EM_SETSEL, 0, -1)
         user32.ShowWindow(self.hwnd, SW_SHOW)
         user32.UpdateWindow(self.hwnd)
 
@@ -174,16 +213,27 @@ class TokenDialog:
         if not length:
             user32.MessageBoxW(self.hwnd, "Введите API Token.", "Edward", 0x10)
             return
+
         buffer = ctypes.create_unicode_buffer(length + 1)
         user32.SendMessageW(self.edit, WM_GETTEXT, length + 1, ctypes.byref(buffer))
         value = buffer.value.strip()
         if not value:
             user32.MessageBoxW(self.hwnd, "Введите API Token.", "Edward", 0x10)
             return
+
         self.token = value
         user32.DestroyWindow(self.hwnd)
 
 
+def request_and_save_token(store: TokenStore) -> str | None:
+    """Request a token using the native Windows dialog and save it."""
+    token = TokenDialog().show()
+    if not token:
+        return None
+    store.set(token)
+    return token
+
+
 def ask_for_token() -> str | None:
-    """Show the native Windows token dialog and return the entered token."""
+    """Show the native Windows token dialog without saving it."""
     return TokenDialog().show()
