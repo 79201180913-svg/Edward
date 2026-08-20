@@ -22,11 +22,7 @@ from edward.validation.trading_validator import TradingValidator
 
 
 class EdwardApp(tk.Tk):
-    """Desktop presentation layer for Edward.
-
-    The UI talks to application services/client abstractions only. T-Invest SDK
-    details remain inside the existing Python 3.12 adapter process.
-    """
+    """Desktop presentation layer for Edward."""
 
     def __init__(self, client: TInvestAdapterClient, adapter_process: subprocess.Popen[bytes], environment: Environment) -> None:
         super().__init__()
@@ -249,7 +245,7 @@ class EdwardApp(tk.Tk):
         self.filter_var = tk.StringVar()
         ttk.Entry(controls, textvariable=self.filter_var, width=35).pack(side="left", padx=8)
         ttk.Button(controls, text="Load", command=self._load_instruments).pack(side="left")
-        self.instrument_tree = self._tree(self.content, ("ticker", "name", "currency", "uid", "trade"), (110, 280, 90, 400, 100))
+        self.instrument_tree = self._tree(self.content, ("ticker", "name", "currency", "price", "buy", "sell", "trade", "uid"), (100, 240, 80, 110, 70, 70, 80, 360))
         self.instrument_tree.pack(fill="both", expand=True)
         self.instrument_tree.bind("<Double-1>", self._instrument_selected)
         self._load_instruments()
@@ -258,10 +254,11 @@ class EdwardApp(tk.Tk):
         try:
             label = self.kind_var.get()
             kind = next(k for k, v in INSTRUMENT_KINDS if v == label)
-            instruments = InstrumentCatalogService(self.client).list(kind, trade_available_only=True)
-            query = self.filter_var.get().strip().casefold()
+            service = InstrumentCatalogService(self.client)
+            instruments = service.list(kind, trade_available_only=True)
+            query = self.filter_var.get().strip()
             if query:
-                instruments = [i for i in instruments if query in str(self._field(i, "ticker", "")).casefold() or query in str(self._field(i, "name", "")).casefold()]
+                instruments = service.search(query, kind, True)
             for item in self.instrument_tree.get_children():
                 self.instrument_tree.delete(item)
             for instrument in instruments:
@@ -269,9 +266,12 @@ class EdwardApp(tk.Tk):
                     self._field(instrument, "ticker", ""),
                     self._field(instrument, "name", ""),
                     self._field(instrument, "currency", ""),
+                    self._field(instrument, "last_price", ""),
+                    self._field(instrument, "buy_available", self._field(instrument, "buy_available_flag", "")),
+                    self._field(instrument, "sell_available", self._field(instrument, "sell_available_flag", "")),
+                    self._field(instrument, "api_trade_available", self._field(instrument, "api_trade_available_flag", "")),
                     self._field(instrument, "uid", self._field(instrument, "instrument_uid", "")),
-                    self._field(instrument, "api_trade_available_flag", ""),
-                ), tags=(str(self._field(instrument, "uid", self._field(instrument, "instrument_uid", ""))),))
+                ))
             self.status_var.set(f"Loaded {len(instruments)} instruments")
         except Exception as exc:
             self._show_error(exc)
@@ -282,9 +282,27 @@ class EdwardApp(tk.Tk):
             return
         item = self.instrument_tree.item(selected[0])
         values = item.get("values", [])
-        if not values:
+        if len(values) < 8:
             return
-        self.selected_instrument = {"ticker": values[0], "name": values[1], "currency": values[2], "uid": values[3], "instrument_uid": values[3]}
+        uid = str(values[7])
+        status = ""
+        try:
+            status_response = InstrumentCatalogService(self.client).trading_status(uid)
+            status = self._field(status_response, "trading_status", self._field(status_response, "status", ""))
+        except Exception:
+            status = "unavailable"
+        self.selected_instrument = {
+            "ticker": values[0],
+            "name": values[1],
+            "currency": values[2],
+            "last_price": values[3],
+            "buy_available": values[4],
+            "sell_available": values[5],
+            "api_trade_available": values[6],
+            "trading_status": status,
+            "uid": uid,
+            "instrument_uid": uid,
+        }
         self.show_page("order")
 
     def _page_orders(self) -> None:
@@ -347,6 +365,9 @@ class EdwardApp(tk.Tk):
                 widget = ttk.Entry(form, textvariable=self.order_vars[key], width=31)
             widget.grid(row=row, column=1, sticky="w", pady=5)
         ttk.Button(form, text="Load instrument", command=self._select_order_instrument).grid(row=0, column=2, padx=10)
+        instrument = self.selected_instrument or {}
+        details = f"Price: {self._field(instrument, 'last_price', '')} {self._field(instrument, 'currency', '')} | BUY: {self._field(instrument, 'buy_available', '')} | SELL: {self._field(instrument, 'sell_available', '')} | Status: {self._field(instrument, 'trading_status', '')}"
+        ttk.Label(self.content, text=details).pack(anchor="w", pady=(10, 0))
         ttk.Button(self.content, text="Validate and confirm order", command=self._submit_order).pack(anchor="w", pady=18)
         ttk.Label(self.content, text="The final validation is performed immediately before submission using current adapter data.").pack(anchor="w")
 
