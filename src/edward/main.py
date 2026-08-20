@@ -63,9 +63,25 @@ def _is_open(account: dict) -> bool:
     return status in {"OPEN", "ACCOUNT_STATUS_OPEN"}
 
 
+def _request_and_save_token(store: TokenStore) -> str:
+    """Ask for the token on first startup and persist it in OS credential storage."""
+    print("T-Invest API token is not configured locally.")
+    print("Enter the token once. Edward will store it securely in the OS credential storage.")
+
+    while True:
+        token = getpass.getpass("T-Invest API token: ").strip()
+        if not token:
+            print("Token cannot be empty. Please try again.")
+            continue
+
+        store.save(token)
+        print("T-Invest API token saved locally.")
+        return token
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Edward Trading Platform v0.1")
-    parser.add_argument("--set-token", action="store_true", help="Save T-Invest API token in OS credential storage")
+    parser.add_argument("--set-token", action="store_true", help="Replace the stored T-Invest API token")
     parser.add_argument("--clear-token", action="store_true", help="Delete stored T-Invest API token")
     parser.add_argument("--production", action="store_true", help="Use production environment instead of Sandbox")
     args = parser.parse_args()
@@ -78,16 +94,12 @@ def main() -> None:
         return
 
     if args.set_token:
-        token = getpass.getpass("T-Invest API token: ")
-        store.save(token)
-        print("T-Invest API token saved to OS credential storage.")
+        _request_and_save_token(store)
         return
 
     token = store.get()
     if not token:
-        print("T-Invest API token is not configured.")
-        print("Run: edward --set-token")
-        return
+        token = _request_and_save_token(store)
 
     environment = Environment.PRODUCTION if args.production else Environment.SANDBOX
     settings = Settings(environment=environment)
