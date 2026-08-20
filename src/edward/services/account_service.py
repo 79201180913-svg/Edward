@@ -14,18 +14,18 @@ class AccountService:
     def get_accounts(self) -> Any:
         return self._api.get_accounts()
 
-    def get_open_accounts(self) -> Any:
+    def get_open_accounts(self) -> list[Any]:
         response = self.get_accounts()
-        response.accounts[:] = [
+        return [
             account
             for account in response.accounts
             if str(account.status).endswith("ACCOUNT_STATUS_OPEN")
         ]
-        return response
 
     @staticmethod
     def select_account(accounts: Any, account_id: str) -> Any:
-        for account in accounts.accounts:
+        source = accounts.accounts if hasattr(accounts, "accounts") else accounts
+        for account in source:
             if account.id == account_id:
                 return account
         raise ValueError(f"Account not found: {account_id}")
