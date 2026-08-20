@@ -5,6 +5,8 @@ from decimal import Decimal
 from tkinter import messagebox, ttk
 from typing import Any
 
+from edward.services.balance_service import BalanceService
+
 
 def install_operations_history_ui(app_class: type[Any]) -> None:
     """Replace the history page with API operation history and explicit statuses."""
@@ -50,28 +52,12 @@ def install_operations_history_ui(app_class: type[Any]) -> None:
     def _decimal_text(value: Any) -> str:
         return app_class._money(value)
 
-    def _current_rub_balance(self: Any, account_id: str) -> Decimal:
+    def _financial_snapshot(self: Any, account_id: str) -> tuple[Decimal, Decimal]:
+        """Use exactly the same source and calculation as the Overview page."""
         positions = self.client.get_positions(account_id)
-        money = self._items(positions, "money")
-        for position in money:
-            if str(self._field(position, "currency", "")).upper() == "RUB":
-                return _decimal(self._field(position, "available", 0))
-        return Decimal("0")
-
-    def _portfolio_value(self: Any, account_id: str) -> Decimal:
-        """Return value of invested security positions only, excluding cash."""
-        positions = self.client.get_positions(account_id)
-        securities = self._items(positions, "securities")
-        total = Decimal("0")
-        for position in securities:
-            explicit_value = self._field(position, "value", None)
-            if explicit_value is not None:
-                total += _decimal(explicit_value)
-                continue
-            current_price = _decimal(self._field(position, "current_price", 0))
-            quantity = _decimal(self._field(position, "quantity", self._field(position, "balance", 0)))
-            total += current_price * quantity
-        return total
+        portfolio = self.client.get_portfolio(account_id)
+        summary = BalanceService.build_summary(positions, portfolio)
+        return summary.available, summary.securities
 
     def _copy_rows(self: Any, tree: Any, selected_only: bool = False) -> None:
         items = tree.selection() if selected_only else tree.get_children("")
@@ -100,16 +86,11 @@ def install_operations_history_ui(app_class: type[Any]) -> None:
         account_display = account_name or aid
 
         try:
-            current_balance = _current_rub_balance(self, aid)
+            current_balance, portfolio_value = _financial_snapshot(self, aid)
         except Exception as exc:
             current_balance = Decimal("0")
-            self.status_var.set(f"Не удалось получить текущий баланс: {exc}")
-
-        try:
-            portfolio_value = _portfolio_value(self, aid)
-        except Exception as exc:
             portfolio_value = Decimal("0")
-            self.status_var.set(f"Не удалось получить стоимость ценных бумаг: {exc}")
+            self.status_var.set(f"Не удалось получить финансовое состояние: {exc}")
 
         toolbar = ttk.Frame(self.content)
         toolbar.pack(fill="x", pady=(0, 10))
