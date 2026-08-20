@@ -3,6 +3,7 @@ from edward.services.instrument_catalog_service import InstrumentCatalogService
 
 class FakeClient:
     def __init__(self):
+        self.find_called = False
         self.catalog = {
             "instruments": [
                 {"ticker": "SBER", "name": "Сбербанк", "uid": "uid-sber", "figi": "figi-sber"},
@@ -14,6 +15,7 @@ class FakeClient:
         return self.catalog
 
     def find_instrument(self, query, trade_available_only=True):
+        self.find_called = True
         raise RuntimeError("not_found")
 
 
@@ -26,10 +28,22 @@ def test_instrument_catalog_returns_list():
     assert instruments[0]["ticker"] == "SBER"
 
 
-def test_instrument_catalog_search_falls_back_to_local_list():
-    service = InstrumentCatalogService(FakeClient())
+def test_instrument_catalog_search_filters_locally_without_find_endpoint():
+    client = FakeClient()
+    service = InstrumentCatalogService(client)
 
     instruments = service.search("Sber")
 
     assert len(instruments) == 1
     assert instruments[0]["ticker"] == "SBER"
+    assert client.find_called is False
+
+
+def test_instrument_catalog_search_matches_uid_figi_and_isin():
+    client = FakeClient()
+    client.catalog["instruments"][0]["isin"] = "RU0009029540"
+    service = InstrumentCatalogService(client)
+
+    assert service.search("uid-sber")[0]["ticker"] == "SBER"
+    assert service.search("figi-sber")[0]["ticker"] == "SBER"
+    assert service.search("RU0009029540")[0]["ticker"] == "SBER"
