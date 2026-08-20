@@ -2,4 +2,5 @@
 
 keyring>=25.0
 openpyxl>=3.1
+pytest>=8.0
 t-tech-investments
