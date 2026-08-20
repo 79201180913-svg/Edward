@@ -74,6 +74,30 @@ def install_operations_history_ui(app_class: type[Any]) -> None:
                     total += _decimal(self._field(position, "available", 0))
             return total
 
+    def _history_clipboard_text(self: Any, tree: Any, selected_only: bool = False) -> str:
+        """Build tab-separated text suitable for Excel and other spreadsheets."""
+        columns = tuple(tree["columns"])
+        header = [str(tree.heading(column, "text")) for column in columns]
+        rows = tree.selection() if selected_only else tree.get_children("")
+        lines = ["\t".join(header)]
+        for item_id in rows:
+            values = tree.item(item_id, "values")
+            lines.append("\t".join(str(value) for value in values))
+        return "\n".join(lines)
+
+    def _copy_history(self: Any, tree: Any, selected_only: bool = False) -> None:
+        rows = tree.selection() if selected_only else tree.get_children("")
+        if not rows:
+            self.status_var.set("Нет операций для копирования.")
+            return
+        text = _history_clipboard_text(self, tree, selected_only=selected_only)
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        self.update_idletasks()
+        count = len(rows)
+        scope = "выбранных операций" if selected_only else "операций"
+        self.status_var.set(f"Скопировано: {count} {scope}.")
+
     def _page_history(self: Any) -> None:
         ttk.Label(self.content, text="История операций", style="Title.TLabel").pack(anchor="w", pady=(0, 12))
         aid = self._require_account()
@@ -93,6 +117,8 @@ def install_operations_history_ui(app_class: type[Any]) -> None:
         toolbar = ttk.Frame(self.content)
         toolbar.pack(fill="x", pady=(0, 10))
         ttk.Button(toolbar, text="Обновить историю", command=self.refresh_current).pack(side="left")
+        ttk.Button(toolbar, text="Копировать всю историю", command=lambda: _copy_history(self, tree, False)).pack(side="left", padx=(8, 0))
+        ttk.Button(toolbar, text="Копировать выбранное", command=lambda: _copy_history(self, tree, True)).pack(side="left", padx=(8, 0))
         ttk.Label(
             toolbar,
             text=f"Счёт: {account_display} | Текущий баланс: {_decimal_text(current_balance)} RUB | Статусы: Успех / Ошибка / В процессе",
