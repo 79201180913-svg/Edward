@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import getpass
 import os
 import subprocess
 import sys
@@ -11,6 +10,7 @@ from pathlib import Path
 from edward.api.tinvest_adapter_client import TInvestAdapterClient
 from edward.config.settings import Environment, Settings
 from edward.security.token_store import TokenStore
+from edward.ui.token_dialog import request_and_save_token
 
 
 def _project_root() -> Path:
@@ -64,19 +64,11 @@ def _is_open(account: dict) -> bool:
 
 
 def _request_and_save_token(store: TokenStore) -> str:
-    """Ask for the token on first startup and persist it in OS credential storage."""
-    print("T-Invest API token is not configured locally.")
-    print("Enter the token once. Edward will store it securely in the OS credential storage.")
-
-    while True:
-        token = getpass.getpass("T-Invest API token: ").strip()
-        if not token:
-            print("Token cannot be empty. Please try again.")
-            continue
-
-        store.save(token)
-        print("T-Invest API token saved locally.")
-        return token
+    token = request_and_save_token(store)
+    if not token:
+        print("T-Invest API token entry was cancelled.", file=sys.stderr)
+        raise SystemExit(1)
+    return token
 
 
 def main() -> None:
