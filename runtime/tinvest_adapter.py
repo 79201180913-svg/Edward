@@ -26,21 +26,36 @@ class AdapterState:
     def __init__(self) -> None:
         if not TOKEN:
             raise RuntimeError("T-Invest API token is not configured")
+
         target = INVEST_GRPC_API if ENVIRONMENT == "production" else INVEST_GRPC_API_SANDBOX
-        self.client = Client(TOKEN, target=target)
-        self.client.__enter__()
+        client = Client(TOKEN, target=target)
+
+        # Some SDK releases return the active client from __enter__ instead
+        # of mutating the original object. Keep the returned instance when
+        # available; otherwise retain the original client.
+        entered_client = client.__enter__()
+        self.client = entered_client if entered_client is not None else client
 
     def close(self) -> None:
         self.client.__exit__(None, None, None)
 
+    def _service(self, name: str) -> Any:
+        service = getattr(self.client, name, None)
+        if service is None:
+            raise RuntimeError(
+                f"T-Invest SDK service '{name}' is unavailable on Client "
+                f"(SDK object: {type(self.client).__module__}.{type(self.client).__name__})"
+            )
+        return service
+
     def accounts(self) -> Any:
-        return self.client.users.get_accounts()
+        return self._service("users").get_accounts()
 
     def portfolio(self, account_id: str) -> Any:
-        return self.client.operations.get_portfolio(account_id=account_id)
+        return self._service("operations").get_portfolio(account_id=account_id)
 
     def positions(self, account_id: str) -> Any:
-        return self.client.operations.get_positions(account_id=account_id)
+        return self._service("operations").get_positions(account_id=account_id)
 
 
 STATE = AdapterState()
