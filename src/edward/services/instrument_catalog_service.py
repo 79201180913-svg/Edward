@@ -3,6 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
+import logging
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -14,7 +18,9 @@ class InstrumentCatalogService:
             instrument_kind=instrument_kind,
             trade_available_only=trade_available_only,
         )
-        return self._enrich(self._as_list(response, "instruments"), instrument_kind)
+        instruments = self._as_list(response, "instruments")
+        logger.info("[PRICE DEBUG] Catalog loaded: kind=%s instruments=%d", instrument_kind, len(instruments))
+        return self._enrich(instruments, instrument_kind)
 
     def search(self, query: str, instrument_kind: str = "SHARE", trade_available_only: bool = True) -> list[Any]:
         query = query.strip().casefold()
@@ -33,15 +39,28 @@ class InstrumentCatalogService:
 
     def _enrich(self, instruments: list[Any], kind: str) -> list[Any]:
         ids = [_uid(instrument) for instrument in instruments if _uid(instrument)]
-        prices = _index(self.client.get_last_prices(ids), "last_prices") if ids else {}
+        logger.info("[PRICE DEBUG] Requesting market prices: kind=%s ids=%d", kind, len(ids))
+        logger.info("[PRICE DEBUG] First UIDs: %s", ids[:5])
+        prices_response = self.client.get_last_prices(ids) if ids else {}
+        prices = _index(prices_response, "last_prices") if ids else {}
+        logger.info(
+            "[PRICE DEBUG] MarketData response: type=%s prices=%d raw_keys=%s",
+            type(prices_response).__name__,
+            len(prices),
+            list(prices_response.keys()) if isinstance(prices_response, dict) else "not-dict",
+        )
+        if ids and not prices:
+            logger.warning("[PRICE DEBUG] NO PRICES MATCHED. Raw response: %r", prices_response)
+
         statuses = {}
         if ids:
             try:
                 statuses = _index(self.client.get_trading_statuses(ids), "trading_statuses")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("[PRICE DEBUG] Trading statuses failed: %s", exc)
 
         result = []
+        missing_price = 0
         for instrument in instruments:
             item = dict(instrument) if isinstance(instrument, dict) else instrument
             uid = _uid(instrument)
@@ -50,11 +69,22 @@ class InstrumentCatalogService:
 
             if isinstance(item, dict):
                 item["instrument_kind"] = kind
-                # MarketData returns price as a Quotation object serialized by the
-                # adapter to {units, nano}. Normalize it here so the UI receives a
-                # directly displayable numeric value instead of a protobuf-shaped dict.
                 raw_price = _field(price_item, "price", _field(price_item, "last_price", ""))
-                item["last_price"] = _quotation_to_string(raw_price)
+                normalized_price = _quotation_to_string(raw_price)
+                item["last_price"] = normalized_price
+                if not normalized_price:
+                    missing_price += 1
+                    if missing_price <= 10:
+                        logger.warning(
+                            "[PRICE DEBUG] Missing price: ticker=%s uid=%s price_item=%r",
+                            _field(instrument, "ticker", ""), uid, price_item,
+                        )
+                else:
+                    if len(result) < 5:
+                        logger.info(
+                            "[PRICE DEBUG] Price matched: ticker=%s uid=%s raw=%r normalized=%s",
+                            _field(instrument, "ticker", ""), uid, raw_price, normalized_price,
+                        )
                 item["buy_available"] = _field(instrument, "buy_available_flag", False)
                 item["sell_available"] = _field(instrument, "sell_available_flag", False)
                 item["api_trade_available"] = _field(
@@ -71,6 +101,11 @@ class InstrumentCatalogService:
                     _field(instrument, "min_price_increment_value", ""),
                 )
             result.append(item)
+
+        logger.info(
+            "[PRICE DEBUG] Price enrichment finished: instruments=%d prices=%d missing=%d",
+            len(instruments), len(prices), missing_price,
+        )
         return result
 
     @staticmethod
