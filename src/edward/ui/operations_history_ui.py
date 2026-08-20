@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
 from tkinter import ttk
 from typing import Any
 
@@ -36,11 +37,42 @@ def install_operations_history_ui(app_class: type[Any]) -> None:
         }
         return mapping.get(raw, raw.replace("OPERATION_TYPE_", "").replace("_", " ").title() or "Операция")
 
+    def _decimal(value: Any) -> Decimal:
+        if value is None:
+            return Decimal("0")
+        if isinstance(value, Decimal):
+            return value
+        if isinstance(value, dict) and ("units" in value or "nano" in value):
+            return Decimal(str(value.get("units", 0))) + Decimal(str(value.get("nano", 0))) / Decimal("1000000000")
+        try:
+            return Decimal(str(value))
+        except Exception:
+            return Decimal("0")
+
     def _decimal_text(value: Any) -> str:
         try:
             return app_class._money(value)
         except Exception:
             return str(value or "")
+
+    def _current_rub_balance(self: Any, account_id: str) -> Decimal:
+        """Read the current account RUB balance from the same source as the active environment."""
+        try:
+            positions = self.client.get_sandbox_positions(account_id)
+            money = self._items(positions, "money")
+            total = Decimal("0")
+            for position in money:
+                if str(self._field(position, "currency", "")).upper() == "RUB":
+                    total += _decimal(self._field(position, "available", 0))
+            return total
+        except Exception:
+            positions = self.client.get_positions(account_id)
+            money = self._items(positions, "money")
+            total = Decimal("0")
+            for position in money:
+                if str(self._field(position, "currency", "")).upper() == "RUB":
+                    total += _decimal(self._field(position, "available", 0))
+            return total
 
     def _page_history(self: Any) -> None:
         ttk.Label(self.content, text="История операций", style="Title.TLabel").pack(anchor="w", pady=(0, 12))
@@ -48,15 +80,28 @@ def install_operations_history_ui(app_class: type[Any]) -> None:
         if not aid:
             return
 
+        active_account = getattr(self.context, "active_account", None)
+        account_name = getattr(active_account, "name", "") if active_account else ""
+        account_display = account_name or aid
+
+        try:
+            current_balance = _current_rub_balance(self, aid)
+        except Exception as exc:
+            current_balance = Decimal("0")
+            self.status_var.set(f"Не удалось получить текущий баланс: {exc}")
+
         toolbar = ttk.Frame(self.content)
         toolbar.pack(fill="x", pady=(0, 10))
         ttk.Button(toolbar, text="Обновить историю", command=self.refresh_current).pack(side="left")
-        ttk.Label(toolbar, text="Статусы: Успех / Ошибка / В процессе").pack(side="left", padx=15)
+        ttk.Label(
+            toolbar,
+            text=f"Счёт: {account_display} | Текущий баланс: {_decimal_text(current_balance)} RUB | Статусы: Успех / Ошибка / В процессе",
+        ).pack(side="left", padx=15)
 
         tree = self._tree(
             self.content,
-            ("Дата", "Время", "Тип", "Статус", "Сумма", "Валюта", "Инструмент", "Количество", "Операция ID"),
-            (100, 85, 180, 110, 130, 80, 140, 100, 360),
+            ("Дата", "Время", "Счёт", "Тип", "Статус", "Сумма", "Валюта", "Текущий баланс", "Инструмент", "Количество", "Операция ID"),
+            (100, 85, 270, 170, 110, 130, 80, 140, 140, 100, 360),
         )
 
         try:
@@ -95,10 +140,12 @@ def install_operations_history_ui(app_class: type[Any]) -> None:
                 values=(
                     date_text,
                     time_text,
+                    account_display,
                     _operation_name(operation),
                     _status(operation),
                     _decimal_text(money),
                     str(currency).upper(),
+                    _decimal_text(current_balance),
                     instrument,
                     quantity,
                     operation_id,
@@ -112,10 +159,12 @@ def install_operations_history_ui(app_class: type[Any]) -> None:
                 values=(
                     row.get("date", ""),
                     row.get("time", ""),
+                    row.get("account_id", account_display),
                     row.get("operation", ""),
                     "Успех" if str(row.get("status", "")).upper() == "FILLED" else "В процессе",
                     row.get("amount", ""),
                     row.get("currency", ""),
+                    _decimal_text(current_balance),
                     row.get("ticker", ""),
                     row.get("quantity", ""),
                     row.get("order_id", ""),
