@@ -10,6 +10,23 @@ from edward.security.token_store import TokenStore
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
 
+# Explicit Win32 signatures are important on 64-bit Python. Without them,
+# ctypes may default to 32-bit integers and Windows message parameters can
+# overflow before they reach the window procedure.
+LRESULT = ctypes.c_ssize_t
+
+user32.DefWindowProcW.argtypes = [
+    wintypes.HWND,
+    wintypes.UINT,
+    wintypes.WPARAM,
+    wintypes.LPARAM,
+]
+user32.DefWindowProcW.restype = LRESULT
+user32.DestroyWindow.argtypes = [wintypes.HWND]
+user32.DestroyWindow.restype = wintypes.BOOL
+user32.PostQuitMessage.argtypes = [ctypes.c_int]
+user32.PostQuitMessage.restype = None
+
 WM_CLOSE = 0x0010
 WM_DESTROY = 0x0002
 WM_COMMAND = 0x0111
@@ -40,7 +57,8 @@ CANCEL_ID = 1003
 class TokenDialog:
     """Native Win32 token dialog using the standard Windows EDIT control.
 
-    Clipboard shortcuts (including Ctrl+V) are handled by Windows itself.
+    Clipboard shortcuts, including Ctrl+C/Ctrl+V, are handled by the
+    standard Windows EDIT control.
     """
 
     def __init__(self, title: str = "Edward Trading Platform") -> None:
@@ -53,7 +71,7 @@ class TokenDialog:
     def show(self) -> str | None:
         hinstance = kernel32.GetModuleHandleW(None)
         wnd_proc_type = ctypes.WINFUNCTYPE(
-            ctypes.c_ssize_t,
+            LRESULT,
             wintypes.HWND,
             wintypes.UINT,
             wintypes.WPARAM,
@@ -63,7 +81,7 @@ class TokenDialog:
         @wnd_proc_type
         def wnd_proc(hwnd, msg, wparam, lparam):
             if msg == WM_COMMAND:
-                control_id = wparam & 0xFFFF
+                control_id = int(wparam) & 0xFFFF
                 if control_id == OK_ID:
                     self._accept()
                     return 0
@@ -78,6 +96,9 @@ class TokenDialog:
             elif msg == WM_DESTROY:
                 user32.PostQuitMessage(0)
                 return 0
+
+            # Pass the original 64-bit message parameters to Windows without
+            # truncation. This fixes the OverflowError seen on Python 3.14.
             return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
 
         self._wnd_proc = wnd_proc
@@ -228,7 +249,7 @@ def request_and_save_token(store: TokenStore) -> str | None:
     token = TokenDialog().show()
     if not token:
         return None
-    store.set(token)
+    store.save(token)
     return token
 
 
