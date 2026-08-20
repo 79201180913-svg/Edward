@@ -29,15 +29,14 @@ def install_sandbox_funding_ui(app_class: type[Any]) -> None:
         )
         self._sandbox_pay_in_button.pack(fill="x", pady=2)
 
-    def _get_sandbox_rub_balance(self, account_id: str) -> Decimal:
+    def _get_sandbox_rub_balance(self: Any, account_id: str) -> Decimal:
         positions = self.client.get_positions(account_id)
         money = BalanceService.get_money_positions(positions)
         rub = Decimal("0")
         for position in money:
             currency = str(self._field(position, "currency", "")).upper()
-            if currency != "RUB":
-                continue
-            rub += BalanceService._decimal(self._field(position, "available"))
+            if currency == "RUB":
+                rub += BalanceService._decimal(self._field(position, "available"))
         return rub
 
     def _sandbox_pay_in(self: Any) -> None:
@@ -140,23 +139,6 @@ def install_sandbox_funding_ui(app_class: type[Any]) -> None:
         except Exception as exc:
             self.status_var.set("Ошибка проверки пополнения sandbox-счёта")
             self._show_error(exc, "пополнение sandbox-счёта")
-
-    def _get_sandbox_rub_balance_bound(self: Any, account_id: str) -> Decimal:
-        return _get_sandbox_rub_balance(self, account_id)
-
-    def _get_sandbox_rub_balance(self: Any, account_id: str) -> Decimal:
-        return _get_sandbox_rub_balance(self, account_id)
-
-    def _get_sandbox_rub_balance(self: Any, account_id: str) -> Decimal:
-        positions = self.client.get_positions(account_id)
-        money = BalanceService.get_money_positions(positions)
-        rub = Decimal("0")
-        for position in money:
-            currency = str(self._field(position, "currency", "")).upper()
-            if currency != "RUB":
-                continue
-            rub += BalanceService._decimal(self._field(position, "available"))
-        return rub
 
     app_class._shell = _shell
     app_class._sandbox_pay_in = _sandbox_pay_in
