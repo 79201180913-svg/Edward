@@ -56,8 +56,13 @@ def _wait_for_adapter(client: TInvestAdapterClient, process: subprocess.Popen[by
 
 
 def _is_open(account: dict) -> bool:
-    status = str(account.get("status", "")).upper()
-    return status in {"OPEN", "ACCOUNT_STATUS_OPEN"}
+    status = account.get("status", "")
+    normalized = str(status).upper().strip()
+    return normalized in {
+        "OPEN",
+        "ACCOUNT_STATUS_OPEN",
+        "2",
+    }
 
 
 def _request_and_save_token(store: TokenStore) -> str:
