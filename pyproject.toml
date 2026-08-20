@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "edward"
 version = "0.1.0"
 description = "Edward trading platform"
-requires-python = ">=3.11,<3.13"
+requires-python = ">=3.14,<3.15"
 dependencies = [
     "keyring>=25,<26",
     "openpyxl>=3.1,<4",
