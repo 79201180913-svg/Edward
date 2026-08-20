@@ -5,11 +5,13 @@ import os
 import subprocess
 import sys
 import time
+from decimal import Decimal
 from pathlib import Path
 
 from edward.api.tinvest_adapter_client import TInvestAdapterClient
 from edward.config.settings import Environment, Settings
 from edward.security.token_store import TokenStore
+from edward.services.balance_service import BalanceService
 from edward.ui.token_dialog import request_and_save_token
 
 
@@ -71,6 +73,35 @@ def _request_and_save_token(store: TokenStore) -> str:
     return token
 
 
+def _money(value: Decimal) -> str:
+    return f"{value:,.2f}".replace(",", " ")
+
+
+def _print_financials(client: TInvestAdapterClient, account_id: str) -> None:
+    """Read and display normalized financial state for the active account."""
+    balance_service = BalanceService()
+    positions_response = client.get_positions(account_id)
+    portfolio_response = client.get_portfolio(account_id)
+    summary = balance_service.build_summary(positions_response, portfolio_response)
+
+    print()
+    print("FINANCIALS")
+    print("----------------------------------------")
+    print(f"Currency:          {summary.currency}")
+    print(f"Available:         {_money(summary.available)}")
+    print(f"Blocked:           {_money(summary.blocked)}")
+    print(f"Cash:              {_money(summary.cash)}")
+    print(f"Securities:        {_money(summary.securities)}")
+    print(f"Portfolio value:   {_money(summary.portfolio_value)}")
+    print("----------------------------------------")
+    print(
+        f"Money positions: {len(balance_service.get_money_positions(positions_response))}"
+    )
+    print(
+        f"Security positions: {len(balance_service.get_security_positions(positions_response))}"
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Edward Trading Platform v0.1")
     parser.add_argument("--set-token", action="store_true", help="Replace the stored T-Invest API token")
@@ -126,16 +157,7 @@ def main() -> None:
         account_id = str(account.get("id", ""))
         print(f"Active account: {account_id}")
 
-        positions_response = client.get_positions(account_id)
-        money = positions_response.get("money", [])
-        securities = positions_response.get("securities", [])
-        print(f"Money positions: {len(money)}")
-        for position in money:
-            print(
-                f"- {position.get('currency', '')}: "
-                f"{position.get('available', position.get('balance', ''))}"
-            )
-        print(f"Security positions: {len(securities)}")
+        _print_financials(client, account_id)
 
     except Exception as exc:
         print(f"ERROR: {type(exc).__name__}: {exc}", file=sys.stderr)
