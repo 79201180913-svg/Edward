@@ -169,18 +169,78 @@ class AdapterState:
         if ENVIRONMENT != "sandbox":
             raise RuntimeError("GetSandboxPositions is available only in SANDBOX")
         result = self._rest_request("SandboxService/GetSandboxPositions", {"accountId": str(account_id)}, target="https://invest-public-api.tbank.ru")
-        logger.info("[SANDBOX FUNDING] GetSandboxPositions account_id=%s response=%s", account_id, result)
+        logger.info("[SANDBOX BALANCE] GetSandboxPositions account_id=%s response=%s", account_id, result)
         return result
 
     def sandbox_portfolio(self, account_id):
         if ENVIRONMENT != "sandbox":
             raise RuntimeError("GetSandboxPortfolio is available only in SANDBOX")
         result = self._rest_request("SandboxService/GetSandboxPortfolio", {"accountId": str(account_id), "currency": "RUB"}, target="https://invest-public-api.tbank.ru")
-        logger.info("[SANDBOX FUNDING] GetSandboxPortfolio account_id=%s response=%s", account_id, result)
+        logger.info("[SANDBOX BALANCE] GetSandboxPortfolio account_id=%s response=%s", account_id, result)
         return result
 
-    def portfolio(self, account_id): return self._service("operations").get_portfolio(account_id=account_id)
-    def positions(self, account_id): return self._service("operations").get_positions(account_id=account_id)
+    def sandbox_withdraw_limits(self, account_id):
+        if ENVIRONMENT != "sandbox":
+            raise RuntimeError("GetSandboxWithdrawLimits is available only in SANDBOX")
+        result = self._rest_request("SandboxService/GetSandboxWithdrawLimits", {"accountId": str(account_id)}, target="https://invest-public-api.tbank.ru")
+        logger.info("[SANDBOX BALANCE] GetSandboxWithdrawLimits account_id=%s response=%s", account_id, result)
+        return result
+
+    @staticmethod
+    def _extract_rub_money(payload: Any) -> dict[str, Any] | None:
+        if isinstance(payload, dict):
+            currency = str(payload.get("currency", "")).upper()
+            if currency == "RUB" and any(k in payload for k in ("available", "total", "amount", "balance")):
+                return payload
+            for key in ("money", "withdraw_limits", "withdraw_limit", "limits", "currencies", "positions"):
+                value = payload.get(key)
+                if isinstance(value, list):
+                    for item in value:
+                        found = AdapterState._extract_rub_money(item)
+                        if found:
+                            return found
+                elif isinstance(value, dict):
+                    found = AdapterState._extract_rub_money(value)
+                    if found:
+                        return found
+            for value in payload.values():
+                found = AdapterState._extract_rub_money(value)
+                if found:
+                    return found
+        elif isinstance(payload, list):
+            for item in payload:
+                found = AdapterState._extract_rub_money(item)
+                if found:
+                    return found
+        return None
+
+    def _sandbox_cash_money(self, account_id: str) -> dict[str, Any]:
+        limits = self.sandbox_withdraw_limits(account_id)
+        money = self._extract_rub_money(limits)
+        if money is None:
+            portfolio = self.sandbox_portfolio(account_id)
+            money = self._extract_rub_money(portfolio)
+        if money is None:
+            positions = self.sandbox_positions(account_id)
+            money = self._extract_rub_money(positions)
+        if money is None:
+            raise RuntimeError(f"Не удалось определить RUB-баланс sandbox. WithdrawLimits/Portfolio/Positions: {limits!r}")
+        available = money.get("available", money.get("amount", money.get("balance", money.get("total", 0))))
+        blocked = money.get("blocked", 0)
+        return {"currency": "RUB", "available": available, "blocked": blocked}
+
+    def portfolio(self, account_id):
+        if ENVIRONMENT == "sandbox":
+            return self.sandbox_portfolio(account_id)
+        return self._service("operations").get_portfolio(account_id=account_id)
+
+    def positions(self, account_id):
+        if ENVIRONMENT == "sandbox":
+            positions = dict(self.sandbox_positions(account_id))
+            positions["money"] = [self._sandbox_cash_money(account_id)]
+            return positions
+        return self._service("operations").get_positions(account_id=account_id)
+
     def find_instrument(self, query, trade_available_only=True): return self._rest_request("InstrumentsService/FindInstrument", {"query": query, "instrumentKind": "INSTRUMENT_TYPE_UNSPECIFIED", "apiTradeAvailableFlag": trade_available_only})
     def _list_primary(self, kind, trade):
         method = {"SHARE": "Shares", "BOND": "Bonds", "ETF": "Etfs", "CURRENCY": "Currencies", "FUTURES": "Futures", "OPTION": "Options"}.get(kind.upper())
@@ -227,20 +287,9 @@ class AdapterState:
     def order_price(self, payload): return self._rest_request("OrdersService/GetOrderPrice", payload)
     def max_lots(self, payload): return self._rest_request("OrdersService/GetMaxLots", payload)
     def operations(self, account_id, limit=1000):
-        limit = max(1, min(limit, 1000))
         if ENVIRONMENT == "sandbox":
-            return self._rest_request(
-                "SandboxService/GetSandboxOperationsByCursor",
-                {
-                    "accountId": str(account_id),
-                    "limit": limit,
-                    "withoutCommissions": False,
-                    "withoutTrades": False,
-                    "withoutOvernights": False,
-                },
-                target="https://invest-public-api.tbank.ru",
-            )
-        return self._rest_request("OperationsService/GetOperationsByCursor", {"accountId": account_id, "limit": limit, "withoutCommissions": False, "withoutTrades": False})
+            return self._rest_request("SandboxService/GetSandboxOperationsByCursor", {"accountId": account_id, "limit": max(1, min(limit, 1000)), "withoutCommissions": False, "withoutTrades": False})
+        return self._rest_request("OperationsService/GetOperationsByCursor", {"accountId": account_id, "limit": max(1, min(limit, 1000)), "withoutCommissions": False, "withoutTrades": False})
     def create_order(self, payload):
         kwargs = {"quantity": payload["quantity"], "direction": payload["direction"], "account_id": payload["account_id"], "order_type": payload["order_type"], "instrument_id": payload["instrument_uid"], "order_id": payload["request_id"]}
         if payload.get("price") is not None: kwargs["price"] = payload["price"]
@@ -273,6 +322,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/accounts/pay-in": self._send(200, STATE.sandbox_pay_in(str(p.get("account_id", "")).strip(), p.get("amount"))); return
             if self.path == "/accounts/sandbox-positions": self._send(200, STATE.sandbox_positions(str(p.get("account_id", "")).strip())); return
             if self.path == "/accounts/sandbox-portfolio": self._send(200, STATE.sandbox_portfolio(str(p.get("account_id", "")).strip())); return
+            if self.path == "/accounts/sandbox-withdraw-limits": self._send(200, STATE.sandbox_withdraw_limits(str(p.get("account_id", "")).strip())); return
             if self.path == "/portfolio": self._send(200, message_to_dict(STATE.portfolio(str(p.get("account_id", "")).strip()))); return
             if self.path == "/positions": self._send(200, message_to_dict(STATE.positions(str(p.get("account_id", "")).strip()))); return
             if self.path == "/instruments/search": self._send(200, message_to_dict(STATE.find_instrument(str(p.get("query", "")).strip(), bool(p.get("api_trade_available_flag", True))))); return
