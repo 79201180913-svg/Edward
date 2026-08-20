@@ -145,6 +145,17 @@ class AdapterState:
     def accounts(self): return self._service("users").get_accounts()
     def open_sandbox_account(self, name=None): return self._service("sandbox").open_sandbox_account(**({"name": name} if name else {}))
     def close_sandbox_account(self, account_id): return self._service("sandbox").close_sandbox_account(account_id=account_id)
+    def sandbox_pay_in(self, account_id, amount):
+        if ENVIRONMENT != "sandbox":
+            raise RuntimeError("SandboxPayIn is available only in SANDBOX")
+        amount = Decimal(str(amount))
+        if amount <= 0:
+            raise ValueError("Сумма пополнения должна быть больше 0")
+        if amount > Decimal("30000000"):
+            raise ValueError("Максимальная сумма одного пополнения — 30 000 000 RUB")
+        whole = amount.quantize(Decimal("1"))
+        nano = int((amount - whole) * Decimal("1000000000"))
+        return self._rest_request("SandboxService/SandboxPayIn", {"accountId": str(account_id), "amount": {"currency": "RUB", "units": str(whole), "nano": nano}})
     def portfolio(self, account_id): return self._service("operations").get_portfolio(account_id=account_id)
     def positions(self, account_id): return self._service("operations").get_positions(account_id=account_id)
 
@@ -171,8 +182,7 @@ class AdapterState:
             if "404" not in str(exc) and "not_found" not in str(exc).lower(): raise
             return self._assets_fallback(kind, trade)
 
-    def instrument(self, instrument_id):
-        return self._rest_request("InstrumentsService/GetInstrumentBy", {"idType": "INSTRUMENT_ID_TYPE_UID", "id": instrument_id})
+    def instrument(self, instrument_id): return self._rest_request("InstrumentsService/GetInstrumentBy", {"idType": "INSTRUMENT_ID_TYPE_UID", "id": instrument_id})
 
     def last_prices(self, ids):
         logger.info("[PRICE DEBUG] SDK GetLastPrices: ids=%d", len(ids))
@@ -180,43 +190,33 @@ class AdapterState:
         data = message_to_dict(response)
         prices = data.get("last_prices", []) if isinstance(data, dict) else []
         logger.info("[PRICE DEBUG] SDK GetLastPrices returned: prices=%d", len(prices))
-        if prices:
-            logger.info("[PRICE DEBUG] First raw price item: %s", prices[0])
-        if prices and any("price" in item for item in prices if isinstance(item, dict)):
-            return data
+        if prices: logger.info("[PRICE DEBUG] First raw price item: %s", prices[0])
+        if prices and any("price" in item for item in prices if isinstance(item, dict)): return data
         logger.warning("[PRICE DEBUG] SDK response has no usable price field; trying REST MarketDataService/GetLastPrices")
         try:
             rest_data = self._rest_request("MarketDataService/GetLastPrices", {"instrumentId": ids})
             rest_prices = rest_data.get("last_prices", []) if isinstance(rest_data, dict) else []
             logger.info("[PRICE DEBUG] REST GetLastPrices returned: prices=%d", len(rest_prices))
-            if rest_prices:
-                logger.info("[PRICE DEBUG] First REST raw price item: %s", rest_prices[0])
-                return rest_data
-            logger.warning("[PRICE DEBUG] REST GetLastPrices returned no prices: %r", rest_data)
+            if rest_prices: logger.info("[PRICE DEBUG] First REST raw price item: %s", rest_prices[0])
+            return rest_data if rest_prices else data
         except Exception as exc:
             logger.warning("[PRICE DEBUG] REST GetLastPrices failed: %s", exc)
-        return data
+            return data
 
-    def trading_status(self, instrument_id):
-        return self._service("market_data").get_trading_status(instrument_id=instrument_id)
-
+    def trading_status(self, instrument_id): return self._service("market_data").get_trading_status(instrument_id=instrument_id)
     def trading_statuses(self, ids):
         logger.info("[PRICE DEBUG] GetTradingStatuses: ids=%d", len(ids))
         return self._service("market_data").get_trading_statuses(instrument_ids=ids)
-
     def orders(self, account_id): return self._service("orders").get_orders(account_id=account_id)
     def order_state(self, account_id, order_id): return self._service("orders").get_order_state(account_id=account_id, order_id=order_id)
     def order_price(self, payload): return self._rest_request("OrdersService/GetOrderPrice", payload)
     def max_lots(self, payload): return self._rest_request("OrdersService/GetMaxLots", payload)
     def operations(self, account_id, limit=1000): return self._rest_request("OperationsService/GetOperationsByCursor", {"accountId": account_id, "limit": max(1, min(limit, 1000)), "withoutCommissions": False, "withoutTrades": False})
-
     def create_order(self, payload):
         kwargs = {"quantity": payload["quantity"], "direction": payload["direction"], "account_id": payload["account_id"], "order_type": payload["order_type"], "instrument_id": payload["instrument_uid"], "order_id": payload["request_id"]}
         if payload.get("price") is not None: kwargs["price"] = payload["price"]
         return self._service("orders").post_order(**kwargs)
-
     def cancel_order(self, account_id, order_id): return self._service("orders").cancel_order(account_id=account_id, order_id=order_id)
-
     def replace_order(self, payload):
         kwargs = {"order_id": payload["order_id"], "quantity": payload["quantity"], "account_id": payload["account_id"]}
         if payload.get("price") is not None: kwargs["price"] = payload["price"]
@@ -242,6 +242,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/accounts": self._send(200, message_to_dict(STATE.accounts())); return
             if self.path == "/accounts/create": self._send(200, message_to_dict(STATE.open_sandbox_account(str(p.get("name", "")).strip() or None))); return
             if self.path == "/accounts/close": self._send(200, message_to_dict(STATE.close_sandbox_account(str(p.get("account_id", "")).strip()))); return
+            if self.path == "/accounts/pay-in": self._send(200, STATE.sandbox_pay_in(str(p.get("account_id", "")).strip(), p.get("amount"))); return
             if self.path == "/portfolio": self._send(200, message_to_dict(STATE.portfolio(str(p.get("account_id", "")).strip()))); return
             if self.path == "/positions": self._send(200, message_to_dict(STATE.positions(str(p.get("account_id", "")).strip()))); return
             if self.path == "/instruments/search": self._send(200, message_to_dict(STATE.find_instrument(str(p.get("query", "")).strip(), bool(p.get("api_trade_available_flag", True))))); return
@@ -270,7 +271,6 @@ def main():
     try: server.serve_forever()
     except KeyboardInterrupt: pass
     finally:
-        server.server_close()
-        STATE.close()
+        server.server_close(); STATE.close()
 
 if __name__ == "__main__": main()
