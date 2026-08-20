@@ -146,6 +146,7 @@ class AdapterState:
     def accounts(self): return self._service("users").get_accounts()
     def open_sandbox_account(self, name=None): return self._service("sandbox").open_sandbox_account(**({"name": name} if name else {}))
     def close_sandbox_account(self, account_id): return self._service("sandbox").close_sandbox_account(account_id=account_id)
+
     def sandbox_pay_in(self, account_id, amount):
         if ENVIRONMENT != "sandbox":
             raise RuntimeError("SandboxPayIn is available only in SANDBOX")
@@ -167,6 +168,18 @@ class AdapterState:
         if balance is None:
             raise RuntimeError(f"SandboxPayIn returned no balance: {result!r}")
         return result
+
+    def sandbox_positions(self, account_id):
+        if ENVIRONMENT != "sandbox":
+            raise RuntimeError("GetSandboxPositions is available only in SANDBOX")
+        result = self._rest_request(
+            "SandboxService/GetSandboxPositions",
+            {"accountId": str(account_id)},
+            target="https://invest-public-api.tbank.ru",
+        )
+        logger.info("[SANDBOX FUNDING] GetSandboxPositions account_id=%s response=%s", account_id, result)
+        return result
+
     def portfolio(self, account_id): return self._service("operations").get_portfolio(account_id=account_id)
     def positions(self, account_id): return self._service("operations").get_positions(account_id=account_id)
 
@@ -254,6 +267,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/accounts/create": self._send(200, message_to_dict(STATE.open_sandbox_account(str(p.get("name", "")).strip() or None))); return
             if self.path == "/accounts/close": self._send(200, message_to_dict(STATE.close_sandbox_account(str(p.get("account_id", "")).strip()))); return
             if self.path == "/accounts/pay-in": self._send(200, STATE.sandbox_pay_in(str(p.get("account_id", "")).strip(), p.get("amount"))); return
+            if self.path == "/accounts/sandbox-positions": self._send(200, STATE.sandbox_positions(str(p.get("account_id", "")).strip())); return
             if self.path == "/portfolio": self._send(200, message_to_dict(STATE.portfolio(str(p.get("account_id", "")).strip()))); return
             if self.path == "/positions": self._send(200, message_to_dict(STATE.positions(str(p.get("account_id", "")).strip()))); return
             if self.path == "/instruments/search": self._send(200, message_to_dict(STATE.find_instrument(str(p.get("query", "")).strip(), bool(p.get("api_trade_available_flag", True))))); return
