@@ -33,7 +33,7 @@ class AdapterTradingDataProvider:
     def get_validation_context(self, request: OrderRequest) -> ValidationContext:
         _debug_file(
             f"VALIDATION START account_id={request.account_id} instrument_uid={request.instrument_uid} "
-            f"side={request.side.value} order_type={request.order_type.value} quantity={request.quantity}"
+            f"side={request.side.value} order_type={request.order_type.value} quantity_lots={request.quantity}"
         )
 
         response = self._client.list_instruments(request.instrument_kind, trade_available_only=False)
@@ -55,6 +55,16 @@ class AdapterTradingDataProvider:
         increment = self._decimal(self._field(instrument, "min_price_increment")) if instrument else None
         if increment is None and instrument is not None:
             increment = self._decimal(self._field(instrument, "min_price_increment_value"))
+
+        # T-Invest order quantity is measured in lots. For shares, the actual
+        # cash amount is price * lot * quantity_lots, not price * quantity_lots.
+        lot_raw = self._field(instrument, "lot", 1) if instrument is not None else 1
+        try:
+            lot_size = int(self._decimal(lot_raw) or Decimal("1"))
+        except Exception:
+            lot_size = 1
+        if lot_size <= 0:
+            lot_size = 1
 
         # Sandbox buying funds must come directly from the real sandbox
         # GetSandboxPositions response. Do not route this through BalanceService
@@ -109,15 +119,19 @@ class AdapterTradingDataProvider:
                 break
 
         unit_price = request.price or market_price
-        estimated_total = unit_price * request.quantity if unit_price is not None else None
+        estimated_total = unit_price * lot_size * request.quantity if unit_price is not None else None
         estimated_commission = Decimal("0")
 
         # GetSandboxOrderPrice is defined for preliminary LIMIT-order pricing.
-        # MARKET orders use the current market price for the local pre-flight estimate.
+        # MARKET orders use current market price and instrument lot size for the
+        # local pre-flight estimate.
         if request.order_type == OrderType.LIMIT and unit_price is not None:
             try:
                 whole = unit_price.quantize(Decimal("1"))
-                quotation = {"units": str(whole), "nano": int((unit_price - whole) * Decimal("1000000000"))}
+                quotation = {
+                    "units": str(whole),
+                    "nano": int((unit_price - whole) * Decimal("1000000000")),
+                }
                 price_response = self._client.get_order_price(
                     request.account_id,
                     request.instrument_uid,
@@ -132,15 +146,17 @@ class AdapterTradingDataProvider:
             except Exception as exc:
                 _debug_file(f"ORDER PRICE ERROR account_id={request.account_id} error={type(exc).__name__}: {exc}")
 
+        required_total = estimated_total + estimated_commission if estimated_total is not None else None
         print(
-            f"[TRADING FUNDS] side={request.side.value} quantity={request.quantity} "
-            f"unit_price={unit_price} estimated_total={estimated_total} "
-            f"commission={estimated_commission} available_money={available_money} "
+            f"[TRADING FUNDS] side={request.side.value} quantity_lots={request.quantity} lot_size={lot_size} "
+            f"unit_price={unit_price} estimated_total={estimated_total} commission={estimated_commission} "
+            f"required_total={required_total} available_money={available_money} "
             f"available_position={available_position} trading_allowed={available}"
         )
         _debug_file(
-            f"FUNDS account_id={request.account_id} side={request.side.value} quantity={request.quantity} "
-            f"unit_price={unit_price} estimated_total={estimated_total} commission={estimated_commission} "
+            f"FUNDS account_id={request.account_id} side={request.side.value} "
+            f"quantity_lots={request.quantity} lot_size={lot_size} unit_price={unit_price} "
+            f"estimated_total={estimated_total} commission={estimated_commission} required_total={required_total} "
             f"available_money={available_money} available_position={available_position} trading_allowed={available}"
         )
 
