@@ -93,6 +93,19 @@ def _snapshot(client: Any, account_id: str) -> tuple[Decimal, Decimal, Decimal, 
     return cash, securities, total, rows
 
 
+def _effective_trade_available(instrument: Any) -> bool:
+    api = bool(_field(instrument, "api_trade_available", False))
+    limit = bool(_field(instrument, "limit_order_available", False))
+    market = bool(_field(instrument, "market_order_available", False))
+    bestprice = bool(_field(instrument, "bestprice_order_available", False))
+    status = str(_field(instrument, "trading_status", "") or "").upper()
+    status_allows = status not in {
+        "SECURITY_TRADING_STATUS_NOT_AVAILABLE_FOR_TRADING",
+        "NOT_AVAILABLE_FOR_TRADING",
+    }
+    return api and status_allows and (limit or market or bestprice)
+
+
 def install_final_contract_override(EdwardApp: Any) -> None:
     from edward.ui.trading_status_diagnostics import install_trading_status_diagnostics
     install_trading_status_diagnostics()
@@ -127,5 +140,82 @@ def install_final_contract_override(EdwardApp: Any) -> None:
             tree.insert("", "end", values=(r["ticker"], r["uid"], f"{r['quantity']:,.0f}".replace(",", " "), f"{r['blocked']:,.0f}".replace(",", " "), _money(r["price"]), _money(r["value"]), f"{r['yield']}"))
         print(f"[PORTFOLIO FINAL] account_id={aid} positions={len(rows)} securities={securities} total={total}", flush=True)
 
+    def _page_instruments(self: Any) -> None:
+        ttk.Label(self.content, text="Каталог инструментов", style="Title.TLabel").pack(anchor="w", pady=(0, 12))
+        c = ttk.Frame(self.content)
+        c.pack(fill="x", pady=(0, 10))
+        self.kind_var = getattr(self, "kind_var", None) or __import__("tkinter").StringVar(value=__import__("edward.ui.instrument_catalog", fromlist=["INSTRUMENT_KINDS"]).INSTRUMENT_KINDS[0][1])
+        kinds = __import__("edward.ui.instrument_catalog", fromlist=["INSTRUMENT_KINDS"]).INSTRUMENT_KINDS
+        ttk.Combobox(c, textvariable=self.kind_var, state="readonly", values=[x[1] for x in kinds], width=18).pack(side="left")
+        self.filter_var = getattr(self, "filter_var", None) or __import__("tkinter").StringVar()
+        ttk.Entry(c, textvariable=self.filter_var, width=35).pack(side="left", padx=8)
+        ttk.Button(c, text="Загрузить", command=self._load_instruments).pack(side="left")
+        ttk.Button(c, text="Обновить цены", command=self._load_instruments).pack(side="left", padx=8)
+        self.instrument_tree = self._tree(self.content, ("Тикер", "Название", "Валюта", "Цена", "Шаг", "Покупка", "Продажа", "Торги", "UID"), (100, 250, 80, 120, 100, 90, 90, 100, 360))
+        self.instrument_tree.bind("<Double-1>", self._instrument_selected)
+        self._load_instruments()
+
+    def _load_instruments(self: Any) -> None:
+        from edward.services.instrument_catalog_service import InstrumentCatalogService
+        from edward.ui.instrument_catalog import INSTRUMENT_KINDS
+        kind = next(k for k, v in INSTRUMENT_KINDS if v == self.kind_var.get())
+        svc = InstrumentCatalogService(self.client)
+        q = self.filter_var.get().strip()
+        items = svc.search(q, kind, True) if q else svc.list(kind, True)
+        for x in self.instrument_tree.get_children():
+            self.instrument_tree.delete(x)
+        for instrument in items:
+            buy_available = bool(_field(instrument, "buy_available", False))
+            sell_available = bool(_field(instrument, "sell_available", False))
+            trading_available = _effective_trade_available(instrument)
+            ticker = _field(instrument, "ticker", "")
+            logger_text = (
+                f"[INSTRUMENT DISPLAY] ticker={ticker} api={_field(instrument, 'api_trade_available', False)} "
+                f"limit={_field(instrument, 'limit_order_available', False)} "
+                f"market={_field(instrument, 'market_order_available', False)} "
+                f"bestprice={_field(instrument, 'bestprice_order_available', False)} "
+                f"status={_field(instrument, 'trading_status', '')} available={trading_available}"
+            )
+            print(logger_text, flush=True)
+            self.instrument_tree.insert(
+                "", "end",
+                values=(
+                    ticker,
+                    _field(instrument, "name", ""),
+                    _field(instrument, "currency", ""),
+                    _field(instrument, "last_price", ""),
+                    _field(instrument, "min_price_increment", ""),
+                    "Да" if buy_available else "Нет",
+                    "Да" if sell_available else "Нет",
+                    "Да" if trading_available else "Нет",
+                    _field(instrument, "uid", _field(instrument, "instrument_uid", "")),
+                ),
+            )
+        self.status_var.set(f"Инструментов: {len(items)}")
+
+    def _instrument_selected(self, _=None) -> None:
+        sel = self.instrument_tree.selection()
+        if not sel:
+            return
+        v = self.instrument_tree.item(sel[0]).get("values", [])
+        if len(v) < 9:
+            return
+        self.selected_instrument = {
+            "ticker": v[0],
+            "name": v[1],
+            "currency": v[2],
+            "last_price": v[3],
+            "min_price_increment": v[4],
+            "buy_available": v[5] == "Да",
+            "sell_available": v[6] == "Да",
+            "api_trade_available": v[7] == "Да",
+            "uid": str(v[8]),
+            "instrument_uid": str(v[8]),
+            "instrument_kind": next(k for k, l in __import__("edward.ui.instrument_catalog", fromlist=["INSTRUMENT_KINDS"]).INSTRUMENT_KINDS if l == self.kind_var.get()),
+        }
+        self.show_page("order")
+
     EdwardApp._page_overview = _page_overview
     EdwardApp._page_portfolio = _page_portfolio
+    EdwardApp._page_instruments = _page_instruments
+    EdwardApp._load_instruments = _load_instruments
