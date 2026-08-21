@@ -12,7 +12,6 @@ from edward.services.order_service import OrderRequest, OrderSide, OrderType
 from edward.validation.trading_validator import ValidationContext
 
 logger = logging.getLogger("edward.trading_validation")
-
 _DEBUG_FILE = Path(__file__).resolve().parents[3] / "runtime" / "edward_debug.log"
 
 
@@ -43,15 +42,17 @@ class AdapterTradingDataProvider:
         api_trade_available = bool(self._field(status, "api_trade_available_flag", False))
         limit_available = bool(self._field(status, "limit_order_available_flag", False))
         market_available = bool(self._field(status, "market_order_available_flag", False))
-        type_available = {
-            OrderType.LIMIT: limit_available,
-            OrderType.MARKET: market_available,
-        }.get(request.order_type, False)
-        available = api_trade_available and type_available
+        buy_available = bool(self._field(instrument, "buy_available_flag", False)) if instrument is not None else False
+        sell_available = bool(self._field(instrument, "sell_available_flag", False)) if instrument is not None else False
+        direction_available = buy_available if request.side == OrderSide.BUY else sell_available
+        type_available = {OrderType.LIMIT: limit_available, OrderType.MARKET: market_available}.get(request.order_type, False)
+        available = api_trade_available and type_available and direction_available
         trading_diagnostic = (
             f"api_trade_available_flag={self._field(status, 'api_trade_available_flag', None)!r}; "
             f"market_order_available_flag={self._field(status, 'market_order_available_flag', None)!r}; "
             f"limit_order_available_flag={self._field(status, 'limit_order_available_flag', None)!r}; "
+            f"buy_available_flag={self._field(instrument, 'buy_available_flag', None)!r}; "
+            f"sell_available_flag={self._field(instrument, 'sell_available_flag', None)!r}; "
             f"trading_status={self._field(status, 'trading_status', self._field(status, 'status', None))!r}"
         )
 
@@ -61,25 +62,15 @@ class AdapterTradingDataProvider:
         if increment is None and instrument is not None:
             increment = self._decimal(self._field(instrument, "min_price_increment_value"))
 
-        # lot is the number of securities represented by one order lot.
-        lot_size = self._decimal(
-            self._field(instrument, "lot", self._field(instrument, "lot_size", 1))
-        ) or Decimal("1")
+        lot_size = self._decimal(self._field(instrument, "lot", self._field(instrument, "lot_size", 1))) or Decimal("1")
         if lot_size <= 0:
             lot_size = Decimal("1")
 
         is_sandbox = str(self._client.health().get("environment", "")).lower() == "sandbox"
-        positions = (
-            self._client.get_sandbox_positions(request.account_id)
-            if is_sandbox
-            else self._client.get_positions(request.account_id)
-        )
-
+        positions = self._client.get_sandbox_positions(request.account_id) if is_sandbox else self._client.get_positions(request.account_id)
         money = self._items(positions, "money")
         securities = BalanceService.get_security_positions(positions)
         available_money = Decimal("0")
-        raw_money = money
-        _debug_file(f"POSITIONS account_id={request.account_id} sandbox={is_sandbox} raw_positions={positions}")
 
         for item in money:
             if str(self._field(item, "currency", "")).upper() != "RUB":
@@ -89,15 +80,13 @@ class AdapterTradingDataProvider:
                 available_raw = self._field(item, "available_value", None)
             if available_raw is None and isinstance(item, dict) and ("units" in item or "nano" in item):
                 available_raw = item
-            parsed = self._decimal(available_raw)
-            _debug_file(f"MONEY account_id={request.account_id} item={item} available_raw={available_raw} parsed={parsed}")
-            available_money += parsed or Decimal("0")
+            available_money += self._decimal(available_raw) or Decimal("0")
 
         available_position = None
         for item in securities:
             if self._uid(item) == request.instrument_uid:
                 balance = self._decimal(self._field(item, "balance")) or Decimal("0")
-                blocked = self._decimal(self._field(item, "blocked_lots", self._field(item, "blocked", 0))) or Decimal("0")
+                blocked = self._decimal(self._field(item, "blocked", 0)) or Decimal("0")
                 available_position = max(0, int(balance - blocked))
                 break
 
@@ -108,10 +97,7 @@ class AdapterTradingDataProvider:
         if request.order_type == OrderType.LIMIT and unit_price is not None:
             try:
                 whole = unit_price.quantize(Decimal("1"))
-                quotation = {
-                    "units": str(whole),
-                    "nano": int((unit_price - whole) * Decimal("1000000000")),
-                }
+                quotation = {"units": str(whole), "nano": int((unit_price - whole) * Decimal("1000000000"))}
                 price_response = self._client.get_order_price(
                     request.account_id,
                     request.instrument_uid,
@@ -120,9 +106,7 @@ class AdapterTradingDataProvider:
                     request.quantity,
                 )
                 estimated_total = self._decimal(self._field(price_response, "total_order_amount")) or estimated_total
-                estimated_commission = self._decimal(
-                    self._field(price_response, "executed_commission", self._field(price_response, "deal_commission", "0"))
-                ) or Decimal("0")
+                estimated_commission = self._decimal(self._field(price_response, "executed_commission", self._field(price_response, "deal_commission", "0"))) or Decimal("0")
             except Exception as exc:
                 _debug_file(f"ORDER PRICE ERROR account_id={request.account_id} error={type(exc).__name__}: {exc}")
 
