@@ -111,7 +111,10 @@ class AdapterTradingDataProvider:
         unit_price = request.price or market_price
         estimated_total = unit_price * request.quantity if unit_price is not None else None
         estimated_commission = Decimal("0")
-        if unit_price is not None:
+
+        # GetSandboxOrderPrice is defined for preliminary LIMIT-order pricing.
+        # MARKET orders use the current market price for the local pre-flight estimate.
+        if request.order_type == OrderType.LIMIT and unit_price is not None:
             try:
                 whole = unit_price.quantize(Decimal("1"))
                 quotation = {"units": str(whole), "nano": int((unit_price - whole) * Decimal("1000000000"))}
