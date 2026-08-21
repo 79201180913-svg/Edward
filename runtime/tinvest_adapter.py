@@ -72,9 +72,6 @@ def _protobuf_to_dict(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_protobuf_to_dict(v) for v in value]
 
-    # t-tech-investments 0.3.x returns some SDK response/value objects that
-    # are not protobuf Message instances. Normalize their public SDK fields
-    # explicitly instead of falling back to repr(value).
     try:
         if hasattr(value, "currency") and (hasattr(value, "units") or hasattr(value, "nano")):
             return {
@@ -188,30 +185,23 @@ class AdapterState:
     def sandbox_pay_in(self, account_id, amount):
         if ENVIRONMENT != "sandbox":
             raise RuntimeError("SandboxPayIn is available only in SANDBOX")
-
         amount = Decimal(str(amount))
         if amount <= 0:
             raise ValueError("Сумма пополнения должна быть больше 0")
         if amount > Decimal("30000000"):
             raise ValueError("Максимальная сумма пополнения — 30 000 000 RUB")
-
         whole = amount.quantize(Decimal("1"))
         nano = int((amount - whole) * Decimal("1000000000"))
         money = MoneyValue(currency="rub", units=int(whole), nano=nano)
-
         logger.info("[SANDBOX FUNDING] SDK SandboxPayIn account_id=%s amount=%s RUB", account_id, amount)
         result = self._service("sandbox").sandbox_pay_in(account_id=str(account_id), amount=money)
         result_dict = message_to_dict(result)
         logger.info("[SANDBOX FUNDING] SDK SandboxPayIn response=%s", result_dict)
-
-        balance = result_dict.get("balance") if isinstance(result_dict, dict) else None
-        if balance is None:
+        if not isinstance(result_dict, dict) or result_dict.get("balance") is None:
             raise RuntimeError(f"SandboxPayIn returned no balance: {result_dict!r}")
-
         positions = self._service("sandbox").get_sandbox_positions(account_id=str(account_id))
         positions_dict = message_to_dict(positions)
         logger.info("[SANDBOX FUNDING] SDK GetSandboxPositions after pay-in account_id=%s response=%s", account_id, positions_dict)
-
         result_dict["verification_positions"] = positions_dict
         result_dict["verification_account_id"] = str(account_id)
         return result_dict
@@ -267,22 +257,18 @@ class AdapterState:
         positions = self.sandbox_positions(account_id)
         money_positions = positions.get("money", []) if isinstance(positions, dict) else []
         blocked_positions = positions.get("blocked", []) if isinstance(positions, dict) else []
-
         rub_amount = Decimal("0")
         rub_blocked = Decimal("0")
-
         for item in money_positions or []:
             currency = str(item.get("currency", "")) if isinstance(item, dict) else ""
             if currency.upper() != "RUB":
                 continue
             rub_amount += self._money_value_decimal(item.get("available_value", item.get("available", item)))
-
         for item in blocked_positions or []:
             currency = str(item.get("currency", "")) if isinstance(item, dict) else ""
             if currency.upper() != "RUB":
                 continue
             rub_blocked += self._money_value_decimal(item.get("blocked_value", item.get("blocked", item)))
-
         logger.info("[SANDBOX BALANCE] normalized cash account_id=%s available=%s blocked=%s", account_id, rub_amount, rub_blocked)
         return self._money_value_to_dict(rub_amount, "RUB") | {"blocked": self._money_value_to_dict(rub_blocked, "RUB")["available"]}
 
@@ -360,15 +346,37 @@ class AdapterState:
         return self._service("market_data").get_trading_statuses(instrument_ids=ids)
 
     def orders(self, account_id):
-        return self._service("orders").get_orders(account_id=account_id)
+        if ENVIRONMENT == "sandbox":
+            result = self._service("sandbox").get_sandbox_orders(account_id=account_id)
+            return message_to_dict(result)
+        return message_to_dict(self._service("orders").get_orders(account_id=account_id))
 
     def order_state(self, account_id, order_id):
-        return self._service("orders").get_order_state(account_id=account_id, order_id=order_id)
+        if ENVIRONMENT == "sandbox":
+            result = self._service("sandbox").get_sandbox_order_state(account_id=account_id, order_id=order_id)
+            return message_to_dict(result)
+        return message_to_dict(self._service("orders").get_order_state(account_id=account_id, order_id=order_id))
 
     def order_price(self, payload):
+        if ENVIRONMENT == "sandbox":
+            result = self._service("sandbox").get_sandbox_order_price(
+                account_id=str(payload["account_id"]),
+                instrument_id=str(payload["instrument_id"]),
+                price=payload.get("price"),
+                direction=payload["direction"],
+                quantity=int(payload["quantity"]),
+            )
+            return message_to_dict(result)
         return self._rest_request("OrdersService/GetOrderPrice", payload)
 
     def max_lots(self, payload):
+        if ENVIRONMENT == "sandbox":
+            result = self._service("sandbox").get_sandbox_max_lots(
+                account_id=str(payload["account_id"]),
+                instrument_id=str(payload["instrument_id"]),
+                price=payload["price"],
+            )
+            return message_to_dict(result)
         return self._rest_request("OrdersService/GetMaxLots", payload)
 
     def operations(self, account_id, limit=1000):
@@ -377,19 +385,36 @@ class AdapterState:
         return self._rest_request("OperationsService/GetOperationsByCursor", {"accountId": account_id, "limit": max(1, min(limit, 1000)), "withoutCommissions": False, "withoutTrades": False})
 
     def create_order(self, payload):
-        kwargs = {"quantity": payload["quantity"], "direction": payload["direction"], "account_id": payload["account_id"], "order_type": payload["order_type"], "instrument_id": payload["instrument_uid"], "order_id": payload["request_id"]}
+        kwargs = {
+            "quantity": payload["quantity"],
+            "direction": payload["direction"],
+            "account_id": payload["account_id"],
+            "order_type": payload["order_type"],
+            "instrument_id": payload["instrument_uid"],
+            "order_id": payload["request_id"],
+        }
         if payload.get("price") is not None:
             kwargs["price"] = payload["price"]
-        return self._service("orders").post_order(**kwargs)
+        if ENVIRONMENT == "sandbox":
+            logger.info("[SANDBOX ORDER] PostSandboxOrder account_id=%s instrument_id=%s direction=%s quantity=%s", payload["account_id"], payload["instrument_uid"], payload["direction"], payload["quantity"])
+            result = self._service("sandbox").post_sandbox_order(**kwargs)
+            return message_to_dict(result)
+        return message_to_dict(self._service("orders").post_order(**kwargs))
 
     def cancel_order(self, account_id, order_id):
-        return self._service("orders").cancel_order(account_id=account_id, order_id=order_id)
+        if ENVIRONMENT == "sandbox":
+            result = self._service("sandbox").cancel_sandbox_order(account_id=account_id, order_id=order_id)
+            return message_to_dict(result)
+        return message_to_dict(self._service("orders").cancel_order(account_id=account_id, order_id=order_id))
 
     def replace_order(self, payload):
         kwargs = {"order_id": payload["order_id"], "quantity": payload["quantity"], "account_id": payload["account_id"]}
         if payload.get("price") is not None:
             kwargs["price"] = payload["price"]
-        return self._service("orders").replace_order(**kwargs)
+        if ENVIRONMENT == "sandbox":
+            result = self._service("sandbox").replace_sandbox_order(**kwargs)
+            return message_to_dict(result)
+        return message_to_dict(self._service("orders").replace_order(**kwargs))
 
 
 STATE = AdapterState()
@@ -399,7 +424,7 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "EdwardTInvestAdapter/0.1"
 
     def log_message(self, format, *args):
-        sys.stderr.write("Edward T-Invest adapter: " + format % args + "\n")
+        sys.stderr.write("Edward T-Invest adapter: " + format + "\n")
 
     def _send(self, status, payload):
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -437,13 +462,13 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/market/last-prices": self._send(200, STATE.last_prices([str(x) for x in p.get("instrument_ids", [])])); return
             if self.path == "/market/trading-status": self._send(200, message_to_dict(STATE.trading_status(str(p.get("instrument_id", "")).strip()))); return
             if self.path == "/market/trading-statuses": self._send(200, message_to_dict(STATE.trading_statuses([str(x) for x in p.get("instrument_ids", [])]))); return
-            if self.path == "/orders": self._send(200, message_to_dict(STATE.orders(str(p.get("account_id", "")).strip()))); return
-            if self.path == "/orders/state": self._send(200, message_to_dict(STATE.order_state(str(p.get("account_id", "")).strip(), str(p.get("order_id", "")).strip()))); return
+            if self.path == "/orders": self._send(200, STATE.orders(str(p.get("account_id", "")).strip())); return
+            if self.path == "/orders/state": self._send(200, STATE.order_state(str(p.get("account_id", "")).strip(), str(p.get("order_id", "")).strip()))); return
             if self.path == "/orders/price": self._send(200, STATE.order_price(p)); return
             if self.path == "/orders/max-lots": self._send(200, STATE.max_lots(p)); return
-            if self.path == "/orders/create": self._send(200, message_to_dict(STATE.create_order(p))); return
-            if self.path == "/orders/cancel": self._send(200, message_to_dict(STATE.cancel_order(str(p.get("account_id", "")).strip(), str(p.get("order_id", "")).strip()))); return
-            if self.path == "/orders/replace": self._send(200, message_to_dict(STATE.replace_order(p))); return
+            if self.path == "/orders/create": self._send(200, STATE.create_order(p)); return
+            if self.path == "/orders/cancel": self._send(200, STATE.cancel_order(str(p.get("account_id", "")).strip(), str(p.get("order_id", "")).strip()))); return
+            if self.path == "/orders/replace": self._send(200, STATE.replace_order(p)); return
             if self.path == "/operations": self._send(200, STATE.operations(str(p.get("account_id", "")).strip(), int(p.get("limit", 1000)))); return
             self._send(404, {"error": "not_found"})
         except Exception as exc:
