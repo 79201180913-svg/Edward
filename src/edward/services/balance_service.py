@@ -82,6 +82,10 @@ class BalanceService:
             value = cls._field(position, name, None)
             if value is not None:
                 return value
+        # T-Invest GetSandboxPositions returns MoneyValue directly:
+        # {currency, units, nano}. Treat the object itself as the amount.
+        if cls._field(position, "units", None) is not None or cls._field(position, "nano", None) is not None:
+            return position
         return None
 
     @classmethod
@@ -121,6 +125,11 @@ class BalanceService:
         portfolio_value = cls._portfolio_value(portfolio_response)
         if portfolio_value is None:
             portfolio_value = securities_value
+
+        print(
+            f"[BALANCE] available={available} blocked={blocked} cash={available + blocked} "
+            f"portfolio_value={portfolio_value} money={money}"
+        )
 
         return FinancialSummary(
             currency=currency,
