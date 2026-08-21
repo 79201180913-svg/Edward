@@ -60,9 +60,41 @@ def _sandbox_operations(self, account_id, limit=1000):
     return result
 
 
+def _list_instruments(self, kind="SHARE", trade=True):
+    methods = {
+        "SHARE": ("shares", "INSTRUMENT_TYPE_SHARE"),
+        "BOND": ("bonds", "INSTRUMENT_TYPE_BOND"),
+        "ETF": ("etfs", "INSTRUMENT_TYPE_ETF"),
+        "CURRENCY": ("currencies", "INSTRUMENT_TYPE_CURRENCY"),
+        "FUTURES": ("futures", "INSTRUMENT_TYPE_FUTURES"),
+    }
+    key = str(kind).upper()
+    if key not in methods:
+        raise ValueError(f"Unsupported instrument kind: {kind}")
+    method_name, instrument_type = methods[key]
+    service = self._service("instruments")
+    method = getattr(service, method_name, None)
+    if method is not None:
+        try:
+            result = method(instrument_status="INSTRUMENT_STATUS_BASE" if trade else "INSTRUMENT_STATUS_ALL", instrument_exchange="INSTRUMENT_EXCHANGE_UNSPECIFIED")
+            data = _adapter.message_to_dict(result)
+            _adapter.logger.info("[INSTRUMENTS SDK] kind=%s count=%s", key, len(data.get("instruments", []) or []))
+            return data
+        except TypeError:
+            result = method()
+            data = _adapter.message_to_dict(result)
+            _adapter.logger.info("[INSTRUMENTS SDK] kind=%s count=%s", key, len(data.get("instruments", []) or []))
+            return data
+    return self._rest_request(
+        f"InstrumentsService/{'Shares' if key == 'SHARE' else key.title() + 's'}",
+        {"instrumentStatus": "INSTRUMENT_STATUS_BASE" if trade else "INSTRUMENT_STATUS_ALL", "instrumentExchange": "INSTRUMENT_EXCHANGE_UNSPECIFIED"},
+    )
+
+
 _adapter.AdapterState.sandbox_positions = _sandbox_positions
 _adapter.AdapterState.sandbox_portfolio = _sandbox_portfolio
 _adapter.AdapterState.operations = _sandbox_operations
+_adapter.AdapterState.list_instruments = _list_instruments
 
 
 if __name__ == "__main__":
