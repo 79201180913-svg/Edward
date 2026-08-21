@@ -9,8 +9,6 @@ from edward.api.portfolio import PortfolioApi
 
 @dataclass(frozen=True, slots=True)
 class FinancialSummary:
-    """Normalized financial state for an Edward account."""
-
     currency: str
     available: Decimal
     blocked: Decimal
@@ -20,13 +18,6 @@ class FinancialSummary:
 
 
 class BalanceService:
-    """Application service for account financial state.
-
-    The service keeps T-Invest response details out of the presentation layer.
-    It accepts both native SDK/protobuf objects and JSON dictionaries returned
-    by the local Python 3.12 adapter.
-    """
-
     def __init__(self, api: PortfolioApi | None = None) -> None:
         self._api = api
 
@@ -60,9 +51,7 @@ class BalanceService:
             return value
         if isinstance(value, dict):
             if "units" in value or "nano" in value:
-                units = Decimal(str(value.get("units", 0)))
-                nano = Decimal(str(value.get("nano", 0))) / Decimal("1000000000")
-                return units + nano
+                return Decimal(str(value.get("units", 0))) + Decimal(str(value.get("nano", 0))) / Decimal("1000000000")
             if "value" in value:
                 return BalanceService._decimal(value["value"])
         try:
@@ -82,21 +71,13 @@ class BalanceService:
             value = cls._field(position, name, None)
             if value is not None:
                 return value
-        # T-Invest GetSandboxPositions returns MoneyValue directly:
-        # {currency, units, nano}. Treat the object itself as the amount.
         if cls._field(position, "units", None) is not None or cls._field(position, "nano", None) is not None:
             return position
         return None
 
     @classmethod
-    def build_summary(
-        cls,
-        positions_response: Any,
-        portfolio_response: Any | None = None,
-    ) -> FinancialSummary:
+    def build_summary(cls, positions_response: Any, portfolio_response: Any | None = None) -> FinancialSummary:
         money = cls.get_money_positions(positions_response)
-        securities = cls.get_security_positions(positions_response)
-
         currency = "RUB"
         available = Decimal("0")
         blocked = Decimal("0")
@@ -105,36 +86,20 @@ class BalanceService:
             position_currency = cls._field(position, "currency")
             if position_currency:
                 currency = str(position_currency).upper()
-            available += cls._decimal(
-                cls._money_field(position, "available", "available_value")
-            )
-            blocked += cls._decimal(
-                cls._money_field(position, "blocked", "blocked_value")
-            )
-
-        securities_value = Decimal("0")
-        for position in securities:
-            value = cls._field(position, "current_price")
-            quantity = cls._field(position, "quantity", cls._field(position, "balance", 0))
-            explicit_value = cls._field(position, "value")
-            if explicit_value is not None:
-                securities_value += cls._decimal(explicit_value)
-            else:
-                securities_value += cls._decimal(value) * cls._decimal(quantity)
+            available += cls._decimal(cls._money_field(position, "available", "available_value"))
+            blocked += cls._decimal(cls._money_field(position, "blocked", "blocked_value"))
 
         portfolio_value = cls._portfolio_value(portfolio_response)
         cash_value = available + blocked
-        # SR-066: a zero API total is not a usable total when positions exist.
-        # In that case derive the portfolio value from cash + securities.
-        if portfolio_value is None or (
-            portfolio_value == Decimal("0") and (cash_value != Decimal("0") or securities_value != Decimal("0"))
-        ):
-            portfolio_value = cash_value + securities_value
+        securities_value = cls._portfolio_securities_value(portfolio_response)
 
-        print(
-            f"[BALANCE] available={available} blocked={blocked} cash={cash_value} "
-            f"portfolio_value={portfolio_value} money={money}"
-        )
+        if portfolio_value is None or (portfolio_value == Decimal("0") and (cash_value or securities_value)):
+            # PortfolioResponse already provides values calculated by T-Invest.
+            # Prefer these class totals over multiplying position quantities by
+            # price, because position quantity is expressed in pieces and the
+            # price is for one security; lot conversion would otherwise be
+            # required and differs by instrument type.
+            portfolio_value = cash_value + securities_value
 
         return FinancialSummary(
             currency=currency,
@@ -149,8 +114,24 @@ class BalanceService:
     def _portfolio_value(cls, response: Any | None) -> Decimal | None:
         if response is None:
             return None
-        for name in ("total_amount_portfolio", "total_amount_currencies"):
-            value = cls._field(response, name)
-            if value is not None:
-                return cls._decimal(value)
+        value = cls._field(response, "total_amount_portfolio")
+        if value is not None:
+            return cls._decimal(value)
         return None
+
+    @classmethod
+    def _portfolio_securities_value(cls, response: Any | None) -> Decimal:
+        if response is None:
+            return Decimal("0")
+        total = Decimal("0")
+        for name in (
+            "total_amount_shares",
+            "total_amount_bonds",
+            "total_amount_etf",
+            "total_amount_futures",
+            "total_amount_options",
+            "total_amount_sp",
+            "total_amount_dfa",
+        ):
+            total += cls._decimal(cls._field(response, name))
+        return total
