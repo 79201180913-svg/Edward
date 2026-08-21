@@ -56,21 +56,34 @@ class AdapterTradingDataProvider:
         if increment is None and instrument is not None:
             increment = self._decimal(self._field(instrument, "min_price_increment_value"))
 
-        positions = self._client.get_positions(request.account_id)
-        money = BalanceService.get_money_positions(positions)
+        # Sandbox buying funds must come directly from the real sandbox
+        # GetSandboxPositions response. Do not route this through BalanceService
+        # or another derived/normalized balance source.
+        is_sandbox = str(self._client.health().get("environment", "")).lower() == "sandbox"
+        if is_sandbox:
+            positions = self._client.get_sandbox_positions(request.account_id)
+        else:
+            positions = self._client.get_positions(request.account_id)
+
+        money = self._items(positions, "money")
         securities = BalanceService.get_security_positions(positions)
         available_money = Decimal("0")
         raw_money = money
-        _debug_file(f"POSITIONS account_id={request.account_id} raw_money={raw_money}")
+        _debug_file(f"POSITIONS account_id={request.account_id} sandbox={is_sandbox} raw_positions={positions}")
 
         for item in money:
             if str(self._field(item, "currency", "")).upper() != "RUB":
                 continue
-            available_raw = self._field(item, "available", None)
-            if available_raw is None:
-                available_raw = self._field(item, "available_value", None)
-            if available_raw is None and isinstance(item, dict) and ("units" in item or "nano" in item):
+
+            if is_sandbox and isinstance(item, dict) and ("units" in item or "nano" in item):
                 available_raw = item
+            else:
+                available_raw = self._field(item, "available", None)
+                if available_raw is None:
+                    available_raw = self._field(item, "available_value", None)
+                if available_raw is None and isinstance(item, dict) and ("units" in item or "nano" in item):
+                    available_raw = item
+
             parsed = self._decimal(available_raw)
             _debug_file(
                 f"MONEY account_id={request.account_id} item={item} "
@@ -79,12 +92,12 @@ class AdapterTradingDataProvider:
             available_money += parsed or Decimal("0")
 
         print(
-            f"[TRADING CASH] account_id={request.account_id} available_money={available_money} "
-            f"raw_money={raw_money}"
+            f"[TRADING CASH] account_id={request.account_id} sandbox={is_sandbox} "
+            f"available_money={available_money} raw_money={raw_money}"
         )
         _debug_file(
-            f"CASH RESULT account_id={request.account_id} available_money={available_money} "
-            f"raw_money={raw_money}"
+            f"CASH RESULT account_id={request.account_id} sandbox={is_sandbox} "
+            f"available_money={available_money} raw_money={raw_money}"
         )
 
         available_position = None
