@@ -43,15 +43,13 @@ def _sdk_order_type(value: Any) -> Any:
     mapping = {
         "MARKET": SDKOrderType.ORDER_TYPE_MARKET,
         "LIMIT": SDKOrderType.ORDER_TYPE_LIMIT,
-        "STOP": SDKOrderType.ORDER_TYPE_STOP,
-        "STOP_LIMIT": SDKOrderType.ORDER_TYPE_STOP_LIMIT,
     }
     key = str(raw).upper()
     if key in mapping:
         return mapping[key]
     if isinstance(value, SDKOrderType):
         return value
-    raise ValueError(f"Unsupported order type: {value!r}")
+    raise ValueError(f"Unsupported order type for t-tech-investments 0.3.3: {value!r}")
 
 
 def _configure_windows_ca_bundle() -> None:
