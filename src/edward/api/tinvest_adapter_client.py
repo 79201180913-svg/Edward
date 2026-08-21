@@ -67,32 +67,21 @@ class TInvestAdapterClient:
         result = dict(positions or {})
         raw_money = result.get("money", []) or []
         normalized_money: list[dict] = []
-
         for item in raw_money:
             if not isinstance(item, dict):
                 continue
             currency = str(item.get("currency", "")).upper()
             if not currency:
                 continue
-
-            # Sandbox GetSandboxPositions currently returns MoneyValue directly:
-            # {currency, units, nano}. Older/alternative responses may wrap it
-            # in available/available_value.
             if "units" in item or "nano" in item:
                 available_amount = cls._money_decimal(item)
             else:
-                available_amount = cls._money_decimal(
-                    item.get("available_value", item.get("available", 0))
-                )
-
-            blocked_amount = cls._money_decimal(
-                item.get("blocked_value", item.get("blocked", 0))
-            )
+                available_amount = cls._money_decimal(item.get("available_value", item.get("available", 0)))
+            blocked_amount = cls._money_decimal(item.get("blocked_value", item.get("blocked", 0)))
             available_whole = available_amount.quantize(Decimal("1"))
             available_nano = int((available_amount - available_whole) * Decimal("1000000000"))
             blocked_whole = blocked_amount.quantize(Decimal("1"))
             blocked_nano = int((blocked_amount - blocked_whole) * Decimal("1000000000"))
-
             normalized_money.append({
                 "currency": currency,
                 "available": {"units": str(available_whole), "nano": available_nano},
@@ -100,7 +89,6 @@ class TInvestAdapterClient:
                 "blocked": {"units": str(blocked_whole), "nano": blocked_nano},
                 "blocked_value": {"units": str(blocked_whole), "nano": blocked_nano},
             })
-
         result["money"] = normalized_money
         return result
 
@@ -112,29 +100,15 @@ class TInvestAdapterClient:
     def get_positions(self, account_id: str) -> dict:
         if str(self.health().get("environment", "")).lower() != "sandbox":
             return self._request("POST", "/positions", {"account_id": account_id})
-
-        # IMPORTANT: this is the exact source used by TradingDataProvider.
-        # Do not infer cash from portfolio or withdraw limits.
         positions = self.get_sandbox_positions(account_id)
         normalized = self._normalize_sandbox_positions(positions)
-
-        rub = next(
-            (item for item in normalized.get("money", []) if str(item.get("currency", "")).upper() == "RUB"),
-            None,
-        )
+        rub = next((item for item in normalized.get("money", []) if str(item.get("currency", "")).upper() == "RUB"), None)
         if rub is not None:
             available = self._money_decimal(rub.get("available"))
             blocked = self._money_decimal(rub.get("blocked"))
-            print(
-                f"[SANDBOX CASH] account_id={account_id} "
-                f"available={available} blocked={blocked} raw_money={positions.get('money', [])}"
-            )
+            print(f"[SANDBOX CASH] account_id={account_id} available={available} blocked={blocked} raw_money={positions.get('money', [])}")
         else:
-            print(
-                f"[SANDBOX CASH] account_id={account_id} available=0 blocked=0 "
-                f"raw_money={positions.get('money', [])}"
-            )
-
+            print(f"[SANDBOX CASH] account_id={account_id} available=0 blocked=0 raw_money={positions.get('money', [])}")
         return normalized
 
     def find_instrument(self, query: str, trade_available_only: bool = True) -> dict: return self._request("POST", "/instruments/search", {"query": query, "api_trade_available_flag": trade_available_only})
@@ -151,48 +125,37 @@ class TInvestAdapterClient:
     def get_operations(self, account_id: str, limit: int = 1000) -> dict: return self._request("POST", "/operations", {"account_id": account_id, "limit": limit})
 
     @staticmethod
+    def _quotation_payload(value: Any) -> dict | None:
+        if value is None:
+            return None
+        if isinstance(value, dict) and ("units" in value or "nano" in value):
+            return {"units": str(value.get("units", 0)), "nano": int(value.get("nano", 0))}
+        amount = value if isinstance(value, Decimal) else Decimal(str(value))
+        whole = amount.quantize(Decimal("1"))
+        nano = int((amount - whole) * Decimal("1000000000"))
+        return {"units": str(whole), "nano": nano}
+
+    @staticmethod
     def _order_payload(request: Any) -> dict:
-        return {
+        price = TInvestAdapterClient._quotation_payload(getattr(request, "price", None))
+        payload = {
             "quantity": int(getattr(request, "quantity")),
             "direction": getattr(getattr(request, "side"), "value", getattr(request, "side")),
             "account_id": str(getattr(request, "account_id")),
             "order_type": getattr(getattr(request, "order_type"), "value", getattr(request, "order_type")),
             "instrument_uid": str(getattr(request, "instrument_uid")),
             "request_id": str(getattr(request, "request_id")),
-            "price": str(getattr(request, "price")) if getattr(request, "price", None) is not None else None,
-            "stop_price": str(getattr(request, "stop_price")) if getattr(request, "stop_price", None) is not None else None,
+            "price": price,
+            "stop_price": TInvestAdapterClient._quotation_payload(getattr(request, "stop_price", None)),
             "time_in_force": getattr(getattr(request, "time_in_force", None), "value", getattr(request, "time_in_force", "DAY")),
         }
+        print(f"[ORDER PAYLOAD] type={payload['order_type']} direction={payload['direction']} quantity={payload['quantity']} raw_price={getattr(request, 'price', None)!r} price={price!r}")
+        return payload
 
     def post_order(self, request: Any) -> dict:
         payload = self._order_payload(request)
-
-        # Final safety net: the sandbox SDK/API requires price for PostSandboxOrder.
-        # MARKET orders are priced automatically from the latest market price.
         if payload["order_type"] == "MARKET" and payload.get("price") is None:
-            response = self.get_last_prices([payload["instrument_uid"]])
-            prices = response.get("last_prices", []) if isinstance(response, dict) else []
-            raw_price = None
-            if prices:
-                first = prices[0] or {}
-                if isinstance(first, dict):
-                    raw_price = first.get("price", first.get("last_price"))
-            if isinstance(raw_price, dict) and ("units" in raw_price or "nano" in raw_price):
-                market_price = self._money_decimal(raw_price)
-            else:
-                try:
-                    market_price = Decimal(str(raw_price)) if raw_price is not None else None
-                except Exception:
-                    market_price = None
-            if market_price is None or market_price <= 0:
-                raise RuntimeError(f"Не удалось получить цену для рыночной заявки: {raw_price!r}")
-            payload["price"] = str(market_price)
-
-        print(
-            f"[ORDER PAYLOAD] type={payload['order_type']} direction={payload['direction']} "
-            f"quantity={payload['quantity']} price={payload.get('price')} "
-            f"instrument_uid={payload['instrument_uid']}"
-        )
+            raise RuntimeError("Не удалось сформировать price для рыночной заявки перед отправкой.")
         return self._request("POST", "/orders/create", payload)
 
     def cancel_order(self, account_id: str, order_id: str) -> dict: return self._request("POST", "/orders/cancel", {"account_id": account_id, "order_id": order_id})
