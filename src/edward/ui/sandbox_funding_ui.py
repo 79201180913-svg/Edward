@@ -28,20 +28,54 @@ def install_sandbox_funding_ui(app_class: type[Any]) -> None:
         )
         self._sandbox_pay_in_button.pack(fill="x", pady=2)
 
-    def _get_sandbox_rub_balance(self: Any, account_id: str) -> Decimal:
-        """Get the pre-funding RUB cash balance from SandboxPortfolio."""
-        portfolio = self.client.get_sandbox_portfolio(account_id)
+    def _money_value(value: Any) -> Decimal:
+        if value is None:
+            return Decimal("0")
+        if isinstance(value, Decimal):
+            return value
+        if isinstance(value, dict):
+            if "units" in value or "nano" in value:
+                return Decimal(str(value.get("units", 0))) + Decimal(str(value.get("nano", 0))) / Decimal("1000000000")
+            if "value" in value:
+                return _money_value(value["value"])
+        try:
+            return Decimal(str(value))
+        except Exception:
+            return Decimal("0")
 
-        # T-Invest SandboxPortfolio exposes cash totals separately from
-        # the instrument positions. Prefer total_amount_currencies for cash.
-        for field_name in ("total_amount_currencies", "total_amount_portfolio"):
-            value = self._field(portfolio, field_name, None)
-            if value is not None:
-                return BalanceService._decimal(value)
+    def _get_sandbox_rub_balance(self: Any, account_id: str) -> Decimal:
+        """Get actual RUB cash from GetSandboxPositions; portfolio does not contain cash."""
+        positions = self.client.get_sandbox_positions(account_id)
+        money = self._items(positions, "money")
+        logger = getattr(__import__("logging"), "getLogger")("edward.sandbox_funding")
+        logger.info("[SANDBOX FUNDING] GetSandboxPositions account_id=%s money=%s", account_id, money)
+
+        for position in money:
+            currency = str(self._field(position, "currency", "")).upper()
+            if currency != "RUB":
+                continue
+            available = self._field(position, "available", None)
+            if available is None:
+                available = self._field(position, "available_value", None)
+            if available is None:
+                raise RuntimeError(
+                    "В денежной позиции sandbox не найдено поле available/available_value.\n"
+                    f"Позиция: {position}\n\n"
+                    f"Ответ GetSandboxPositions: {positions}"
+                )
+            balance = _money_value(available)
+            logger.info("[SANDBOX FUNDING] RUB available before/after operation=%s", balance)
+            return balance
+
+        # Newly created sandbox account may have no money position yet.
+        if not money:
+            logger.info("[SANDBOX FUNDING] No money positions yet; treating initial RUB balance as 0")
+            return Decimal("0")
 
         raise RuntimeError(
-            "Не удалось определить текущий RUB-баланс sandbox-счёта.\n"
-            f"Ответ GetSandboxPortfolio: {portfolio}"
+            "В GetSandboxPositions не найдена денежная позиция RUB.\n"
+            f"Money positions: {money}\n\n"
+            f"Ответ API: {positions}"
         )
 
     def _sandbox_pay_in(self: Any) -> None:
@@ -96,24 +130,30 @@ def install_sandbox_funding_ui(app_class: type[Any]) -> None:
             self.update_idletasks()
             result = self.client.sandbox_pay_in(account_id, amount)
 
-            # SandboxPayIn returns the real current account balance after the
-            # operation. This is the authoritative post-operation value.
             response_balance_raw = self._field(result, "balance", None)
             if response_balance_raw is None:
                 raise RuntimeError(
                     "SandboxPayIn не вернул фактический баланс.\n"
                     f"Ответ API: {result}"
                 )
-            actual_balance = BalanceService._decimal(response_balance_raw)
+            payin_balance = BalanceService._decimal(response_balance_raw)
 
-            if actual_balance != expected_balance:
+            # Verify the same account again via GetSandboxPositions. This is
+            # the authoritative source for cash positions used by trading.
+            self.status_var.set("Проверка фактического баланса после пополнения...")
+            self.update_idletasks()
+            actual_balance = _get_sandbox_rub_balance(self, account_id)
+
+            if payin_balance != expected_balance or actual_balance != expected_balance or actual_balance != payin_balance:
                 raise RuntimeError(
                     "Баланс после пополнения не совпал с ожидаемым.\n\n"
+                    f"Счёт: {account_id}\n"
                     f"Баланс до: {balance_before:,.2f} RUB\n"
                     f"Пополнение: {amount:,.2f} RUB\n"
                     f"Ожидаемый баланс: {expected_balance:,.2f} RUB\n"
-                    f"Фактический баланс из SandboxPayIn: {actual_balance:,.2f} RUB\n"
-                    f"Ответ API: {result}"
+                    f"Баланс из SandboxPayIn: {payin_balance:,.2f} RUB\n"
+                    f"Фактический баланс GetSandboxPositions: {actual_balance:,.2f} RUB\n"
+                    f"Ответ SandboxPayIn: {result}"
                 )
 
             self.status_var.set("Sandbox-счёт пополнен и проверен")
