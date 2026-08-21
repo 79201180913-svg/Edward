@@ -79,7 +79,68 @@ def _lot_size(client: Any, uid: str) -> Decimal:
     return Decimal("1")
 
 
-def _quantity(client: Any, position: Any, security: Any) -> tuple[Decimal, Decimal, str]:
+def _operation_direction(operation: Any) -> str:
+    raw = _field(operation, "operation_type", _field(operation, "type", ""))
+    text = str(raw).upper()
+    if "BUY" in text or "ПОКУП" in text:
+        return "BUY"
+    if "SELL" in text or "ПРОДАЖ" in text:
+        return "SELL"
+    try:
+        number = int(raw)
+    except Exception:
+        return ""
+    return {15: "BUY", 16: "BUY", 22: "SELL"}.get(number, "")
+
+
+def _operation_executed(operation: Any) -> bool:
+    raw = _field(operation, "state", _field(operation, "status", ""))
+    text = str(raw).upper()
+    if any(token in text for token in ("CANCEL", "REJECT", "FAIL", "ERROR")):
+        return False
+    if any(token in text for token in ("EXECUT", "FILL", "SUCCESS")):
+        return True
+    try:
+        return int(raw) == 1
+    except Exception:
+        return raw in ("", None)
+
+
+def _operations_quantity(client: Any, account_id: str) -> dict[str, Decimal]:
+    try:
+        response = client.get_operations(account_id, 1000)
+    except Exception as exc:
+        print(f"[PORTFOLIO OPERATIONS ERROR] {type(exc).__name__}: {exc}", flush=True)
+        return {}
+
+    totals: dict[str, Decimal] = {}
+    operations = _items(response, "operations", "items")
+    for operation in operations:
+        if not _operation_executed(operation):
+            continue
+        direction = _operation_direction(operation)
+        if direction not in {"BUY", "SELL"}:
+            continue
+        keys = (
+            _field(operation, "instrument_uid", ""),
+            _field(operation, "position_uid", ""),
+            _field(operation, "figi", ""),
+            _field(operation, "ticker", ""),
+        )
+        key = next((str(value) for value in keys if value), "")
+        if not key:
+            continue
+        quantity = _decimal(_field(operation, "quantity_done", _field(operation, "quantity", 0)))
+        if quantity <= 0:
+            continue
+        sign = Decimal("1") if direction == "BUY" else Decimal("-1")
+        totals[key] = totals.get(key, Decimal("0")) + sign * quantity
+
+    print(f"[PORTFOLIO OPERATIONS QUANTITY] account_id={account_id} instruments={len(totals)} totals={totals}", flush=True)
+    return totals
+
+
+def _quantity(client: Any, position: Any, security: Any, operation_totals: dict[str, Decimal]) -> tuple[Decimal, Decimal, str]:
     quantity = _decimal(_field(position, "quantity", 0))
     blocked = _decimal(_field(position, "blocked_lots", 0))
     if quantity > 0:
@@ -87,7 +148,6 @@ def _quantity(client: Any, position: Any, security: Any) -> tuple[Decimal, Decim
             blocked = _decimal(_field(security, "blocked", 0))
         return quantity, blocked, "PortfolioPosition.quantity"
 
-    # Sandbox implementations may still populate deprecated quantity_lots.
     quantity_lots = _decimal(_field(position, "quantity_lots", 0))
     uid = _uid(position)
     if quantity_lots > 0:
@@ -97,7 +157,17 @@ def _quantity(client: Any, position: Any, security: Any) -> tuple[Decimal, Decim
             blocked_value = _decimal(_field(security, "blocked", 0))
         return quantity_lots * lot_size, blocked_value, f"PortfolioPosition.quantity_lots*lot({lot_size})"
 
-    # Last fallback: GetSandboxPositions exposes pieces directly.
+    keys = (
+        _field(position, "instrument_uid", ""),
+        _field(position, "position_uid", ""),
+        _field(position, "figi", ""),
+        _field(position, "ticker", ""),
+    )
+    for key in keys:
+        text = str(key or "")
+        if text in operation_totals and operation_totals[text] > 0:
+            return operation_totals[text], blocked, "GetSandboxOperationsByCursor BUY-SELL"
+
     balance = _decimal(_field(security, "balance", 0)) if security is not None else Decimal("0")
     security_blocked = _decimal(_field(security, "blocked", 0)) if security is not None else Decimal("0")
     return balance + security_blocked, security_blocked, "PositionsSecurities.balance+blocked"
@@ -115,6 +185,7 @@ def install_portfolio_quantity_fix(EdwardApp: Any) -> None:
         portfolio = self.client.get_portfolio(aid)
         securities = _items(positions, "securities")
         portfolio_positions = _items(portfolio, "positions")
+        operation_totals = _operations_quantity(self.client, aid)
 
         tree = self._tree(
             self.content,
@@ -126,7 +197,7 @@ def install_portfolio_quantity_fix(EdwardApp: Any) -> None:
         displayed = 0
         for position in portfolio_positions:
             security = _find_security(position, securities)
-            quantity, blocked, source = _quantity(self.client, position, security)
+            quantity, blocked, source = _quantity(self.client, position, security, operation_totals)
             uid = str(_field(position, "instrument_uid", _field(position, "uid", _field(security, "instrument_uid", ""))) or "")
             ticker = str(_field(position, "ticker", _field(security, "ticker", "")) or "")
             price = _decimal(_field(position, "current_price", 0))
@@ -142,10 +213,8 @@ def install_portfolio_quantity_fix(EdwardApp: Any) -> None:
             value = quantity * price
             total_value += value
             yield_value = _decimal(_field(position, "expected_yield", _field(position, "expected_yield_fifo", 0)))
-
             tree.insert(
-                "",
-                "end",
+                "", "end",
                 values=(
                     ticker,
                     uid,
@@ -158,12 +227,9 @@ def install_portfolio_quantity_fix(EdwardApp: Any) -> None:
             )
             displayed += 1
             print(
-                f"[PORTFOLIO POSITION] ticker={ticker} uid={uid} quantity={quantity} "
-                f"blocked={blocked} source={source} "
-                f"raw_quantity={_field(position, 'quantity', None)!r} "
-                f"raw_quantity_lots={_field(position, 'quantity_lots', None)!r} "
-                f"security_balance={_field(security, 'balance', None)!r} "
-                f"security_blocked={_field(security, 'blocked', None)!r}",
+                f"[PORTFOLIO POSITION] ticker={ticker} uid={uid} quantity={quantity} blocked={blocked} source={source} "
+                f"raw_quantity={_field(position, 'quantity', None)!r} raw_quantity_lots={_field(position, 'quantity_lots', None)!r} "
+                f"security_balance={_field(security, 'balance', None)!r} security_blocked={_field(security, 'blocked', None)!r}",
                 flush=True,
             )
 
