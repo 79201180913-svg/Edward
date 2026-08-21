@@ -63,7 +63,6 @@ class TInvestAdapterClient:
 
     @classmethod
     def _normalize_sandbox_positions(cls, positions: dict) -> dict:
-        """Normalize T-Invest sandbox PositionsMoney to Edward's common money schema."""
         result = dict(positions or {})
         raw_money = result.get("money", []) or []
         normalized_money: list[dict] = []
@@ -137,7 +136,6 @@ class TInvestAdapterClient:
 
     @staticmethod
     def _order_payload(request: Any) -> dict:
-        price = TInvestAdapterClient._quotation_payload(getattr(request, "price", None))
         payload = {
             "quantity": int(getattr(request, "quantity")),
             "direction": getattr(getattr(request, "side"), "value", getattr(request, "side")),
@@ -145,20 +143,17 @@ class TInvestAdapterClient:
             "order_type": getattr(getattr(request, "order_type"), "value", getattr(request, "order_type")),
             "instrument_uid": str(getattr(request, "instrument_uid")),
             "request_id": str(getattr(request, "request_id")),
-            "price": price,
+            "price": TInvestAdapterClient._quotation_payload(getattr(request, "price", None)),
             "stop_price": TInvestAdapterClient._quotation_payload(getattr(request, "stop_price", None)),
-            "time_in_force": getattr(getattr(request, "time_in_force", None), "value", getattr(request, "time_in_force", "DAY")),
         }
-        print(f"[ORDER PAYLOAD] type={payload['order_type']} direction={payload['direction']} quantity={payload['quantity']} raw_price={getattr(request, 'price', None)!r} price={price!r}")
+        print(f"[ORDER PAYLOAD] type={payload['order_type']} direction={payload['direction']} quantity={payload['quantity']} price={payload['price']!r}")
         return payload
 
     def post_order(self, request: Any) -> dict:
-        payload = self._order_payload(request)
-        if payload["order_type"] == "MARKET" and payload.get("price") is None:
-            raise RuntimeError("Не удалось сформировать price для рыночной заявки перед отправкой.")
-        return self._request("POST", "/orders/create", payload)
+        return self._request("POST", "/orders/create", self._order_payload(request))
 
     def cancel_order(self, account_id: str, order_id: str) -> dict: return self._request("POST", "/orders/cancel", {"account_id": account_id, "order_id": order_id})
     def replace_order(self, request: Any, order_id: str) -> dict:
-        payload = self._order_payload(request); payload["order_id"] = order_id
+        payload = self._order_payload(request)
+        payload["order_id"] = order_id
         return self._request("POST", "/orders/replace", payload)
