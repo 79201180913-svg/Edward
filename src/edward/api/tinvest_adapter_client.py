@@ -41,6 +41,20 @@ class TInvestAdapterClient:
             return self.get_sandbox_portfolio(account_id)
         return self._request("POST", "/portfolio", {"account_id": account_id})
 
+    @staticmethod
+    def _money_decimal(value: Any) -> Decimal:
+        if value is None:
+            return Decimal("0")
+        if isinstance(value, dict):
+            if "units" in value or "nano" in value:
+                return Decimal(str(value.get("units", 0))) + Decimal(str(value.get("nano", 0))) / Decimal("1000000000")
+            if "value" in value:
+                return TInvestAdapterClient._money_decimal(value["value"])
+        try:
+            return Decimal(str(value))
+        except Exception:
+            return Decimal("0")
+
     def get_positions(self, account_id: str) -> dict:
         if str(self.health().get("environment", "")).lower() != "sandbox":
             return self._request("POST", "/positions", {"account_id": account_id})
@@ -49,43 +63,26 @@ class TInvestAdapterClient:
         portfolio = self.get_sandbox_portfolio(account_id)
 
         cash_value = portfolio.get("total_amount_currencies") if isinstance(portfolio, dict) else None
-        cash_amount = None
-        if isinstance(cash_value, dict) and ("units" in cash_value or "nano" in cash_value):
-            cash_amount = Decimal(str(cash_value.get("units", 0))) + Decimal(str(cash_value.get("nano", 0))) / Decimal("1000000000")
-        elif cash_value is not None:
-            cash_amount = Decimal(str(cash_value))
+        cash_amount = self._money_decimal(cash_value) if cash_value is not None else None
 
-        # In sandbox, GetSandboxPositions is the authoritative source for
-        # money positions. Use it when portfolio cash is missing or zero.
+        # Sandbox cash is returned by GetSandboxPositions as PositionsMoney.
+        # Current API schema uses available_value / blocked_value.
         if cash_amount is None or cash_amount == 0:
             raw_money = positions.get("money", []) if isinstance(positions, dict) else []
-            rub_items = [item for item in raw_money if str(item.get("currency", "")).upper() == "RUB"]
-            if rub_items:
-                total = Decimal("0")
-                for item in rub_items:
-                    available = item.get("available", 0)
-                    if isinstance(available, dict) and ("units" in available or "nano" in available):
-                        total += Decimal(str(available.get("units", 0))) + Decimal(str(available.get("nano", 0))) / Decimal("1000000000")
-                    else:
-                        total += Decimal(str(available))
-                cash_amount = total
+            total_available = Decimal("0")
+            found_rub = False
+            for item in raw_money:
+                if str(item.get("currency", "")).upper() != "RUB":
+                    continue
+                found_rub = True
+                available = item.get("available_value", item.get("available", 0))
+                total_available += self._money_decimal(available)
+            if found_rub:
+                cash_amount = total_available
 
-        # If the sandbox contains only cash and portfolio exposes it as the
-        # total portfolio value, that value is the available cash.
-        securities = positions.get("securities", []) if isinstance(positions, dict) else []
-        if (cash_amount is None or cash_amount == 0) and not securities:
-            total_portfolio = portfolio.get("total_amount_portfolio") if isinstance(portfolio, dict) else None
-            if isinstance(total_portfolio, dict) and ("units" in total_portfolio or "nano" in total_portfolio):
-                cash_amount = Decimal(str(total_portfolio.get("units", 0))) + Decimal(str(total_portfolio.get("nano", 0))) / Decimal("1000000000")
-            elif total_portfolio is not None:
-                cash_amount = Decimal(str(total_portfolio))
-
+        # A newly created sandbox account can have no money position yet.
         if cash_amount is None:
-            raise RuntimeError(
-                "Не удалось определить доступные RUB-средства sandbox.\n"
-                f"GetSandboxPositions: {positions}\n"
-                f"GetSandboxPortfolio: {portfolio}"
-            )
+            cash_amount = Decimal("0")
 
         whole = cash_amount.quantize(Decimal("1"))
         nano = int((cash_amount - whole) * Decimal("1000000000"))
@@ -93,7 +90,9 @@ class TInvestAdapterClient:
         result["money"] = [{
             "currency": "RUB",
             "available": {"units": str(whole), "nano": nano},
+            "available_value": {"units": str(whole), "nano": nano},
             "blocked": {"units": "0", "nano": 0},
+            "blocked_value": {"units": "0", "nano": 0},
         }]
         return result
 
