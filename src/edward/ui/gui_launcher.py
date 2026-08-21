@@ -1,41 +1,12 @@
 from __future__ import annotations
 
-# Route the GUI's adapter startup through the contract wrapper before importing
-# edward.ui.app.main, because app.main imports _start_adapter into its module.
-import edward.ui.app as _app_module
+import os
+import subprocess
+from pathlib import Path
 
-_original_start_adapter = _app_module._start_adapter
-
-
-def _start_adapter_with_contract_wrapper(token, environment):
-    from pathlib import Path
-    import os
-    import subprocess
-
-    root = Path(__file__).resolve().parents[3]
-    python_exe = root / ".venv-tinvest" / "Scripts" / "python.exe"
-    wrapper = root / "runtime" / "tinvest_adapter_fixed.py"
-    if not wrapper.exists():
-        return _original_start_adapter(token, environment)
-    env = os.environ.copy()
-    env["EDWARD_TINVEST_TOKEN"] = token
-    env["EDWARD_TINVEST_ENV"] = environment.value
-    env["EDWARD_TINVEST_PORT"] = "8765"
-    print(f"[ADAPTER] Starting contract wrapper: {wrapper}", flush=True)
-    print(f"[ADAPTER] Environment: {environment.value.upper()}", flush=True)
-    return subprocess.Popen(
-        [str(python_exe), str(wrapper)],
-        env=env,
-        stdin=subprocess.DEVNULL,
-        stdout=None,
-        stderr=None,
-    )
-
-
-_app_module._start_adapter = _start_adapter_with_contract_wrapper
-
-from edward.ui import localization_bootstrap  # noqa: E402,F401
-from edward.ui.app import EdwardApp, main  # noqa: E402
+from edward.ui import localization_bootstrap  # noqa: F401
+from edward.ui import app as app_module
+from edward.ui.app import EdwardApp, main
 from edward.ui.error_reporting import install_error_reporting
 from edward.ui.trading_ui_guard import install_trading_ui_guard
 from edward.ui.sandbox_funding_ui import install_sandbox_funding_ui
@@ -49,6 +20,38 @@ from edward.ui.contract_ui_fixes import install_contract_ui_fixes
 from edward.ui.portfolio_quantity_fix import install_portfolio_quantity_fix
 from edward.ui.final_history_fix import install_final_history_fix
 from edward.ui.final_order_history_fix import install_final_order_history_fix
+from edward.config.settings import Environment
+
+
+def _contract_adapter_start(token: str, environment: Environment):
+    root = Path(__file__).resolve().parents[3]
+    python_exe = root / ".venv-tinvest" / "Scripts" / "python.exe"
+    adapter_script = root / "runtime" / "tinvest_adapter_fixed.py"
+    if not python_exe.exists():
+        raise RuntimeError(f"T-Invest Python runtime not found: {python_exe}")
+    if not adapter_script.exists():
+        raise RuntimeError(f"Contract adapter wrapper not found: {adapter_script}")
+
+    env = os.environ.copy()
+    env["EDWARD_TINVEST_TOKEN"] = token
+    env["EDWARD_TINVEST_ENV"] = environment.value
+    env["EDWARD_TINVEST_PORT"] = "8765"
+
+    print(f"[ADAPTER] Starting contract wrapper: {adapter_script}", flush=True)
+    print(f"[ADAPTER] Environment: {environment.value.upper()}", flush=True)
+    return subprocess.Popen(
+        [str(python_exe), str(adapter_script)],
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=None,
+        stderr=None,
+    )
+
+
+# app.main imported _start_adapter from edward.main into its module namespace.
+# Replace that bound reference before calling main(), so the GUI really starts
+# the contract-driven wrapper rather than the legacy adapter entry point.
+app_module._start_adapter = _contract_adapter_start
 
 
 install_sandbox_data_routing()
