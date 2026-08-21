@@ -9,7 +9,6 @@ from edward.services.balance_service import BalanceService
 
 
 def install_operations_history_ui(app_class: type[Any]) -> None:
-    """Replace the history page with API operation history and explicit statuses."""
     if getattr(app_class, "_operations_history_installed", False):
         return
 
@@ -53,7 +52,6 @@ def install_operations_history_ui(app_class: type[Any]) -> None:
         return app_class._money(value)
 
     def _financial_snapshot(self: Any, account_id: str) -> tuple[Decimal, Decimal]:
-        """Use exactly the same source and calculation as the Overview page."""
         positions = self.client.get_positions(account_id)
         portfolio = self.client.get_portfolio(account_id)
         summary = BalanceService.build_summary(positions, portfolio)
@@ -64,14 +62,12 @@ def install_operations_history_ui(app_class: type[Any]) -> None:
         columns = [tree.heading(column, "text") for column in tree["columns"]]
         lines = ["\t".join(columns)]
         for item in items:
-            values = tree.item(item, "values")
-            lines.append("\t".join(str(value) for value in values))
+            lines.append("\t".join(str(value) for value in tree.item(item, "values")))
         if len(lines) <= 1:
             messagebox.showinfo("Edward", "Нет строк для копирования.", parent=self)
             return
-        text = "\n".join(lines)
         self.clipboard_clear()
-        self.clipboard_append(text)
+        self.clipboard_append("\n".join(lines))
         self.update()
         self.status_var.set(f"Скопировано строк: {len(lines) - 1}")
 
@@ -95,7 +91,6 @@ def install_operations_history_ui(app_class: type[Any]) -> None:
         toolbar = ttk.Frame(self.content)
         toolbar.pack(fill="x", pady=(0, 10))
         ttk.Button(toolbar, text="Обновить историю", command=self.refresh_current).pack(side="left")
-
         tree = self._tree(
             self.content,
             ("Дата", "Время", "Счёт", "Тип", "Статус", "Сумма", "Валюта", "Текущий баланс", "Стоимость портфеля", "Инструмент", "Количество", "Операция ID"),
@@ -134,7 +129,6 @@ def install_operations_history_ui(app_class: type[Any]) -> None:
             instrument = self._field(operation, "ticker", self._field(operation, "instrument_uid", ""))
             quantity = self._field(operation, "quantity", self._field(operation, "lots", ""))
             operation_id = self._field(operation, "id", self._field(operation, "operation_id", ""))
-
             tree.insert("", "end", values=(date_text, time_text, account_display, _operation_name(operation), _status(operation), _decimal_text(money), str(currency).upper(), _decimal_text(current_balance), _decimal_text(portfolio_value), instrument, quantity, operation_id))
 
         for row in self.history.read_all():
