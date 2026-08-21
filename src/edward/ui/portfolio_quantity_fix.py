@@ -87,7 +87,7 @@ def _operation_direction(operation: Any) -> str:
         number = int(raw)
     except Exception:
         return ""
-    return {15: "BUY", 16: "BUY", 22: "SELL"}.get(number, "")
+    return {15: "BUY", 16: "BUY", 22: "SELL", 18: "SELL", 20: "BUY"}.get(number, "")
 
 
 def _operation_executed(operation: Any) -> bool:
@@ -100,39 +100,59 @@ def _operation_executed(operation: Any) -> bool:
     try:
         return int(raw) == 1
     except Exception:
-        return raw in ("", None)
+        return False
 
 
-def _operations_snapshot(client: Any, account_id: str) -> tuple[dict[str, Decimal], dict[str, dict[str, Any]]]:
-    try:
-        response = client.get_operations(account_id, 1000)
-    except Exception as exc:
-        print(f"[PORTFOLIO OPERATIONS ERROR] account_id={account_id} {type(exc).__name__}: {exc}", flush=True)
-        return {}, {}
+def _add_trade(totals: dict[str, Decimal], meta: dict[str, dict[str, Any]], *, key: str, uid: str, ticker: str, figi: str, quantity: Decimal, direction: str) -> None:
+    if not key or quantity <= 0 or direction not in {"BUY", "SELL"}:
+        return
+    sign = Decimal("1") if direction == "BUY" else Decimal("-1")
+    totals[key] = totals.get(key, Decimal("0")) + sign * quantity
+    meta.setdefault(key, {"instrument_uid": uid, "ticker": ticker, "figi": figi})
 
+
+def _operations_snapshot(client: Any, account_id: str, history: Any) -> tuple[dict[str, Decimal], dict[str, dict[str, Any]]]:
     totals: dict[str, Decimal] = {}
     meta: dict[str, dict[str, Any]] = {}
-    operations = _items(response, "operations", "items")
+
+    try:
+        response = client.get_operations(account_id, 1000)
+        operations = _items(response, "items", "operations")
+        print(f"[PORTFOLIO API OPERATIONS] account_id={account_id} count={len(operations)}", flush=True)
+    except Exception as exc:
+        print(f"[PORTFOLIO OPERATIONS ERROR] account_id={account_id} {type(exc).__name__}: {exc}", flush=True)
+        operations = []
+
     for operation in operations:
         if not _operation_executed(operation):
             continue
         direction = _operation_direction(operation)
-        if direction not in {"BUY", "SELL"}:
-            continue
-        keys = tuple(_field(operation, n, "") for n in ("instrument_uid", "position_uid", "figi", "ticker"))
-        key = next((str(v) for v in keys if v), "")
-        if not key:
-            continue
         quantity = _decimal(_field(operation, "quantity_done", _field(operation, "quantity", 0)))
-        if quantity <= 0:
+        uid = str(_field(operation, "instrument_uid", "") or "")
+        ticker = str(_field(operation, "ticker", "") or "")
+        figi = str(_field(operation, "figi", "") or "")
+        key = uid or figi or ticker
+        if _is_cash_position({"ticker": ticker, "instrument_uid": uid, "figi": figi}):
             continue
-        sign = Decimal("1") if direction == "BUY" else Decimal("-1")
-        totals[key] = totals.get(key, Decimal("0")) + sign * quantity
-        meta.setdefault(key, {
-            "instrument_uid": str(_field(operation, "instrument_uid", "") or ""),
-            "ticker": str(_field(operation, "ticker", "") or ""),
-            "figi": str(_field(operation, "figi", "") or ""),
-        })
+        _add_trade(totals, meta, key=key, uid=uid, ticker=ticker, figi=figi, quantity=quantity, direction=direction)
+
+    # Local lifecycle history is the final fallback. It is written immediately
+    # on order creation and updated to FILLED/ERROR by the order poller.
+    try:
+        for row in history.read_all():
+            if str(row.get("account_id", "")) != account_id or str(row.get("status", "")).upper() != "FILLED":
+                continue
+            direction = _operation_direction(row.get("operation", ""))
+            quantity = _decimal(row.get("quantity", 0))
+            uid = str(row.get("instrument_uid", "") or "")
+            ticker = str(row.get("ticker", "") or "")
+            figi = str(row.get("FIGI", "") or "")
+            key = uid or figi or ticker
+            if _is_cash_position({"ticker": ticker, "instrument_uid": uid, "figi": figi}):
+                continue
+            _add_trade(totals, meta, key=key, uid=uid, ticker=ticker, figi=figi, quantity=quantity, direction=direction)
+    except Exception as exc:
+        print(f"[PORTFOLIO LOCAL HISTORY ERROR] account_id={account_id}: {type(exc).__name__}: {exc}", flush=True)
 
     totals = {k: v for k, v in totals.items() if v > 0}
     print(f"[PORTFOLIO OPERATIONS QUANTITY] account_id={account_id} instruments={len(totals)} totals={totals}", flush=True)
@@ -151,14 +171,12 @@ def _quantity(client: Any, position: Any, security: Any, operation_totals: dict[
     uid = _uid(position)
     if quantity_lots > 0:
         lot_size = _lot_size(client, uid)
-        if blocked <= 0 and security is not None:
-            blocked = _decimal(_field(security, "blocked", 0))
         return quantity_lots * lot_size, blocked, f"PortfolioPosition.quantity_lots*lot({lot_size})"
 
     for key in (_field(position, "instrument_uid", ""), _field(position, "position_uid", ""), _field(position, "figi", ""), _field(position, "ticker", "")):
         text = str(key or "")
         if text in operation_totals and operation_totals[text] > 0:
-            return operation_totals[text], blocked, "GetSandboxOperationsByCursor BUY-SELL"
+            return operation_totals[text], blocked, "CurrentAccountOperations/local_history BUY-SELL"
 
     balance = _decimal(_field(security, "balance", 0)) if security is not None else Decimal("0")
     security_blocked = _decimal(_field(security, "blocked", 0)) if security is not None else Decimal("0")
@@ -178,11 +196,8 @@ def install_portfolio_quantity_fix(EdwardApp: Any) -> None:
         portfolio = self.client.get_portfolio(aid)
         securities = _items(positions, "securities")
         portfolio_positions = [p for p in _items(portfolio, "positions") if not _is_cash_position(p)]
-        operation_totals, operation_meta = _operations_snapshot(self.client, aid)
+        operation_totals, operation_meta = _operations_snapshot(self.client, aid, self.history)
 
-        # The sandbox portfolio may return the account's financial totals while
-        # omitting security rows immediately after a new account/order cycle.
-        # Rebuild missing security rows from this SAME account's executed BUY/SELL operations.
         indexed_positions: dict[str, Any] = {}
         for p in portfolio_positions:
             for key in (_field(p, "instrument_uid", ""), _field(p, "position_uid", ""), _field(p, "figi", ""), _field(p, "ticker", "")):
@@ -206,17 +221,14 @@ def install_portfolio_quantity_fix(EdwardApp: Any) -> None:
             print(f"[PORTFOLIO REBUILD] account_id={aid} ticker={synthetic['ticker']} uid={synthetic['instrument_uid']} quantity={net_quantity}", flush=True)
 
         tree = self._tree(self.content, ("Тикер", "UID", "Количество, шт.", "Заблокировано заявками, шт.", "Цена 1 бумаги", "Стоимость", "Доходность"), (110, 340, 140, 210, 140, 150, 140))
-
         total_value = Decimal("0")
         displayed = 0
         for position in portfolio_positions:
-            if _is_cash_position(position):
-                continue
             security = _find_security(position, securities)
             quantity, blocked, source = _quantity(self.client, position, security, operation_totals)
             uid = str(_field(position, "instrument_uid", _field(position, "uid", _field(security, "instrument_uid", ""))) or "")
             ticker = str(_field(position, "ticker", _field(security, "ticker", "")) or "")
-            if quantity <= 0:
+            if _is_cash_position(position) or quantity <= 0:
                 continue
             price = _decimal(_field(position, "current_price", 0))
             if price <= 0 and uid:
