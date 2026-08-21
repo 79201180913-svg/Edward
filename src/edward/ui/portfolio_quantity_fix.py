@@ -45,6 +45,17 @@ def _uid(value: Any) -> str:
     return str(_field(value, "instrument_uid", _field(value, "uid", "")) or "")
 
 
+def _is_cash_position(position: Any) -> bool:
+    ticker = str(_field(position, "ticker", "") or "").upper()
+    currency = str(_field(position, "currency", "") or "").upper()
+    instrument_type = str(_field(position, "instrument_type", _field(position, "instrument_kind", "")) or "").upper()
+    return (
+        ticker == "RUB000UTSTOM"
+        or ticker.startswith("RUB")
+        or (currency == "RUB" and instrument_type in {"CURRENCY", "INSTRUMENT_TYPE_CURRENCY"})
+    )
+
+
 def _find_security(position: Any, securities: list[Any]) -> Any:
     keys = {
         str(_field(position, "instrument_uid", "") or ""),
@@ -196,6 +207,10 @@ def install_portfolio_quantity_fix(EdwardApp: Any) -> None:
         total_value = Decimal("0")
         displayed = 0
         for position in portfolio_positions:
+            if _is_cash_position(position):
+                print(f"[PORTFOLIO CASH] ticker={_field(position, 'ticker', '')} excluded from securities table", flush=True)
+                continue
+
             security = _find_security(position, securities)
             quantity, blocked, source = _quantity(self.client, position, security, operation_totals)
             uid = str(_field(position, "instrument_uid", _field(position, "uid", _field(security, "instrument_uid", ""))) or "")
