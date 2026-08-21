@@ -68,9 +68,6 @@ def install_portfolio_ui() -> None:
             available = BalanceService._decimal(
                 BalanceService._money_field(money, "available", "available_value")
             )
-            # Sandbox GetSandboxPositions returns a MoneyValue for cash.
-            # It does not expose a separate cash blocked amount, so do not
-            # duplicate the available balance in the blocked column.
             blocked = Decimal("0")
             tree.insert(
                 "",
@@ -81,8 +78,8 @@ def install_portfolio_ui() -> None:
                     "CASH",
                     self._money(available, cur),
                     self._money(blocked, cur),
-                    self._money(Decimal("1"), cur),
-                    self._money(available, cur),
+                    "—",
+                    "—",
                     "—",
                 ),
             )
