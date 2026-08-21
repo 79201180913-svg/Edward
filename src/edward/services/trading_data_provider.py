@@ -17,7 +17,6 @@ _DEBUG_FILE = Path(__file__).resolve().parents[3] / "runtime" / "edward_debug.lo
 
 
 def _debug_file(message: str) -> None:
-    """Write critical trading diagnostics to a persistent local file."""
     try:
         _DEBUG_FILE.parent.mkdir(parents=True, exist_ok=True)
         with _DEBUG_FILE.open("a", encoding="utf-8") as fh:
@@ -42,10 +41,16 @@ class AdapterTradingDataProvider:
 
         status = self._client.get_trading_status(request.instrument_uid)
         api_trade_available = bool(self._field(status, "api_trade_available_flag", False))
-        limit_order_available = bool(self._field(status, "limit_order_available_flag", True))
-        available = api_trade_available and (request.order_type != OrderType.LIMIT or limit_order_available)
+        limit_available = bool(self._field(status, "limit_order_available_flag", False))
+        market_available = bool(self._field(status, "market_order_available_flag", False))
+        type_available = {
+            OrderType.LIMIT: limit_available,
+            OrderType.MARKET: market_available,
+        }.get(request.order_type, False)
+        available = api_trade_available and type_available
         trading_diagnostic = (
             f"api_trade_available_flag={self._field(status, 'api_trade_available_flag', None)!r}; "
+            f"market_order_available_flag={self._field(status, 'market_order_available_flag', None)!r}; "
             f"limit_order_available_flag={self._field(status, 'limit_order_available_flag', None)!r}; "
             f"trading_status={self._field(status, 'trading_status', self._field(status, 'status', None))!r}"
         )
@@ -56,14 +61,19 @@ class AdapterTradingDataProvider:
         if increment is None and instrument is not None:
             increment = self._decimal(self._field(instrument, "min_price_increment_value"))
 
-        # Sandbox buying funds must come directly from the real sandbox
-        # GetSandboxPositions response. Do not route this through BalanceService
-        # or another derived/normalized balance source.
+        # lot is the number of securities represented by one order lot.
+        lot_size = self._decimal(
+            self._field(instrument, "lot", self._field(instrument, "lot_size", 1))
+        ) or Decimal("1")
+        if lot_size <= 0:
+            lot_size = Decimal("1")
+
         is_sandbox = str(self._client.health().get("environment", "")).lower() == "sandbox"
-        if is_sandbox:
-            positions = self._client.get_sandbox_positions(request.account_id)
-        else:
-            positions = self._client.get_positions(request.account_id)
+        positions = (
+            self._client.get_sandbox_positions(request.account_id)
+            if is_sandbox
+            else self._client.get_positions(request.account_id)
+        )
 
         money = self._items(positions, "money")
         securities = BalanceService.get_security_positions(positions)
@@ -74,31 +84,14 @@ class AdapterTradingDataProvider:
         for item in money:
             if str(self._field(item, "currency", "")).upper() != "RUB":
                 continue
-
-            if is_sandbox and isinstance(item, dict) and ("units" in item or "nano" in item):
+            available_raw = self._field(item, "available", None)
+            if available_raw is None:
+                available_raw = self._field(item, "available_value", None)
+            if available_raw is None and isinstance(item, dict) and ("units" in item or "nano" in item):
                 available_raw = item
-            else:
-                available_raw = self._field(item, "available", None)
-                if available_raw is None:
-                    available_raw = self._field(item, "available_value", None)
-                if available_raw is None and isinstance(item, dict) and ("units" in item or "nano" in item):
-                    available_raw = item
-
             parsed = self._decimal(available_raw)
-            _debug_file(
-                f"MONEY account_id={request.account_id} item={item} "
-                f"available_raw={available_raw} parsed={parsed}"
-            )
+            _debug_file(f"MONEY account_id={request.account_id} item={item} available_raw={available_raw} parsed={parsed}")
             available_money += parsed or Decimal("0")
-
-        print(
-            f"[TRADING CASH] account_id={request.account_id} sandbox={is_sandbox} "
-            f"available_money={available_money} raw_money={raw_money}"
-        )
-        _debug_file(
-            f"CASH RESULT account_id={request.account_id} sandbox={is_sandbox} "
-            f"available_money={available_money} raw_money={raw_money}"
-        )
 
         available_position = None
         for item in securities:
@@ -109,15 +102,16 @@ class AdapterTradingDataProvider:
                 break
 
         unit_price = request.price or market_price
-        estimated_total = unit_price * request.quantity if unit_price is not None else None
+        estimated_total = unit_price * Decimal(request.quantity) * lot_size if unit_price is not None else None
         estimated_commission = Decimal("0")
 
-        # GetSandboxOrderPrice is defined for preliminary LIMIT-order pricing.
-        # MARKET orders use the current market price for the local pre-flight estimate.
         if request.order_type == OrderType.LIMIT and unit_price is not None:
             try:
                 whole = unit_price.quantize(Decimal("1"))
-                quotation = {"units": str(whole), "nano": int((unit_price - whole) * Decimal("1000000000"))}
+                quotation = {
+                    "units": str(whole),
+                    "nano": int((unit_price - whole) * Decimal("1000000000")),
+                }
                 price_response = self._client.get_order_price(
                     request.account_id,
                     request.instrument_uid,
@@ -132,16 +126,11 @@ class AdapterTradingDataProvider:
             except Exception as exc:
                 _debug_file(f"ORDER PRICE ERROR account_id={request.account_id} error={type(exc).__name__}: {exc}")
 
-        print(
-            f"[TRADING FUNDS] side={request.side.value} quantity={request.quantity} "
-            f"unit_price={unit_price} estimated_total={estimated_total} "
-            f"commission={estimated_commission} available_money={available_money} "
-            f"available_position={available_position} trading_allowed={available}"
-        )
         _debug_file(
             f"FUNDS account_id={request.account_id} side={request.side.value} quantity={request.quantity} "
-            f"unit_price={unit_price} estimated_total={estimated_total} commission={estimated_commission} "
-            f"available_money={available_money} available_position={available_position} trading_allowed={available}"
+            f"lot_size={lot_size} unit_price={unit_price} estimated_total={estimated_total} "
+            f"commission={estimated_commission} available_money={available_money} "
+            f"available_position={available_position} trading_allowed={available}"
         )
 
         return ValidationContext(
