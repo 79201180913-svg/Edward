@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import logging
+import re
 from decimal import Decimal, InvalidOperation
 from tkinter import messagebox, simpledialog
 from typing import Any
 
 from edward.services.balance_service import BalanceService
+
+logger = logging.getLogger("edward.sandbox_funding")
 
 
 def install_sandbox_funding_ui(app_class: type[Any]) -> None:
@@ -43,11 +47,22 @@ def install_sandbox_funding_ui(app_class: type[Any]) -> None:
         except Exception:
             return Decimal("0")
 
+    def _parse_payin_balance(value: Any) -> Decimal | None:
+        """Accept normal JSON MoneyValue and SDK string fallback returned by adapter."""
+        if value is None:
+            return None
+        if isinstance(value, (dict, Decimal, int, float)):
+            return _money_value(value)
+        text = str(value)
+        match = re.search(r"units=([-+]?\d+(?:\.\d+)?).*?nano=([-+]?\d+)", text)
+        if match:
+            return Decimal(match.group(1)) + Decimal(match.group(2)) / Decimal("1000000000")
+        return None
+
     def _get_sandbox_rub_balance(self: Any, account_id: str) -> Decimal:
         """Get actual RUB cash from GetSandboxPositions; portfolio does not contain cash."""
         positions = self.client.get_sandbox_positions(account_id)
         money = self._items(positions, "money")
-        logger = getattr(__import__("logging"), "getLogger")("edward.sandbox_funding")
         logger.info("[SANDBOX FUNDING] GetSandboxPositions account_id=%s money=%s", account_id, money)
 
         for position in money:
@@ -67,7 +82,6 @@ def install_sandbox_funding_ui(app_class: type[Any]) -> None:
             logger.info("[SANDBOX FUNDING] RUB available before/after operation=%s", balance)
             return balance
 
-        # Newly created sandbox account may have no money position yet.
         if not money:
             logger.info("[SANDBOX FUNDING] No money positions yet; treating initial RUB balance as 0")
             return Decimal("0")
@@ -121,28 +135,43 @@ def install_sandbox_funding_ui(app_class: type[Any]) -> None:
             return
 
         try:
+            logger.info("[SANDBOX FUNDING] START account_id=%s amount=%s", account_id, amount)
             self.status_var.set("Получение текущего баланса...")
             self.update_idletasks()
             balance_before = _get_sandbox_rub_balance(self, account_id)
             expected_balance = balance_before + amount
+            logger.info(
+                "[SANDBOX FUNDING] BEFORE account_id=%s balance_before=%s expected=%s",
+                account_id,
+                balance_before,
+                expected_balance,
+            )
 
             self.status_var.set("Пополнение sandbox-счёта...")
             self.update_idletasks()
             result = self.client.sandbox_pay_in(account_id, amount)
+            logger.info("[SANDBOX FUNDING] PAYIN RESULT account_id=%s result=%s", account_id, result)
 
             response_balance_raw = self._field(result, "balance", None)
             if response_balance_raw is None:
+                response_balance_raw = self._field(result, "value", None)
+            payin_balance = _parse_payin_balance(response_balance_raw)
+            if payin_balance is None:
                 raise RuntimeError(
-                    "SandboxPayIn не вернул фактический баланс.\n"
+                    "SandboxPayIn не вернул распознаваемый фактический баланс.\n"
                     f"Ответ API: {result}"
                 )
-            payin_balance = BalanceService._decimal(response_balance_raw)
 
-            # Verify the same account again via GetSandboxPositions. This is
-            # the authoritative source for cash positions used by trading.
             self.status_var.set("Проверка фактического баланса после пополнения...")
             self.update_idletasks()
             actual_balance = _get_sandbox_rub_balance(self, account_id)
+            logger.info(
+                "[SANDBOX FUNDING] AFTER account_id=%s payin_balance=%s actual_balance=%s expected=%s",
+                account_id,
+                payin_balance,
+                actual_balance,
+                expected_balance,
+            )
 
             if payin_balance != expected_balance or actual_balance != expected_balance or actual_balance != payin_balance:
                 raise RuntimeError(
