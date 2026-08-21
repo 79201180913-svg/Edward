@@ -14,6 +14,7 @@ from edward.ui.console_logging import install_console_logging
 from edward.ui.final_fixes import install_final_fixes
 from edward.ui.contract_ui_fixes import install_contract_ui_fixes
 from edward.ui.portfolio_quantity_fix import install_portfolio_quantity_fix
+from edward.ui.final_history_fix import install_final_history_fix
 
 
 install_sandbox_data_routing()
@@ -27,6 +28,7 @@ install_console_logging(EdwardApp)
 install_final_fixes(EdwardApp)
 install_contract_ui_fixes(EdwardApp)
 install_portfolio_quantity_fix(EdwardApp)
+install_final_history_fix(EdwardApp)
 
 
 if __name__ == "__main__":
