@@ -12,6 +12,7 @@ from edward.ui.ux_fixes import install_ux_fixes
 from edward.ui.compat_fixes import install_compat_fixes
 from edward.ui.console_logging import install_console_logging
 from edward.ui.final_fixes import install_final_fixes
+from edward.ui.contract_ui_fixes import install_contract_ui_fixes
 
 
 install_sandbox_data_routing()
@@ -23,6 +24,7 @@ install_ux_fixes(EdwardApp)
 install_compat_fixes(EdwardApp)
 install_console_logging(EdwardApp)
 install_final_fixes(EdwardApp)
+install_contract_ui_fixes(EdwardApp)
 
 
 if __name__ == "__main__":
