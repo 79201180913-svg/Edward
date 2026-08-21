@@ -9,10 +9,7 @@ def install_portfolio_ui() -> None:
     """Extend the portfolio page with cash positions and portfolio total."""
     from edward.ui.app import EdwardApp
 
-    original_page_portfolio = EdwardApp._page_portfolio
-
     def _page_portfolio(self):
-        import tkinter as tk
         from tkinter import ttk
 
         ttk.Label(self.content, text="Портфель", style="Title.TLabel").pack(anchor="w", pady=(0, 8))
@@ -24,20 +21,23 @@ def install_portfolio_ui() -> None:
         portfolio = self.client.get_portfolio(aid)
         summary = BalanceService.build_summary(positions, portfolio)
         currency = summary.currency or "RUB"
+        displayed_portfolio_value = summary.portfolio_value
+        if displayed_portfolio_value <= 0 and summary.cash > 0:
+            displayed_portfolio_value = summary.cash + summary.securities
 
         summary_frame = ttk.Frame(self.content)
         summary_frame.pack(fill="x", pady=(0, 12))
         ttk.Label(
             summary_frame,
             text=f"Доступно: {self._money(summary.available, currency)} | "
-                 f"Стоимость портфеля: {self._money(summary.portfolio_value, currency)} | "
+                 f"Стоимость портфеля: {self._money(displayed_portfolio_value, currency)} | "
                  f"Ценные бумаги: {self._money(summary.securities, currency)}",
         ).pack(anchor="w")
 
         tree = self._tree(
             self.content,
             ("Тип", "Тикер", "UID", "Количество", "Заблокировано", "Цена", "Стоимость", "Доходность"),
-            (110, 110, 330, 120, 140, 120, 140, 130),
+            (120, 110, 330, 120, 140, 120, 140, 130),
         )
 
         money_rows = self._items(positions, "money")
