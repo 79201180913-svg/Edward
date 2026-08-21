@@ -61,37 +61,28 @@ def _sandbox_operations(self, account_id, limit=1000):
 
 
 def _list_instruments(self, kind="SHARE", trade=True):
-    methods = {
-        "SHARE": "get_shares",
-        "BOND": "get_bonds",
-        "ETF": "get_etfs",
-        "CURRENCY": "get_currencies",
-        "FUTURES": "get_futures",
-    }
     key = str(kind).upper()
-    method_name = methods.get(key)
-    if not method_name:
+    method_map = {
+        "SHARE": "Shares",
+        "BOND": "Bonds",
+        "ETF": "Etfs",
+        "CURRENCY": "Currencies",
+        "FUTURES": "Futures",
+    }
+    method_name = method_map.get(key)
+    if method_name is None:
         raise ValueError(f"Unsupported instrument kind: {kind}")
 
-    service = self._service("instruments")
-    method = getattr(service, method_name, None)
-    if method is None:
-        raise RuntimeError(f"T-Invest SDK instruments service does not provide {method_name}()")
-
-    kwargs = {
-        "instrument_status": "INSTRUMENT_STATUS_BASE" if trade else "INSTRUMENT_STATUS_ALL",
-        "instrument_exchange": "INSTRUMENT_EXCHANGE_UNSPECIFIED",
+    request = {
+        "instrumentStatus": "INSTRUMENT_STATUS_BASE" if trade else "INSTRUMENT_STATUS_ALL",
+        "instrumentExchange": "INSTRUMENT_EXCHANGE_UNSPECIFIED",
     }
-    try:
-        result = method(**kwargs)
-    except TypeError:
-        result = method()
-
-    data = _adapter.message_to_dict(result)
+    rest_method = f"InstrumentsService/{method_name}"
+    data = self._rest_request(rest_method, request)
     _adapter.logger.info(
-        "[INSTRUMENTS SDK] kind=%s method=%s count=%s",
+        "[INSTRUMENTS REST] kind=%s method=%s count=%s",
         key,
-        method_name,
+        rest_method,
         len(data.get("instruments", []) or []),
     )
     return data
