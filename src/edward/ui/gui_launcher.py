@@ -10,6 +10,7 @@ from edward.ui.sandbox_data_routing import install_sandbox_data_routing
 from edward.ui.operations_history_ui import install_operations_history_ui
 from edward.ui.ux_fixes import install_ux_fixes
 from edward.ui.compat_fixes import install_compat_fixes
+from edward.ui.console_logging import install_console_logging
 
 
 install_sandbox_data_routing()
@@ -19,6 +20,7 @@ install_sandbox_funding_ui(EdwardApp)
 install_operations_history_ui(EdwardApp)
 install_ux_fixes(EdwardApp)
 install_compat_fixes(EdwardApp)
+install_console_logging(EdwardApp)
 
 
 if __name__ == "__main__":
