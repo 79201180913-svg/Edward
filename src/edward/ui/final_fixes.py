@@ -24,8 +24,12 @@ def _decimal(value: Any) -> Decimal:
         return Decimal("0")
     if isinstance(value, Decimal):
         return value
-    if isinstance(value, dict) and ("units" in value or "nano" in value):
-        return Decimal(str(value.get("units", 0))) + Decimal(str(value.get("nano", 0))) / Decimal("1000000000")
+    if isinstance(value, dict):
+        if "units" in value or "nano" in value:
+            return Decimal(str(value.get("units", 0))) + Decimal(str(value.get("nano", 0))) / Decimal("1000000000")
+        for key in ("value", "quantity", "balance", "blocked"):
+            if key in value and value[key] is not value:
+                return _decimal(value[key])
     try:
         return Decimal(str(value))
     except Exception:
@@ -40,15 +44,58 @@ def _console(app: Any, message: str) -> None:
     print(message, flush=True)
 
 
-def _security_fallback(positions: Any) -> dict[str, Any]:
+def _security_records(positions: Any) -> list[Any]:
+    return _items(positions, "securities")
+
+
+def _security_index(positions: Any) -> dict[str, Any]:
     result: dict[str, Any] = {}
-    for item in _items(positions, "securities"):
-        uid = str(_field(item, "instrument_uid", ""))
-        figi = str(_field(item, "figi", ""))
-        key = uid or figi
-        if key:
-            result[key] = item
+    for item in _security_records(positions):
+        keys = (
+            _field(item, "instrument_uid", ""),
+            _field(item, "position_uid", ""),
+            _field(item, "figi", ""),
+            _field(item, "ticker", ""),
+        )
+        for key in keys:
+            text = str(key or "")
+            if text:
+                result[text] = item
     return result
+
+
+def _portfolio_key(position: Any) -> tuple[str, ...]:
+    return tuple(
+        str(_field(position, name, "") or "")
+        for name in ("instrument_uid", "position_uid", "figi", "ticker")
+    )
+
+
+def _find_security(portfolio_position: Any, index: dict[str, Any]) -> Any:
+    for key in _portfolio_key(portfolio_position):
+        if key and key in index:
+            return index[key]
+    return None
+
+
+def _position_quantity(portfolio_position: Any, security_position: Any) -> tuple[Decimal, Decimal, str]:
+    quantity = _decimal(_field(portfolio_position, "quantity"))
+    blocked_lots = _decimal(_field(portfolio_position, "blocked_lots"))
+
+    fallback_balance = _decimal(_field(security_position, "balance")) if security_position is not None else Decimal("0")
+    fallback_blocked = _decimal(_field(security_position, "blocked")) if security_position is not None else Decimal("0")
+
+    # T-Invest contract:
+    # PortfolioPosition.quantity = total quantity in pieces.
+    # PositionsSecurities.balance = unlocked quantity in pieces.
+    # PositionsSecurities.blocked = quantity locked by orders.
+    if quantity <= 0:
+        quantity = fallback_balance + fallback_blocked
+    if blocked_lots <= 0:
+        blocked_lots = fallback_blocked
+
+    source = "PortfolioPosition.quantity" if _decimal(_field(portfolio_position, "quantity")) > 0 else "PositionsSecurities.balance+blocked"
+    return quantity, blocked_lots, source
 
 
 def _page_overview(app: Any) -> None:
@@ -56,25 +103,23 @@ def _page_overview(app: Any) -> None:
     aid = app._require_account()
     if not aid:
         return
+
     positions = app.client.get_positions(aid)
     portfolio = app.client.get_portfolio(aid)
-    summary = app.services_balance = __import__("edward.services.balance_service", fromlist=["BalanceService"]).BalanceService.build_summary(positions, portfolio)
+    summary = __import__("edward.services.balance_service", fromlist=["BalanceService"]).BalanceService.build_summary(positions, portfolio)
     portfolio_positions = _items(portfolio, "positions")
-    securities_fallback = _security_fallback(positions)
+    security_index = _security_index(positions)
 
     securities_value = _decimal(_field(portfolio, "total_amount_shares"))
     securities_count = Decimal("0")
-    for p in portfolio_positions:
-        quantity = _decimal(_field(p, "quantity"))
+    for position in portfolio_positions:
+        security = _find_security(position, security_index)
+        quantity, _, _ = _position_quantity(position, security)
         securities_count += quantity
-        securities_value += Decimal("0") if securities_value != 0 else quantity * _decimal(_field(p, "current_price"))
-    if securities_value == 0:
-        for p in securities_fallback.values():
-            securities_count += _decimal(_field(p, "balance")) + _decimal(_field(p, "blocked"))
 
     portfolio_value = _decimal(_field(portfolio, "total_amount_portfolio"))
-    if portfolio_value == 0:
-        portfolio_value = summary.portfolio_value
+    if portfolio_value <= 0:
+        portfolio_value = summary.available + securities_value
 
     cards = ttk.Frame(app.content)
     cards.pack(fill="x")
@@ -89,7 +134,12 @@ def _page_overview(app: Any) -> None:
     for i, (title, value, monetary) in enumerate(values):
         shown = f"{_money(value)} RUB" if monetary else f"{value:,.0f}".replace(",", " ")
         app._card(cards, title, shown, i)
-    _console(app, f"[OVERVIEW] account_id={aid} balance={summary.available} securities={securities_value} securities_count={securities_count} portfolio={portfolio_value}")
+
+    _console(
+        app,
+        f"[OVERVIEW] account_id={aid} balance={summary.available} securities={securities_value} "
+        f"securities_count={securities_count} api_total={_field(portfolio, 'total_amount_portfolio')} portfolio={portfolio_value}",
+    )
 
 
 def _page_portfolio(app: Any) -> None:
@@ -97,10 +147,11 @@ def _page_portfolio(app: Any) -> None:
     aid = app._require_account()
     if not aid:
         return
+
     positions = app.client.get_positions(aid)
     portfolio = app.client.get_portfolio(aid)
     portfolio_positions = _items(portfolio, "positions")
-    fallback = _security_fallback(positions)
+    security_index = _security_index(positions)
 
     tree = app._tree(
         app.content,
@@ -108,49 +159,55 @@ def _page_portfolio(app: Any) -> None:
         (100, 330, 140, 210, 140, 150, 140),
     )
 
-    by_uid: dict[str, Any] = {}
-    for p in portfolio_positions:
-        key = str(_field(p, "instrument_uid", "")) or str(_field(p, "figi", ""))
-        if key:
-            by_uid[key] = p
-
-    # PortfolioPosition is authoritative for price/yield/quantity. PositionsSecurities
-    # is the reliable fallback for quantity when sandbox portfolio is partially populated.
-    merged_keys = list(dict.fromkeys(list(by_uid) + list(fallback)))
-    for key in merged_keys:
-        p = by_uid.get(key, {})
-        s = fallback.get(key, {})
-        quantity = _decimal(_field(p, "quantity"))
-        blocked = _decimal(_field(p, "blocked_lots"))
-        if quantity == 0:
-            quantity = _decimal(_field(s, "balance")) + _decimal(_field(s, "blocked"))
-        if blocked == 0:
-            blocked = _decimal(_field(s, "blocked"))
-        ticker = _field(p, "ticker", _field(s, "ticker", ""))
-        uid = _field(p, "instrument_uid", _field(s, "instrument_uid", key))
-        price = _decimal(_field(p, "current_price"))
-        if price == 0 and uid:
+    # First use the positions returned by GetSandboxPortfolio/GetPortfolio.
+    # Then enrich each row from GetSandboxPositions because sandbox may omit or
+    # zero-fill PortfolioPosition.quantity while PositionsSecurities has the
+    # authoritative balance/blocked split.
+    for position in portfolio_positions:
+        security = _find_security(position, security_index)
+        quantity, blocked, quantity_source = _position_quantity(position, security)
+        ticker = str(_field(position, "ticker", "") or _field(security, "ticker", ""))
+        uid = str(_field(position, "instrument_uid", "") or _field(security, "instrument_uid", ""))
+        figi = str(_field(position, "figi", "") or _field(security, "figi", ""))
+        price = _decimal(_field(position, "current_price"))
+        if price <= 0 and uid:
             try:
-                prices = _items(app.client.get_last_prices([str(uid)]), "last_prices")
+                prices = _items(app.client.get_last_prices([uid]), "last_prices")
                 if prices:
                     price = _decimal(_field(prices[0], "price"))
             except Exception as exc:
                 _console(app, f"[PORTFOLIO PRICE ERROR] uid={uid}: {exc}")
         value = quantity * price
-        yield_value = _decimal(_field(p, "expected_yield"))
-        tree.insert("", "end", values=(
-            ticker,
-            uid,
-            f"{quantity:,.0f}".replace(",", " "),
-            f"{blocked:,.0f}".replace(",", " "),
-            _money(price),
-            _money(value),
-            f"{yield_value}%",
-        ))
+        yield_value = _decimal(_field(position, "expected_yield", _field(position, "expected_yield_fifo", 0)))
 
-    if not merged_keys:
+        tree.insert(
+            "",
+            "end",
+            values=(
+                ticker,
+                uid or figi,
+                f"{quantity:,.0f}".replace(",", " "),
+                f"{blocked:,.0f}".replace(",", " "),
+                _money(price),
+                _money(value),
+                f"{yield_value}%",
+            ),
+        )
+        _console(
+            app,
+            f"[PORTFOLIO POSITION] ticker={ticker} uid={uid or figi} "
+            f"quantity={quantity} blocked={blocked} source={quantity_source} "
+            f"balance={_field(security, 'balance', None)} security_blocked={_field(security, 'blocked', None)}",
+        )
+
+    if not portfolio_positions:
         ttk.Label(app.content, text="Ценных бумаг в портфеле нет.").pack(anchor="w", pady=12)
-    _console(app, f"[PORTFOLIO] account_id={aid} portfolio_positions={len(portfolio_positions)} fallback_positions={len(fallback)} displayed={len(merged_keys)}")
+
+    _console(
+        app,
+        f"[PORTFOLIO] account_id={aid} portfolio_positions={len(portfolio_positions)} "
+        f"sandbox_security_positions={len(_security_records(positions))}",
+    )
 
 
 def _status_text(raw: Any) -> str:
@@ -175,7 +232,7 @@ def _poll_orders(app: Any) -> None:
         try:
             state = app.client.get_order_state(meta["account_id"], oid)
             status = _status_text(_field(state, "execution_report_status", _field(state, "status", "")))
-            executed = int(_decimal(_field(state, "lots_executed", 0)))
+            executed = int(_decimal(_field(state, "lots_executed", _field(state, "quantity_executed", 0))))
             if status == "FILL":
                 record = TradeRecord(
                     account_id=meta["account_id"], order_id=oid, instrument_uid=meta["instrument_uid"],
