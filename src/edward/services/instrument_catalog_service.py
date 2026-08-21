@@ -85,20 +85,55 @@ class InstrumentCatalogService:
                             "[PRICE DEBUG] Price matched: ticker=%s uid=%s raw=%r normalized=%s",
                             _field(instrument, "ticker", ""), uid, raw_price, normalized_price,
                         )
-                item["buy_available"] = _field(instrument, "buy_available_flag", False)
-                item["sell_available"] = _field(instrument, "sell_available_flag", False)
-                item["api_trade_available"] = _field(
+
+                api_available = _bool_flag(
                     status,
                     "api_trade_available_flag",
                     _field(instrument, "api_trade_available_flag", False),
                 )
-                item["trading_status"] = _field(status, "trading_status", _field(status, "status", ""))
-                item["limit_order_available"] = _field(status, "limit_order_available_flag", False)
-                item["market_order_available"] = _field(status, "market_order_available_flag", False)
+                limit_available = _bool_flag(status, "limit_order_available_flag", False)
+                market_available = _bool_flag(status, "market_order_available_flag", False)
+                bestprice_available = _bool_flag(status, "bestprice_order_available_flag", False)
+                trading_status = _field(status, "trading_status", _field(status, "status", ""))
+
+                # api_trade_available_flag means that API access exists for the
+                # instrument; it does not mean that an order can be submitted now.
+                # The UI flag must represent actual current order availability.
+                trading_status_text = str(trading_status or "").upper()
+                status_allows_trading = trading_status_text not in {
+                    "SECURITY_TRADING_STATUS_NOT_AVAILABLE_FOR_TRADING",
+                    "NOT_AVAILABLE_FOR_TRADING",
+                }
+                trade_available = bool(
+                    api_available
+                    and status_allows_trading
+                    and (limit_available or market_available or bestprice_available)
+                )
+
+                item["buy_available"] = _field(instrument, "buy_available_flag", False)
+                item["sell_available"] = _field(instrument, "sell_available_flag", False)
+                item["api_trade_available"] = api_available
+                item["trading_available"] = trade_available
+                item["trading_status"] = trading_status
+                item["limit_order_available"] = limit_available
+                item["market_order_available"] = market_available
+                item["bestprice_order_available"] = bestprice_available
                 item["min_price_increment"] = _field(
                     instrument,
                     "min_price_increment",
                     _field(instrument, "min_price_increment_value", ""),
+                )
+
+                logger.debug(
+                    "[TRADING AVAILABILITY] ticker=%s uid=%s api=%s limit=%s market=%s bestprice=%s status=%s available=%s",
+                    _field(instrument, "ticker", ""),
+                    uid,
+                    api_available,
+                    limit_available,
+                    market_available,
+                    bestprice_available,
+                    trading_status,
+                    trade_available,
                 )
             result.append(item)
 
@@ -120,6 +155,24 @@ def _field(value: Any, name: str, default: Any = None) -> Any:
     if isinstance(value, dict):
         return value.get(name, default)
     return getattr(value, name, default)
+
+
+def _bool_flag(value: Any, name: str, default: Any = False) -> bool:
+    raw = _field(value, name, None)
+    if raw is None:
+        camel = {
+            "api_trade_available_flag": "apiTradeAvailableFlag",
+            "limit_order_available_flag": "limitOrderAvailableFlag",
+            "market_order_available_flag": "marketOrderAvailableFlag",
+            "bestprice_order_available_flag": "bestpriceOrderAvailableFlag",
+        }.get(name)
+        if camel:
+            raw = _field(value, camel, None)
+    if raw is None:
+        raw = default
+    if isinstance(raw, str):
+        return raw.strip().casefold() in {"true", "1", "yes", "да"}
+    return bool(raw)
 
 
 def _uid(value: Any) -> str:
