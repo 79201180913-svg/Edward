@@ -71,13 +71,46 @@ def _protobuf_to_dict(value: Any) -> Any:
         return {str(k): _protobuf_to_dict(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
         return [_protobuf_to_dict(v) for v in value]
+
+    # t-tech-investments 0.3.x returns some SDK response/value objects that
+    # are not protobuf Message instances. Normalize their public SDK fields
+    # explicitly instead of falling back to repr(value).
+    try:
+        if hasattr(value, "currency") and (hasattr(value, "units") or hasattr(value, "nano")):
+            return {
+                "currency": str(getattr(value, "currency", "")),
+                "units": int(getattr(value, "units", 0)),
+                "nano": int(getattr(value, "nano", 0)),
+            }
+    except Exception:
+        pass
+
+    known_fields = (
+        "balance", "money", "securities", "positions", "virtual_positions",
+        "account_id", "operation_id", "id", "next_cursor", "has_next",
+        "tracking_id", "status", "state", "currency", "available_value", "blocked_value",
+    )
+    found: dict[str, Any] = {}
+    for name in known_fields:
+        try:
+            if hasattr(value, name):
+                attr = getattr(value, name)
+                if callable(attr):
+                    continue
+                found[name] = _protobuf_to_dict(attr)
+        except Exception:
+            continue
+    if found:
+        return found
+
     for attr in ("response", "result", "data"):
-        nested = getattr(value, attr, None)
-        if nested is not None and nested is not value:
-            try:
+        try:
+            nested = getattr(value, attr, None)
+            if nested is not None and nested is not value:
                 return _protobuf_to_dict(nested)
-            except Exception:
-                pass
+        except Exception:
+            pass
+
     result: dict[str, Any] = {}
     for name in dir(value):
         if name.startswith("_"):
@@ -175,7 +208,6 @@ class AdapterState:
         if balance is None:
             raise RuntimeError(f"SandboxPayIn returned no balance: {result_dict!r}")
 
-        # Verify the same account immediately using the same sandbox SDK client.
         positions = self._service("sandbox").get_sandbox_positions(account_id=str(account_id))
         positions_dict = message_to_dict(positions)
         logger.info("[SANDBOX FUNDING] SDK GetSandboxPositions after pay-in account_id=%s response=%s", account_id, positions_dict)
@@ -232,7 +264,6 @@ class AdapterState:
         return {"currency": currency.upper(), "available": {"units": str(whole), "nano": nano}, "blocked": {"units": "0", "nano": 0}}
 
     def _sandbox_cash_money(self, account_id: str) -> dict[str, Any]:
-        """Normalize GetSandboxPositions.money into Edward's available/blocked shape."""
         positions = self.sandbox_positions(account_id)
         money_positions = positions.get("money", []) if isinstance(positions, dict) else []
         blocked_positions = positions.get("blocked", []) if isinstance(positions, dict) else []
@@ -244,13 +275,13 @@ class AdapterState:
             currency = str(item.get("currency", "")) if isinstance(item, dict) else ""
             if currency.upper() != "RUB":
                 continue
-            rub_amount += self._money_value_decimal(item)
+            rub_amount += self._money_value_decimal(item.get("available_value", item.get("available", item)))
 
         for item in blocked_positions or []:
             currency = str(item.get("currency", "")) if isinstance(item, dict) else ""
             if currency.upper() != "RUB":
                 continue
-            rub_blocked += self._money_value_decimal(item)
+            rub_blocked += self._money_value_decimal(item.get("blocked_value", item.get("blocked", item)))
 
         logger.info("[SANDBOX BALANCE] normalized cash account_id=%s available=%s blocked=%s", account_id, rub_amount, rub_blocked)
         return self._money_value_to_dict(rub_amount, "RUB") | {"blocked": self._money_value_to_dict(rub_blocked, "RUB")["available"]}
