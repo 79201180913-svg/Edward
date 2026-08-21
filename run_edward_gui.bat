@@ -8,7 +8,8 @@ echo ========================================
 echo Edward Trading Platform v0.1 - GUI
 echo ========================================
 echo.
-echo Full console output is saved to: %LOG_FILE%
+echo Runtime actions are displayed in this console.
+echo Install/setup output is saved to: %LOG_FILE%
 echo.
 
 >"%LOG_FILE%" echo ========================================
@@ -54,10 +55,11 @@ if errorlevel 1 goto :tinvest_error
 
 echo Starting Edward GUI...
 >>"%LOG_FILE%" echo Starting Edward GUI...
-echo Live launcher output will be written to the log file.
+echo Live GUI and T-Invest runtime output follows below.
+echo.
 >>"%LOG_FILE%" echo Starting Edward GUI...
 
-.venv\Scripts\python.exe -m edward.ui.gui_launcher >>"%LOG_FILE%" 2>&1
+.venv\Scripts\python.exe -m edward.ui.gui_launcher
 set EXIT_CODE=%ERRORLEVEL%
 
 if not "%EXIT_CODE%"=="0" (
@@ -66,11 +68,8 @@ if not "%EXIT_CODE%"=="0" (
 )
 
 echo.
-echo ================= CONSOLE LOG =================
-type "%LOG_FILE%"
-echo ============== END CONSOLE LOG ==============
+echo GUI process finished. Setup log: %LOG_FILE%
 echo.
-echo Log file: %LOG_FILE%
 pause
 exit /b %EXIT_CODE%
 
@@ -78,9 +77,9 @@ exit /b %EXIT_CODE%
 echo ERROR: Failed to install Edward dependencies.
 >>"%LOG_FILE%" echo ERROR: Failed to install Edward dependencies.
 echo.
-echo ================= CONSOLE LOG =================
+echo ================= SETUP LOG =================
 type "%LOG_FILE%"
-echo ============== END CONSOLE LOG ==============
+echo ============== END SETUP LOG ==============
 pause
 exit /b 1
 
@@ -88,8 +87,8 @@ exit /b 1
 echo ERROR: Failed to install or validate T-Invest SDK.
 >>"%LOG_FILE%" echo ERROR: Failed to install or validate T-Invest SDK.
 echo.
-echo ================= CONSOLE LOG =================
+echo ================= SETUP LOG =================
 type "%LOG_FILE%"
-echo ============== END CONSOLE LOG ==============
+echo ============== END SETUP LOG ==============
 pause
 exit /b 1
