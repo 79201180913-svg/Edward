@@ -123,11 +123,16 @@ class BalanceService:
                 securities_value += cls._decimal(value) * cls._decimal(quantity)
 
         portfolio_value = cls._portfolio_value(portfolio_response)
-        if portfolio_value is None:
-            portfolio_value = securities_value
+        cash_value = available + blocked
+        # SR-066: a zero API total is not a usable total when positions exist.
+        # In that case derive the portfolio value from cash + securities.
+        if portfolio_value is None or (
+            portfolio_value == Decimal("0") and (cash_value != Decimal("0") or securities_value != Decimal("0"))
+        ):
+            portfolio_value = cash_value + securities_value
 
         print(
-            f"[BALANCE] available={available} blocked={blocked} cash={available + blocked} "
+            f"[BALANCE] available={available} blocked={blocked} cash={cash_value} "
             f"portfolio_value={portfolio_value} money={money}"
         )
 
@@ -135,7 +140,7 @@ class BalanceService:
             currency=currency,
             available=available,
             blocked=blocked,
-            cash=available + blocked,
+            cash=cash_value,
             securities=securities_value,
             portfolio_value=portfolio_value,
         )
