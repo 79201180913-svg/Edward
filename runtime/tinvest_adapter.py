@@ -337,20 +337,19 @@ class AdapterState:
     def create_order(self, payload):
         direction = _sdk_order_direction(payload["direction"])
         order_type = _sdk_order_type(payload["order_type"])
-        quotation = _sdk_quotation(payload.get("price")) if payload.get("price") is not None else None
-        if quotation is None and payload["order_type"] == "MARKET":
-            response = self.last_prices([payload["instrument_uid"]])
-            prices = response.get("last_prices", []) if isinstance(response, dict) else []
-            raw_price = prices[0].get("price") if prices and isinstance(prices[0], dict) else None
-            if raw_price is None:
-                raise RuntimeError(f"Не удалось получить цену для рыночной заявки: {raw_price!r}")
-            quotation = _sdk_quotation(raw_price)
-        if quotation is None:
-            raise RuntimeError("Цена заявки не определена")
-        kwargs = {"quantity": int(payload["quantity"]), "direction": direction, "account_id": str(payload["account_id"]), "order_type": order_type, "instrument_id": str(payload["instrument_uid"]), "order_id": str(payload["request_id"]), "price": quotation}
-        logger.info("[ORDER PAYLOAD] account_id=%s instrument_id=%s direction=%s order_type=%s quantity=%s raw_price=%r sdk_price=%r", payload["account_id"], payload["instrument_uid"], direction, order_type, payload["quantity"], payload.get("price"), quotation)
+        kwargs = {
+            "quantity": int(payload["quantity"]),
+            "direction": direction,
+            "account_id": str(payload["account_id"]),
+            "order_type": order_type,
+            "instrument_id": str(payload["instrument_uid"]),
+            "order_id": str(payload["request_id"]),
+        }
+        if payload.get("price") is not None:
+            kwargs["price"] = _sdk_quotation(payload["price"])
+        logger.info("[ORDER PAYLOAD] account_id=%s instrument_id=%s direction=%s order_type=%s quantity_lots=%s price=%r", payload["account_id"], payload["instrument_uid"], direction, order_type, payload["quantity"], payload.get("price"))
         if ENVIRONMENT == "sandbox":
-            logger.info("[SANDBOX ORDER] PostSandboxOrder account_id=%s instrument_id=%s direction=%s quantity=%s order_type=%s price=%s", payload["account_id"], payload["instrument_uid"], direction, payload["quantity"], order_type, quotation)
+            logger.info("[SANDBOX ORDER] PostSandboxOrder account_id=%s instrument_id=%s direction=%s quantity_lots=%s order_type=%s price=%r", payload["account_id"], payload["instrument_uid"], direction, payload["quantity"], order_type, payload.get("price"))
             return message_to_dict(self._service("sandbox").post_sandbox_order(**kwargs))
         return message_to_dict(self._service("orders").post_order(**kwargs))
 
@@ -440,5 +439,4 @@ def main():
         STATE.close()
 
 
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__": main()
