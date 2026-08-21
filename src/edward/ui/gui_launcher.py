@@ -8,6 +8,7 @@ from edward.ui.trading_ui_guard import install_trading_ui_guard
 from edward.ui.sandbox_funding_ui import install_sandbox_funding_ui
 from edward.ui.sandbox_data_routing import install_sandbox_data_routing
 from edward.ui.operations_history_ui import install_operations_history_ui
+from edward.ui.portfolio_ui import install_portfolio_ui
 
 
 install_sandbox_data_routing()
@@ -15,6 +16,7 @@ install_error_reporting(EdwardApp)
 install_trading_ui_guard(EdwardApp)
 install_sandbox_funding_ui(EdwardApp)
 install_operations_history_ui(EdwardApp)
+install_portfolio_ui()
 
 
 if __name__ == "__main__":
