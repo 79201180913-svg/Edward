@@ -36,65 +36,106 @@ class TInvestAdapterClient:
     def get_sandbox_positions(self, account_id: str) -> dict: return self._request("POST", "/accounts/sandbox-positions", {"account_id": account_id})
     def get_sandbox_portfolio(self, account_id: str) -> dict: return self._request("POST", "/accounts/sandbox-portfolio", {"account_id": account_id})
     def get_sandbox_withdraw_limits(self, account_id: str) -> dict: return self._request("POST", "/accounts/sandbox-withdraw-limits", {"account_id": account_id})
-    def get_portfolio(self, account_id: str) -> dict:
-        if str(self.health().get("environment", "")).lower() == "sandbox":
-            return self.get_sandbox_portfolio(account_id)
-        return self._request("POST", "/portfolio", {"account_id": account_id})
 
     @staticmethod
     def _money_decimal(value: Any) -> Decimal:
         if value is None:
             return Decimal("0")
+        if isinstance(value, Decimal):
+            return value
         if isinstance(value, dict):
             if "units" in value or "nano" in value:
                 return Decimal(str(value.get("units", 0))) + Decimal(str(value.get("nano", 0))) / Decimal("1000000000")
+            if "available_value" in value:
+                return TInvestAdapterClient._money_decimal(value.get("available_value"))
+            if "available" in value:
+                return TInvestAdapterClient._money_decimal(value.get("available"))
+            if "blocked_value" in value:
+                return TInvestAdapterClient._money_decimal(value.get("blocked_value"))
+            if "blocked" in value:
+                return TInvestAdapterClient._money_decimal(value.get("blocked"))
             if "value" in value:
-                return TInvestAdapterClient._money_decimal(value["value"])
+                return TInvestAdapterClient._money_decimal(value.get("value"))
         try:
             return Decimal(str(value))
         except Exception:
             return Decimal("0")
 
+    @classmethod
+    def _normalize_sandbox_positions(cls, positions: dict) -> dict:
+        """Normalize T-Invest sandbox PositionsMoney to Edward's common money schema."""
+        result = dict(positions or {})
+        raw_money = result.get("money", []) or []
+        normalized_money: list[dict] = []
+
+        for item in raw_money:
+            if not isinstance(item, dict):
+                continue
+            currency = str(item.get("currency", "")).upper()
+            if not currency:
+                continue
+
+            # Sandbox GetSandboxPositions currently returns MoneyValue directly:
+            # {currency, units, nano}. Older/alternative responses may wrap it
+            # in available/available_value.
+            if "units" in item or "nano" in item:
+                available_amount = cls._money_decimal(item)
+            else:
+                available_amount = cls._money_decimal(
+                    item.get("available_value", item.get("available", 0))
+                )
+
+            blocked_amount = cls._money_decimal(
+                item.get("blocked_value", item.get("blocked", 0))
+            )
+            available_whole = available_amount.quantize(Decimal("1"))
+            available_nano = int((available_amount - available_whole) * Decimal("1000000000"))
+            blocked_whole = blocked_amount.quantize(Decimal("1"))
+            blocked_nano = int((blocked_amount - blocked_whole) * Decimal("1000000000"))
+
+            normalized_money.append({
+                "currency": currency,
+                "available": {"units": str(available_whole), "nano": available_nano},
+                "available_value": {"units": str(available_whole), "nano": available_nano},
+                "blocked": {"units": str(blocked_whole), "nano": blocked_nano},
+                "blocked_value": {"units": str(blocked_whole), "nano": blocked_nano},
+            })
+
+        result["money"] = normalized_money
+        return result
+
+    def get_portfolio(self, account_id: str) -> dict:
+        if str(self.health().get("environment", "")).lower() == "sandbox":
+            return self.get_sandbox_portfolio(account_id)
+        return self._request("POST", "/portfolio", {"account_id": account_id})
+
     def get_positions(self, account_id: str) -> dict:
         if str(self.health().get("environment", "")).lower() != "sandbox":
             return self._request("POST", "/positions", {"account_id": account_id})
 
+        # IMPORTANT: this is the exact source used by TradingDataProvider.
+        # Do not infer cash from portfolio or withdraw limits.
         positions = self.get_sandbox_positions(account_id)
-        portfolio = self.get_sandbox_portfolio(account_id)
+        normalized = self._normalize_sandbox_positions(positions)
 
-        cash_value = portfolio.get("total_amount_currencies") if isinstance(portfolio, dict) else None
-        cash_amount = self._money_decimal(cash_value) if cash_value is not None else None
+        rub = next(
+            (item for item in normalized.get("money", []) if str(item.get("currency", "")).upper() == "RUB"),
+            None,
+        )
+        if rub is not None:
+            available = self._money_decimal(rub.get("available"))
+            blocked = self._money_decimal(rub.get("blocked"))
+            print(
+                f"[SANDBOX CASH] account_id={account_id} "
+                f"available={available} blocked={blocked} raw_money={positions.get('money', [])}"
+            )
+        else:
+            print(
+                f"[SANDBOX CASH] account_id={account_id} available=0 blocked=0 "
+                f"raw_money={positions.get('money', [])}"
+            )
 
-        # Sandbox cash is returned by GetSandboxPositions as PositionsMoney.
-        # Current API schema uses available_value / blocked_value.
-        if cash_amount is None or cash_amount == 0:
-            raw_money = positions.get("money", []) if isinstance(positions, dict) else []
-            total_available = Decimal("0")
-            found_rub = False
-            for item in raw_money:
-                if str(item.get("currency", "")).upper() != "RUB":
-                    continue
-                found_rub = True
-                available = item.get("available_value", item.get("available", 0))
-                total_available += self._money_decimal(available)
-            if found_rub:
-                cash_amount = total_available
-
-        # A newly created sandbox account can have no money position yet.
-        if cash_amount is None:
-            cash_amount = Decimal("0")
-
-        whole = cash_amount.quantize(Decimal("1"))
-        nano = int((cash_amount - whole) * Decimal("1000000000"))
-        result = dict(positions)
-        result["money"] = [{
-            "currency": "RUB",
-            "available": {"units": str(whole), "nano": nano},
-            "available_value": {"units": str(whole), "nano": nano},
-            "blocked": {"units": "0", "nano": 0},
-            "blocked_value": {"units": "0", "nano": 0},
-        }]
-        return result
+        return normalized
 
     def find_instrument(self, query: str, trade_available_only: bool = True) -> dict: return self._request("POST", "/instruments/search", {"query": query, "api_trade_available_flag": trade_available_only})
     def list_instruments(self, instrument_kind: str = "SHARE", trade_available_only: bool = True) -> dict: return self._request("POST", "/instruments/list", {"instrument_kind": instrument_kind, "api_trade_available_flag": trade_available_only})
