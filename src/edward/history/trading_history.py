@@ -45,20 +45,69 @@ class TradingHistoryRepository:
 
     def save(self, record: TradeRecord) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        workbook, sheet = self._open_sheet()
+        try:
+            if self._contains_order(sheet, record.order_id):
+                return
+            self._append(sheet, record)
+            workbook.save(self.path)
+        finally:
+            workbook.close()
+
+    def upsert(self, record: TradeRecord) -> None:
+        """Insert a new order or update the existing row with the same order_id."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        workbook, sheet = self._open_sheet()
+        try:
+            order_column = HEADERS.index('order_id') + 1
+            target_row = None
+            for row in range(2, sheet.max_row + 1):
+                if sheet.cell(row=row, column=order_column).value == record.order_id:
+                    target_row = row
+                    break
+
+            timestamp = record.executed_at or datetime.now(timezone.utc)
+            values = {
+                'date': timestamp.date().isoformat(),
+                'time': timestamp.time().isoformat(timespec='seconds'),
+                'account_id': record.account_id,
+                'order_id': record.order_id,
+                'instrument_uid': record.instrument_uid,
+                'FIGI': record.figi,
+                'ticker': record.ticker,
+                'name': record.name,
+                'operation': record.operation,
+                'quantity': record.quantity,
+                'order_type': record.order_type,
+                'execution_price': self._decimal(record.execution_price),
+                'amount': self._decimal(record.amount),
+                'commission': self._decimal(record.commission),
+                'currency': record.currency,
+                'status': record.status,
+            }
+            row_values = [values[h] for h in HEADERS]
+            if target_row is None:
+                sheet.append(row_values)
+            else:
+                for column, value in enumerate(row_values, start=1):
+                    sheet.cell(row=target_row, column=column).value = value
+            workbook.save(self.path)
+        finally:
+            workbook.close()
+
+    def _open_sheet(self) -> tuple[Any, Any]:
         if self.path.exists():
             workbook = load_workbook(self.path)
             sheet = workbook.active
             self._ensure_headers(sheet)
-        else:
-            workbook = Workbook()
-            sheet = workbook.active
-            sheet.title = 'Trades'
-            sheet.append(HEADERS)
+            return workbook, sheet
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = 'Trades'
+        sheet.append(HEADERS)
+        return workbook, sheet
 
-        if self._contains_order(sheet, record.order_id):
-            workbook.close()
-            return
-
+    def _append(self, sheet: Any, record: TradeRecord) -> None:
         timestamp = record.executed_at or datetime.now(timezone.utc)
         data = {
             'date': timestamp.date().isoformat(),
@@ -79,15 +128,15 @@ class TradingHistoryRepository:
             'status': record.status,
         }
         sheet.append([data[h] for h in HEADERS])
-        workbook.save(self.path)
-        workbook.close()
 
     def read_all(self) -> list[dict[str, Any]]:
         if not self.path.exists():
             return []
         workbook = load_workbook(self.path, read_only=True, data_only=True)
-        rows = list(workbook.active.iter_rows(values_only=True))
-        workbook.close()
+        try:
+            rows = list(workbook.active.iter_rows(values_only=True))
+        finally:
+            workbook.close()
         return [dict(zip(HEADERS, row)) for row in rows[1:]] if rows else []
 
     @staticmethod
