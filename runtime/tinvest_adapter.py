@@ -14,7 +14,7 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from t_tech.invest import Client, MoneyValue, OrderDirection as SDKOrderDirection, OrderType as SDKOrderType
+from t_tech.invest import Client, MoneyValue, OrderDirection as SDKOrderDirection, OrderType as SDKOrderType, Quotation as SDKQuotation
 from t_tech.invest.constants import INVEST_GRPC_API, INVEST_GRPC_API_SANDBOX
 
 HOST = "127.0.0.1"
@@ -50,6 +50,22 @@ def _sdk_order_type(value: Any) -> Any:
     if isinstance(value, SDKOrderType):
         return value
     raise ValueError(f"Unsupported order type for t-tech-investments 0.3.3: {value!r}")
+
+
+def _sdk_quotation(value: Any) -> Any:
+    """Convert Edward's JSON/Decimal price representation to SDK Quotation."""
+    if isinstance(value, SDKQuotation):
+        return value
+
+    if isinstance(value, dict) and ("units" in value or "nano" in value):
+        units = int(value.get("units", 0))
+        nano = int(value.get("nano", 0))
+        return SDKQuotation(units=units, nano=nano)
+
+    amount = Decimal(str(value))
+    whole = amount.quantize(Decimal("1"))
+    nano = int((amount - whole) * Decimal("1000000000"))
+    return SDKQuotation(units=int(whole), nano=nano)
 
 
 def _configure_windows_ca_bundle() -> None:
@@ -339,12 +355,14 @@ class AdapterState:
     def order_price(self, payload):
         if ENVIRONMENT == "sandbox":
             direction = _sdk_order_direction(payload["direction"])
-            return message_to_dict(self._service("sandbox").get_sandbox_order_price(account_id=str(payload["account_id"]), instrument_id=str(payload["instrument_id"]), price=payload.get("price"), direction=direction, quantity=int(payload["quantity"])))
+            quotation = _sdk_quotation(payload["price"])
+            logger.info("[ORDER PRICE] account_id=%s instrument_id=%s price=%s -> quotation=%s direction=%s quantity=%s", payload["account_id"], payload["instrument_id"], payload["price"], quotation, direction, payload["quantity"])
+            return message_to_dict(self._service("sandbox").get_sandbox_order_price(account_id=str(payload["account_id"]), instrument_id=str(payload["instrument_id"]), price=quotation, direction=direction, quantity=int(payload["quantity"])))
         return self._rest_request("OrdersService/GetOrderPrice", payload)
 
     def max_lots(self, payload):
         if ENVIRONMENT == "sandbox":
-            return message_to_dict(self._service("sandbox").get_sandbox_max_lots(account_id=str(payload["account_id"]), instrument_id=str(payload["instrument_id"]), price=payload["price"]))
+            return message_to_dict(self._service("sandbox").get_sandbox_max_lots(account_id=str(payload["account_id"]), instrument_id=str(payload["instrument_id"]), price=_sdk_quotation(payload["price"])))
         return self._rest_request("OrdersService/GetMaxLots", payload)
 
     def operations(self, account_id, limit=1000):
@@ -355,12 +373,15 @@ class AdapterState:
     def create_order(self, payload):
         direction = _sdk_order_direction(payload["direction"])
         order_type = _sdk_order_type(payload["order_type"])
-        kwargs = {"quantity": payload["quantity"], "direction": direction, "account_id": payload["account_id"], "order_type": order_type, "instrument_id": payload["instrument_uid"], "order_id": payload["request_id"]}
-        if payload.get("price") is not None:
-            kwargs["price"] = payload["price"]
+        quotation = _sdk_quotation(payload.get("price")) if payload.get("price") is not None else None
+        kwargs = {"quantity": int(payload["quantity"]), "direction": direction, "account_id": str(payload["account_id"]), "order_type": order_type, "instrument_id": str(payload["instrument_uid"]), "order_id": str(payload["request_id"])}
+        if quotation is not None:
+            kwargs["price"] = quotation
+        logger.info("[ORDER PAYLOAD] account_id=%s instrument_id=%s direction=%s order_type=%s quantity=%s raw_price=%r sdk_price=%r", payload["account_id"], payload["instrument_uid"], direction, order_type, payload["quantity"], payload.get("price"), quotation)
         if ENVIRONMENT == "sandbox":
-            logger.info("[SANDBOX ORDER] PostSandboxOrder account_id=%s instrument_id=%s direction=%s quantity=%s order_type=%s", payload["account_id"], payload["instrument_uid"], direction, payload["quantity"], order_type)
+            logger.info("[SANDBOX ORDER] PostSandboxOrder account_id=%s instrument_id=%s direction=%s quantity=%s order_type=%s price=%s", payload["account_id"], payload["instrument_uid"], direction, payload["quantity"], order_type, quotation)
             return message_to_dict(self._service("sandbox").post_sandbox_order(**kwargs))
+        logger.info("[ORDER] PostOrder account_id=%s instrument_id=%s direction=%s quantity=%s order_type=%s price=%s", payload["account_id"], payload["instrument_uid"], direction, payload["quantity"], order_type, quotation)
         return message_to_dict(self._service("orders").post_order(**kwargs))
 
     def cancel_order(self, account_id, order_id):
@@ -369,9 +390,9 @@ class AdapterState:
         return message_to_dict(self._service("orders").cancel_order(account_id=account_id, order_id=order_id))
 
     def replace_order(self, payload):
-        kwargs = {"order_id": payload["order_id"], "quantity": payload["quantity"], "account_id": payload["account_id"]}
+        kwargs = {"order_id": payload["order_id"], "quantity": int(payload["quantity"]), "account_id": str(payload["account_id"])}
         if payload.get("price") is not None:
-            kwargs["price"] = payload["price"]
+            kwargs["price"] = _sdk_quotation(payload["price"])
         if ENVIRONMENT == "sandbox":
             return message_to_dict(self._service("sandbox").replace_sandbox_order(**kwargs))
         return message_to_dict(self._service("orders").replace_order(**kwargs))
@@ -408,46 +429,3 @@ class Handler(BaseHTTPRequestHandler):
         try:
             p = self._read_json()
             if self.path == "/accounts": self._send(200, message_to_dict(STATE.accounts())); return
-            if self.path == "/accounts/create": self._send(200, message_to_dict(STATE.open_sandbox_account(str(p.get("name", "")).strip() or None))); return
-            if self.path == "/accounts/close": self._send(200, message_to_dict(STATE.close_sandbox_account(str(p.get("account_id", "")).strip()))); return
-            if self.path == "/accounts/pay-in": self._send(200, STATE.sandbox_pay_in(str(p.get("account_id", "")).strip(), p.get("amount"))); return
-            if self.path == "/accounts/sandbox-positions": self._send(200, STATE.sandbox_positions(str(p.get("account_id", "")).strip())); return
-            if self.path == "/accounts/sandbox-portfolio": self._send(200, STATE.sandbox_portfolio(str(p.get("account_id", "")).strip())); return
-            if self.path == "/accounts/sandbox-withdraw-limits": self._send(200, STATE.sandbox_withdraw_limits(str(p.get("account_id", "")).strip())); return
-            if self.path == "/portfolio": self._send(200, message_to_dict(STATE.portfolio(str(p.get("account_id", "")).strip()))); return
-            if self.path == "/positions": self._send(200, message_to_dict(STATE.positions(str(p.get("account_id", "")).strip()))); return
-            if self.path == "/instruments/search": self._send(200, message_to_dict(STATE.find_instrument(str(p.get("query", "")).strip(), bool(p.get("api_trade_available_flag", True))))); return
-            if self.path == "/instruments/list": self._send(200, message_to_dict(STATE.list_instruments(str(p.get("instrument_kind", "SHARE")), bool(p.get("api_trade_available_flag", True))))); return
-            if self.path == "/instruments/get": self._send(200, message_to_dict(STATE.instrument(str(p.get("instrument_id", "")).strip()))); return
-            if self.path == "/market/last-prices": self._send(200, STATE.last_prices([str(x) for x in p.get("instrument_ids", [])])); return
-            if self.path == "/market/trading-status": self._send(200, STATE.trading_status(str(p.get("instrument_id", "")).strip())); return
-            if self.path == "/market/trading-statuses": self._send(200, STATE.trading_statuses([str(x) for x in p.get("instrument_ids", [])])); return
-            if self.path == "/orders": self._send(200, STATE.orders(str(p.get("account_id", "")).strip())); return
-            if self.path == "/orders/state": self._send(200, STATE.order_state(str(p.get("account_id", "")).strip()),); return
-            if self.path == "/orders/price": self._send(200, STATE.order_price(p)); return
-            if self.path == "/orders/max-lots": self._send(200, STATE.max_lots(p)); return
-            if self.path == "/orders/create": self._send(200, STATE.create_order(p)); return
-            if self.path == "/orders/cancel": self._send(200, STATE.cancel_order(str(p.get("account_id", "")).strip(), str(p.get("order_id", "")).strip())); return
-            if self.path == "/orders/replace": self._send(200, STATE.replace_order(p)); return
-            if self.path == "/operations": self._send(200, STATE.operations(str(p.get("account_id", "")).strip(), int(p.get("limit", 1000)))); return
-            self._send(404, {"error": "not_found"})
-        except Exception as exc:
-            logger.exception("[ADAPTER ERROR] %s", exc)
-            self._send(500, {"error": str(exc)})
-
-
-def main():
-    server = ThreadingHTTPServer((HOST, PORT), Handler)
-    logger.info("T-Invest adapter listening on http://%s:%d", HOST, PORT)
-    logger.info("Environment: %s", ENVIRONMENT.upper())
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        server.server_close()
-        STATE.close()
-
-
-if __name__ == "__main__":
-    main()
