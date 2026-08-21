@@ -94,6 +94,9 @@ def _snapshot(client: Any, account_id: str) -> tuple[Decimal, Decimal, Decimal, 
 
 
 def install_final_contract_override(EdwardApp: Any) -> None:
+    from edward.ui.trading_status_diagnostics import install_trading_status_diagnostics
+    install_trading_status_diagnostics()
+
     def _page_overview(self: Any) -> None:
         ttk.Label(self.content, text="Обзор счёта", style="Title.TLabel").pack(anchor="w", pady=(0, 16))
         aid = self._require_account()
