@@ -88,10 +88,52 @@ def _list_instruments(self, kind="SHARE", trade=True):
     return data
 
 
+def _trading_status(self, instrument_id):
+    """Return trading status directly from REST JSON.
+
+    The base adapter uses message_to_dict(), which omits protobuf fields with
+    default values. For trading status that is unsafe because false flags are
+    semantically meaningful. The REST response keeps the fields explicit.
+    """
+    result = self._rest_request(
+        "MarketDataService/GetTradingStatus",
+        {"instrumentId": str(instrument_id)},
+    )
+    _adapter.logger.info(
+        "[TRADING STATUS REST] instrument_id=%s api=%s market=%s limit=%s bestprice=%s ticker=%s trading_status=%s raw=%s",
+        instrument_id,
+        result.get("api_trade_available_flag", result.get("apiTradeAvailableFlag")),
+        result.get("market_order_available_flag", result.get("marketOrderAvailableFlag")),
+        result.get("limit_order_available_flag", result.get("limitOrderAvailableFlag")),
+        result.get("bestprice_order_available_flag", result.get("bestpriceOrderAvailableFlag")),
+        result.get("ticker"),
+        result.get("trading_status", result.get("tradingStatus")),
+        result,
+    )
+    return result
+
+
+def _trading_statuses(self, ids):
+    """Return bulk trading statuses directly from REST JSON."""
+    result = self._rest_request(
+        "MarketDataService/GetTradingStatuses",
+        {"instrumentId": [str(value) for value in ids]},
+    )
+    statuses = result.get("trading_statuses", result.get("tradingStatuses", [])) or []
+    _adapter.logger.info(
+        "[TRADING STATUSES REST] requested=%s returned=%s",
+        len(ids),
+        len(statuses),
+    )
+    return result
+
+
 _adapter.AdapterState.sandbox_positions = _sandbox_positions
 _adapter.AdapterState.sandbox_portfolio = _sandbox_portfolio
 _adapter.AdapterState.operations = _sandbox_operations
 _adapter.AdapterState.list_instruments = _list_instruments
+_adapter.AdapterState.trading_status = _trading_status
+_adapter.AdapterState.trading_statuses = _trading_statuses
 
 
 if __name__ == "__main__":
