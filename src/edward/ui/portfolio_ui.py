@@ -78,9 +78,9 @@ def install_portfolio_ui() -> None:
                     "CASH",
                     self._money(available, cur),
                     self._money(blocked, cur),
-                    "—",
-                    "—",
-                    "—",
+                    self._money(Decimal("1"), cur),
+                    self._money(available, cur),
+                    self._money(Decimal("0"), cur),
                 ),
             )
 
