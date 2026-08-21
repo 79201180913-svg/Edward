@@ -152,9 +152,49 @@ class TInvestAdapterClient:
 
     @staticmethod
     def _order_payload(request: Any) -> dict:
-        return {"quantity": int(getattr(request, "quantity")), "direction": getattr(getattr(request, "side"), "value", getattr(request, "side")), "account_id": str(getattr(request, "account_id")), "order_type": getattr(getattr(request, "order_type"), "value", getattr(request, "order_type")), "instrument_uid": str(getattr(request, "instrument_uid")), "request_id": str(getattr(request, "request_id")), "price": str(getattr(request, "price")) if getattr(request, "price", None) is not None else None, "stop_price": str(getattr(request, "stop_price")) if getattr(request, "stop_price", None) is not None else None, "time_in_force": getattr(getattr(request, "time_in_force", None), "value", getattr(request, "time_in_force", "DAY"))}
+        return {
+            "quantity": int(getattr(request, "quantity")),
+            "direction": getattr(getattr(request, "side"), "value", getattr(request, "side")),
+            "account_id": str(getattr(request, "account_id")),
+            "order_type": getattr(getattr(request, "order_type"), "value", getattr(request, "order_type")),
+            "instrument_uid": str(getattr(request, "instrument_uid")),
+            "request_id": str(getattr(request, "request_id")),
+            "price": str(getattr(request, "price")) if getattr(request, "price", None) is not None else None,
+            "stop_price": str(getattr(request, "stop_price")) if getattr(request, "stop_price", None) is not None else None,
+            "time_in_force": getattr(getattr(request, "time_in_force", None), "value", getattr(request, "time_in_force", "DAY")),
+        }
 
-    def post_order(self, request: Any) -> dict: return self._request("POST", "/orders/create", self._order_payload(request))
+    def post_order(self, request: Any) -> dict:
+        payload = self._order_payload(request)
+
+        # Final safety net: the sandbox SDK/API requires price for PostSandboxOrder.
+        # MARKET orders are priced automatically from the latest market price.
+        if payload["order_type"] == "MARKET" and payload.get("price") is None:
+            response = self.get_last_prices([payload["instrument_uid"]])
+            prices = response.get("last_prices", []) if isinstance(response, dict) else []
+            raw_price = None
+            if prices:
+                first = prices[0] or {}
+                if isinstance(first, dict):
+                    raw_price = first.get("price", first.get("last_price"))
+            if isinstance(raw_price, dict) and ("units" in raw_price or "nano" in raw_price):
+                market_price = self._money_decimal(raw_price)
+            else:
+                try:
+                    market_price = Decimal(str(raw_price)) if raw_price is not None else None
+                except Exception:
+                    market_price = None
+            if market_price is None or market_price <= 0:
+                raise RuntimeError(f"Не удалось получить цену для рыночной заявки: {raw_price!r}")
+            payload["price"] = str(market_price)
+
+        print(
+            f"[ORDER PAYLOAD] type={payload['order_type']} direction={payload['direction']} "
+            f"quantity={payload['quantity']} price={payload.get('price')} "
+            f"instrument_uid={payload['instrument_uid']}"
+        )
+        return self._request("POST", "/orders/create", payload)
+
     def cancel_order(self, account_id: str, order_id: str) -> dict: return self._request("POST", "/orders/cancel", {"account_id": account_id, "order_id": order_id})
     def replace_order(self, request: Any, order_id: str) -> dict:
         payload = self._order_payload(request); payload["order_id"] = order_id
