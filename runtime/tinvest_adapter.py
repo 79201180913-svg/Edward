@@ -40,10 +40,7 @@ def _sdk_order_direction(value: Any) -> Any:
 
 def _sdk_order_type(value: Any) -> Any:
     raw = getattr(value, "value", value)
-    mapping = {
-        "MARKET": SDKOrderType.ORDER_TYPE_MARKET,
-        "LIMIT": SDKOrderType.ORDER_TYPE_LIMIT,
-    }
+    mapping = {"MARKET": SDKOrderType.ORDER_TYPE_MARKET, "LIMIT": SDKOrderType.ORDER_TYPE_LIMIT}
     key = str(raw).upper()
     if key in mapping:
         return mapping[key]
@@ -53,19 +50,25 @@ def _sdk_order_type(value: Any) -> Any:
 
 
 def _sdk_quotation(value: Any) -> Any:
-    """Convert Edward's JSON/Decimal price representation to SDK Quotation."""
     if isinstance(value, SDKQuotation):
         return value
-
     if isinstance(value, dict) and ("units" in value or "nano" in value):
-        units = int(value.get("units", 0))
-        nano = int(value.get("nano", 0))
-        return SDKQuotation(units=units, nano=nano)
-
+        return SDKQuotation(units=int(value.get("units", 0)), nano=int(value.get("nano", 0)))
     amount = Decimal(str(value))
     whole = amount.quantize(Decimal("1"))
     nano = int((amount - whole) * Decimal("1000000000"))
     return SDKQuotation(units=int(whole), nano=nano)
+
+
+def _quotation_payload(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if isinstance(value, dict) and ("units" in value or "nano" in value):
+        return {"units": str(value.get("units", 0)), "nano": int(value.get("nano", 0))}
+    amount = value if isinstance(value, Decimal) else Decimal(str(value))
+    whole = amount.quantize(Decimal("1"))
+    nano = int((amount - whole) * Decimal("1000000000"))
+    return {"units": str(whole), "nano": nano}
 
 
 def _configure_windows_ca_bundle() -> None:
@@ -251,6 +254,8 @@ class AdapterState:
                 return Decimal(str(value.get("units", 0))) + Decimal(str(value.get("nano", 0))) / Decimal("1000000000")
             if "available_value" in value:
                 return AdapterState._money_value_decimal(value.get("available_value"))
+            if "available" in value:
+                return AdapterState._money_value_decimal(value.get("available"))
             if "value" in value:
                 return AdapterState._money_value_decimal(value.get("value"))
         try:
@@ -258,69 +263,28 @@ class AdapterState:
         except Exception:
             return Decimal("0")
 
-    @staticmethod
-    def _money_value_to_dict(value: Any, currency: str = "RUB") -> dict[str, Any]:
-        amount = AdapterState._money_value_decimal(value)
-        whole = amount.quantize(Decimal("1"))
-        nano = int((amount - whole) * Decimal("1000000000"))
-        return {"currency": currency.upper(), "available": {"units": str(whole), "nano": nano}, "blocked": {"units": "0", "nano": 0}}
-
-    def _sandbox_cash_money(self, account_id: str) -> dict[str, Any]:
+    def positions(self, account_id):
+        if ENVIRONMENT != "sandbox":
+            return message_to_dict(self._service("operations").get_positions(account_id=account_id))
         positions = self.sandbox_positions(account_id)
-        money_positions = positions.get("money", []) if isinstance(positions, dict) else []
-        blocked_positions = positions.get("blocked", []) if isinstance(positions, dict) else []
-        rub_amount = Decimal("0")
-        rub_blocked = Decimal("0")
-        for item in money_positions or []:
-            if str(item.get("currency", "")).upper() != "RUB":
-                continue
-            rub_amount += self._money_value_decimal(item.get("available_value", item.get("available", item)))
-        for item in blocked_positions or []:
-            if str(item.get("currency", "")).upper() != "RUB":
-                continue
-            rub_blocked += self._money_value_decimal(item.get("blocked_value", item.get("blocked", item)))
-        return self._money_value_to_dict(rub_amount, "RUB") | {"blocked": self._money_value_to_dict(rub_blocked, "RUB")["available"]}
+        raw_money = positions.get("money", []) if isinstance(positions, dict) else []
+        logger.info("[BALANCE] account_id=%s raw_money=%s", account_id, raw_money)
+        return positions
 
     def portfolio(self, account_id):
         if ENVIRONMENT == "sandbox":
             return self.sandbox_portfolio(account_id)
         return message_to_dict(self._service("operations").get_portfolio(account_id=account_id))
 
-    def positions(self, account_id):
-        if ENVIRONMENT == "sandbox":
-            positions = dict(self.sandbox_positions(account_id))
-            positions["money"] = [self._sandbox_cash_money(account_id)]
-            return positions
-        return message_to_dict(self._service("operations").get_positions(account_id=account_id))
-
     def find_instrument(self, query, trade_available_only=True):
         return self._rest_request("InstrumentsService/FindInstrument", {"query": query, "instrumentKind": "INSTRUMENT_TYPE_UNSPECIFIED", "apiTradeAvailableFlag": trade_available_only})
 
-    def _list_primary(self, kind, trade):
-        method = {"SHARE": "Shares", "BOND": "Bonds", "ETF": "Etfs", "CURRENCY": "Currencies", "FUTURES": "Futures", "OPTION": "Options"}.get(kind.upper())
+    def list_instruments(self, kind="SHARE", trade=True):
+        methods = {"SHARE": "Shares", "BOND": "Bonds", "ETF": "Etfs", "CURRENCY": "Currencies", "FUTURES": "Futures", "OPTION": "Options"}
+        method = methods.get(kind.upper())
         if not method:
             raise ValueError(f"Unsupported instrument kind: {kind}")
         return self._rest_request(f"InstrumentsService/{method}", {"instrumentStatus": "INSTRUMENT_STATUS_BASE" if trade else "INSTRUMENT_STATUS_ALL", "instrumentExchange": "INSTRUMENT_EXCHANGE_UNSPECIFIED"})
-
-    def _assets_fallback(self, kind, trade):
-        if kind.upper() in {"FUTURES", "OPTION"}:
-            raise RuntimeError("Instrument catalog fallback is unavailable for futures/options")
-        response = self._rest_request("InstrumentsService/GetAssets", {"instrumentType": {"SHARE": "INSTRUMENT_TYPE_SHARE", "BOND": "INSTRUMENT_TYPE_BOND", "ETF": "INSTRUMENT_TYPE_ETF", "CURRENCY": "INSTRUMENT_TYPE_CURRENCY"}.get(kind.upper(), "INSTRUMENT_TYPE_UNSPECIFIED"), "instrumentStatus": "INSTRUMENT_STATUS_BASE" if trade else "INSTRUMENT_STATUS_ALL"})
-        instruments = []
-        for asset in response.get("assets", []):
-            for instrument in asset.get("instruments", []):
-                item = dict(instrument)
-                item.setdefault("name", asset.get("name", asset.get("name_brief", "")))
-                instruments.append(item)
-        return {"instruments": instruments}
-
-    def list_instruments(self, kind="SHARE", trade=True):
-        try:
-            return self._list_primary(kind, trade)
-        except RuntimeError as exc:
-            if "404" not in str(exc) and "not_found" not in str(exc).lower():
-                raise
-            return self._assets_fallback(kind, trade)
 
     def instrument(self, instrument_id):
         return self._rest_request("InstrumentsService/GetInstrumentBy", {"idType": "INSTRUMENT_ID_TYPE_UID", "id": instrument_id})
@@ -329,7 +293,7 @@ class AdapterState:
         response = self._service("market_data").get_last_prices(instrument_id=ids)
         data = message_to_dict(response)
         prices = data.get("last_prices", []) if isinstance(data, dict) else []
-        if prices and any("price" in item for item in prices if isinstance(item, dict)):
+        if prices and any(isinstance(item, dict) and "price" in item for item in prices):
             return data
         try:
             return self._rest_request("MarketDataService/GetLastPrices", {"instrumentId": ids})
@@ -353,35 +317,41 @@ class AdapterState:
         return message_to_dict(self._service("orders").get_order_state(account_id=account_id, order_id=order_id))
 
     def order_price(self, payload):
-        if ENVIRONMENT == "sandbox":
-            direction = _sdk_order_direction(payload["direction"])
-            quotation = _sdk_quotation(payload["price"])
-            logger.info("[ORDER PRICE] account_id=%s instrument_id=%s price=%s -> quotation=%s direction=%s quantity=%s", payload["account_id"], payload["instrument_id"], payload["price"], quotation, direction, payload["quantity"])
-            return message_to_dict(self._service("sandbox").get_sandbox_order_price(account_id=str(payload["account_id"]), instrument_id=str(payload["instrument_id"]), price=quotation, direction=direction, quantity=int(payload["quantity"])))
-        return self._rest_request("OrdersService/GetOrderPrice", payload)
+        request = {
+            "accountId": str(payload["account_id"]),
+            "instrumentId": str(payload["instrument_id"]),
+            "price": _quotation_payload(payload.get("price")),
+            "direction": str(payload["direction"]),
+            "quantity": int(payload["quantity"]),
+        }
+        return self._rest_request("OrdersService/GetOrderPrice", request)
 
     def max_lots(self, payload):
-        if ENVIRONMENT == "sandbox":
-            return message_to_dict(self._service("sandbox").get_sandbox_max_lots(account_id=str(payload["account_id"]), instrument_id=str(payload["instrument_id"]), price=_sdk_quotation(payload["price"])))
-        return self._rest_request("OrdersService/GetMaxLots", payload)
+        request = {"accountId": str(payload["account_id"]), "instrumentId": str(payload["instrument_id"]), "price": _quotation_payload(payload.get("price"))}
+        return self._rest_request("OrdersService/GetMaxLots", request)
 
     def operations(self, account_id, limit=1000):
-        if ENVIRONMENT == "sandbox":
-            return self._rest_request("SandboxService/GetSandboxOperationsByCursor", {"accountId": account_id, "limit": max(1, min(limit, 1000)), "withoutCommissions": False, "withoutTrades": False})
-        return self._rest_request("OperationsService/GetOperationsByCursor", {"accountId": account_id, "limit": max(1, min(limit, 1000)), "withoutCommissions": False, "withoutTrades": False})
+        method = "SandboxService/GetSandboxOperationsByCursor" if ENVIRONMENT == "sandbox" else "OperationsService/GetOperationsByCursor"
+        return self._rest_request(method, {"accountId": account_id, "limit": max(1, min(int(limit), 1000)), "withoutCommissions": False, "withoutTrades": False})
 
     def create_order(self, payload):
         direction = _sdk_order_direction(payload["direction"])
         order_type = _sdk_order_type(payload["order_type"])
         quotation = _sdk_quotation(payload.get("price")) if payload.get("price") is not None else None
-        kwargs = {"quantity": int(payload["quantity"]), "direction": direction, "account_id": str(payload["account_id"]), "order_type": order_type, "instrument_id": str(payload["instrument_uid"]), "order_id": str(payload["request_id"])}
-        if quotation is not None:
-            kwargs["price"] = quotation
+        if quotation is None and payload["order_type"] == "MARKET":
+            response = self.last_prices([payload["instrument_uid"]])
+            prices = response.get("last_prices", []) if isinstance(response, dict) else []
+            raw_price = prices[0].get("price") if prices and isinstance(prices[0], dict) else None
+            if raw_price is None:
+                raise RuntimeError(f"Не удалось получить цену для рыночной заявки: {raw_price!r}")
+            quotation = _sdk_quotation(raw_price)
+        if quotation is None:
+            raise RuntimeError("Цена заявки не определена")
+        kwargs = {"quantity": int(payload["quantity"]), "direction": direction, "account_id": str(payload["account_id"]), "order_type": order_type, "instrument_id": str(payload["instrument_uid"]), "order_id": str(payload["request_id"]), "price": quotation}
         logger.info("[ORDER PAYLOAD] account_id=%s instrument_id=%s direction=%s order_type=%s quantity=%s raw_price=%r sdk_price=%r", payload["account_id"], payload["instrument_uid"], direction, order_type, payload["quantity"], payload.get("price"), quotation)
         if ENVIRONMENT == "sandbox":
             logger.info("[SANDBOX ORDER] PostSandboxOrder account_id=%s instrument_id=%s direction=%s quantity=%s order_type=%s price=%s", payload["account_id"], payload["instrument_uid"], direction, payload["quantity"], order_type, quotation)
             return message_to_dict(self._service("sandbox").post_sandbox_order(**kwargs))
-        logger.info("[ORDER] PostOrder account_id=%s instrument_id=%s direction=%s quantity=%s order_type=%s price=%s", payload["account_id"], payload["instrument_uid"], direction, payload["quantity"], order_type, quotation)
         return message_to_dict(self._service("orders").post_order(**kwargs))
 
     def cancel_order(self, account_id, order_id):
@@ -429,3 +399,46 @@ class Handler(BaseHTTPRequestHandler):
         try:
             p = self._read_json()
             if self.path == "/accounts": self._send(200, message_to_dict(STATE.accounts())); return
+            if self.path == "/accounts/create": self._send(200, message_to_dict(STATE.open_sandbox_account(p.get("name")))); return
+            if self.path == "/accounts/close": self._send(200, message_to_dict(STATE.close_sandbox_account(str(p.get("account_id", ""))))); return
+            if self.path == "/accounts/pay-in": self._send(200, STATE.sandbox_pay_in(str(p["account_id"]), p["amount"])); return
+            if self.path == "/accounts/sandbox-positions": self._send(200, STATE.sandbox_positions(str(p["account_id"]))); return
+            if self.path == "/accounts/sandbox-portfolio": self._send(200, STATE.sandbox_portfolio(str(p["account_id"]))); return
+            if self.path == "/accounts/sandbox-withdraw-limits": self._send(200, STATE.sandbox_withdraw_limits(str(p["account_id"]))); return
+            if self.path == "/positions": self._send(200, STATE.positions(str(p["account_id"]))); return
+            if self.path == "/portfolio": self._send(200, STATE.portfolio(str(p["account_id"]))); return
+            if self.path == "/instruments/search": self._send(200, STATE.find_instrument(str(p.get("query", "")), bool(p.get("api_trade_available_flag", True)))); return
+            if self.path == "/instruments/list": self._send(200, STATE.list_instruments(str(p.get("instrument_kind", "SHARE")), bool(p.get("api_trade_available_flag", True)))); return
+            if self.path == "/instruments/get": self._send(200, STATE.instrument(str(p["instrument_id"]))); return
+            if self.path == "/market/last-prices": self._send(200, STATE.last_prices(list(p.get("instrument_ids", [])))); return
+            if self.path == "/market/trading-status": self._send(200, STATE.trading_status(str(p["instrument_id"]))); return
+            if self.path == "/market/trading-statuses": self._send(200, STATE.trading_statuses(list(p.get("instrument_ids", [])))); return
+            if self.path == "/orders": self._send(200, STATE.orders(str(p["account_id"]))); return
+            if self.path == "/orders/state": self._send(200, STATE.order_state(str(p["account_id"]), str(p["order_id"]))); return
+            if self.path == "/orders/price": self._send(200, STATE.order_price(p)); return
+            if self.path == "/orders/max-lots": self._send(200, STATE.max_lots(p)); return
+            if self.path == "/orders/create": self._send(200, STATE.create_order(p)); return
+            if self.path == "/orders/cancel": self._send(200, STATE.cancel_order(str(p.get("account_id", "")), str(p.get("order_id", "")))); return
+            if self.path == "/orders/replace": self._send(200, STATE.replace_order(p)); return
+            if self.path == "/operations": self._send(200, STATE.operations(str(p.get("account_id", "")), int(p.get("limit", 1000)))); return
+            self._send(404, {"error": "not_found"})
+        except Exception as exc:
+            logger.exception("[ADAPTER ERROR] %s", exc)
+            self._send(500, {"error": str(exc), "type": type(exc).__name__})
+
+
+def main():
+    server = ThreadingHTTPServer((HOST, PORT), Handler)
+    logger.info("T-Invest adapter listening on http://%s:%d", HOST, PORT)
+    logger.info("Environment: %s", ENVIRONMENT.upper())
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+        STATE.close()
+
+
+if __name__ == "__main__":
+    main()
