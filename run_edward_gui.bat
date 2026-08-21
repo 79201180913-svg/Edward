@@ -57,15 +57,7 @@ echo Starting Edward GUI...
 >>"%LOG_FILE%" echo Starting Edward GUI...
 echo Live GUI and T-Invest runtime output follows below.
 echo.
->>"%LOG_FILE%" echo Starting documented REST sandbox adapter wrapper...
-
-.venv-tinvest\Scripts\python.exe runtime\tinvest_adapter_fixed.py
-set ADAPTER_EXIT=%ERRORLEVEL%
-if not "%ADAPTER_EXIT%"=="0" (
-    echo ERROR: T-Invest adapter stopped with code %ADAPTER_EXIT%.
-    >>"%LOG_FILE%" echo ERROR: T-Invest adapter stopped with code %ADAPTER_EXIT%.
-    exit /b %ADAPTER_EXIT%
-)
+>>"%LOG_FILE%" echo Starting normal Edward GUI launcher...
 
 .venv\Scripts\python.exe -m edward.ui.gui_launcher
 set EXIT_CODE=%ERRORLEVEL%
