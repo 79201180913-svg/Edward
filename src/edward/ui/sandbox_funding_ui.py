@@ -60,7 +60,12 @@ def install_sandbox_funding_ui(app_class: type[Any]) -> None:
         return None
 
     def _get_sandbox_rub_balance(self: Any, account_id: str) -> Decimal:
-        """Get actual RUB cash from GetSandboxPositions; portfolio does not contain cash."""
+        """Get actual RUB cash from GetSandboxPositions.
+
+        T-Invest returns money positions as MoneyValue-like objects:
+        {currency, units, nano}. There is no available/available_value field
+        in this response.
+        """
         positions = self.client.get_sandbox_positions(account_id)
         money = self._items(positions, "money")
         logger.info("[SANDBOX FUNDING] GetSandboxPositions account_id=%s money=%s", account_id, money)
@@ -69,18 +74,27 @@ def install_sandbox_funding_ui(app_class: type[Any]) -> None:
             currency = str(self._field(position, "currency", "")).upper()
             if currency != "RUB":
                 continue
+
+            # Actual GetSandboxPositions format: currency + units + nano.
+            if self._field(position, "units", None) is not None or self._field(position, "nano", None) is not None:
+                balance = _money_value(position)
+                logger.info("[SANDBOX FUNDING] RUB balance from MoneyValue=%s", balance)
+                return balance
+
+            # Keep compatibility with normalized/fallback responses.
             available = self._field(position, "available", None)
             if available is None:
                 available = self._field(position, "available_value", None)
-            if available is None:
-                raise RuntimeError(
-                    "В денежной позиции sandbox не найдено поле available/available_value.\n"
-                    f"Позиция: {position}\n\n"
-                    f"Ответ GetSandboxPositions: {positions}"
-                )
-            balance = _money_value(available)
-            logger.info("[SANDBOX FUNDING] RUB available before/after operation=%s", balance)
-            return balance
+            if available is not None:
+                balance = _money_value(available)
+                logger.info("[SANDBOX FUNDING] RUB balance from available=%s", balance)
+                return balance
+
+            raise RuntimeError(
+                "В денежной позиции sandbox не найдено поле units/nano либо available/available_value.\n"
+                f"Позиция: {position}\n\n"
+                f"Ответ GetSandboxPositions: {positions}"
+            )
 
         if not money:
             logger.info("[SANDBOX FUNDING] No money positions yet; treating initial RUB balance as 0")
