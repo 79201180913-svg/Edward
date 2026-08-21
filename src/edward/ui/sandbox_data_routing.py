@@ -9,7 +9,7 @@ _INSTALLED = False
 
 
 def install_sandbox_data_routing() -> None:
-    """Route generic positions/portfolio calls to SandboxService in SANDBOX only."""
+    """Keep the adapter client's normalized sandbox responses intact."""
     global _INSTALLED
     if _INSTALLED:
         return
@@ -18,21 +18,13 @@ def install_sandbox_data_routing() -> None:
     original_get_portfolio = TInvestAdapterClient.get_portfolio
 
     def _get_positions(self: TInvestAdapterClient, account_id: str) -> dict[str, Any]:
-        try:
-            health = self.health()
-            if str(health.get("environment", "")).lower() == "sandbox":
-                return self._request("POST", "/accounts/sandbox-positions", {"account_id": account_id})
-        except Exception:
-            pass
+        # The client already routes SANDBOX to SandboxService and normalizes
+        # GetSandboxPositions. Do not bypass that layer with a raw HTTP call.
         return original_get_positions(self, account_id)
 
     def _get_portfolio(self: TInvestAdapterClient, account_id: str) -> dict[str, Any]:
-        try:
-            health = self.health()
-            if str(health.get("environment", "")).lower() == "sandbox":
-                return self._request("POST", "/accounts/sandbox-portfolio", {"account_id": account_id})
-        except Exception:
-            pass
+        # The client already routes SANDBOX to SandboxService and returns the
+        # normalized PortfolioResponse. Do not bypass that layer.
         return original_get_portfolio(self, account_id)
 
     TInvestAdapterClient.get_positions = _get_positions
