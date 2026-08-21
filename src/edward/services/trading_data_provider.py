@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 from edward.api.tinvest_adapter_client import TInvestAdapterClient
@@ -11,12 +13,29 @@ from edward.validation.trading_validator import ValidationContext
 
 logger = logging.getLogger("edward.trading_validation")
 
+_DEBUG_FILE = Path(__file__).resolve().parents[3] / "runtime" / "edward_debug.log"
+
+
+def _debug_file(message: str) -> None:
+    """Write critical trading diagnostics to a persistent local file."""
+    try:
+        _DEBUG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with _DEBUG_FILE.open("a", encoding="utf-8") as fh:
+            fh.write(f"{datetime.now().isoformat(timespec='seconds')} {message}\n")
+    except Exception:
+        pass
+
 
 class AdapterTradingDataProvider:
     def __init__(self, client: TInvestAdapterClient) -> None:
         self._client = client
 
     def get_validation_context(self, request: OrderRequest) -> ValidationContext:
+        _debug_file(
+            f"VALIDATION START account_id={request.account_id} instrument_uid={request.instrument_uid} "
+            f"side={request.side.value} order_type={request.order_type.value} quantity={request.quantity}"
+        )
+
         response = self._client.list_instruments(request.instrument_kind, trade_available_only=False)
         instruments = self._items(response, "instruments")
         instrument = next((item for item in instruments if self._uid(item) == request.instrument_uid), None)
@@ -42,6 +61,8 @@ class AdapterTradingDataProvider:
         securities = BalanceService.get_security_positions(positions)
         available_money = Decimal("0")
         raw_money = money
+        _debug_file(f"POSITIONS account_id={request.account_id} raw_money={raw_money}")
+
         for item in money:
             if str(self._field(item, "currency", "")).upper() != "RUB":
                 continue
@@ -50,10 +71,19 @@ class AdapterTradingDataProvider:
                 available_raw = self._field(item, "available_value", None)
             if available_raw is None and isinstance(item, dict) and ("units" in item or "nano" in item):
                 available_raw = item
-            available_money += self._decimal(available_raw) or Decimal("0")
+            parsed = self._decimal(available_raw)
+            _debug_file(
+                f"MONEY account_id={request.account_id} item={item} "
+                f"available_raw={available_raw} parsed={parsed}"
+            )
+            available_money += parsed or Decimal("0")
 
         print(
             f"[TRADING CASH] account_id={request.account_id} available_money={available_money} "
+            f"raw_money={raw_money}"
+        )
+        _debug_file(
+            f"CASH RESULT account_id={request.account_id} available_money={available_money} "
             f"raw_money={raw_money}"
         )
 
@@ -83,14 +113,19 @@ class AdapterTradingDataProvider:
                 estimated_commission = self._decimal(
                     self._field(price_response, "executed_commission", self._field(price_response, "deal_commission", "0"))
                 ) or Decimal("0")
-            except Exception:
-                pass
+            except Exception as exc:
+                _debug_file(f"ORDER PRICE ERROR account_id={request.account_id} error={type(exc).__name__}: {exc}")
 
         print(
             f"[TRADING FUNDS] side={request.side.value} quantity={request.quantity} "
             f"unit_price={unit_price} estimated_total={estimated_total} "
             f"commission={estimated_commission} available_money={available_money} "
             f"available_position={available_position} trading_allowed={available}"
+        )
+        _debug_file(
+            f"FUNDS account_id={request.account_id} side={request.side.value} quantity={request.quantity} "
+            f"unit_price={unit_price} estimated_total={estimated_total} commission={estimated_commission} "
+            f"available_money={available_money} available_position={available_position} trading_allowed={available}"
         )
 
         return ValidationContext(
