@@ -31,17 +31,6 @@ class AdapterTradingDataProvider:
             f"trading_status={self._field(status, 'trading_status', self._field(status, 'status', None))!r}"
         )
 
-        logger.info(
-            "[TRADING DEBUG] uid=%s ticker=%s order_type=%s api_trade_available_flag=%r limit_order_available_flag=%r trading_allowed=%r status=%r",
-            request.instrument_uid,
-            self._field(instrument, "ticker", ""),
-            request.order_type.value,
-            self._field(status, "api_trade_available_flag", None),
-            self._field(status, "limit_order_available_flag", None),
-            available,
-            status,
-        )
-
         current = self._items(self._client.get_last_prices([request.instrument_uid]), "last_prices")
         market_price = self._decimal(self._field(current[0], "price")) if current else None
         increment = self._decimal(self._field(instrument, "min_price_increment")) if instrument else None
@@ -52,12 +41,21 @@ class AdapterTradingDataProvider:
         money = BalanceService.get_money_positions(positions)
         securities = BalanceService.get_security_positions(positions)
         available_money = Decimal("0")
+        raw_money = money
         for item in money:
             if str(self._field(item, "currency", "")).upper() != "RUB":
                 continue
-            available_money += self._decimal(
-                self._field(item, "available", self._field(item, "available_value", 0))
-            ) or Decimal("0")
+            available_raw = self._field(item, "available", None)
+            if available_raw is None:
+                available_raw = self._field(item, "available_value", None)
+            if available_raw is None and isinstance(item, dict) and ("units" in item or "nano" in item):
+                available_raw = item
+            available_money += self._decimal(available_raw) or Decimal("0")
+
+        print(
+            f"[TRADING CASH] account_id={request.account_id} available_money={available_money} "
+            f"raw_money={raw_money}"
+        )
 
         available_position = None
         for item in securities:
@@ -88,15 +86,11 @@ class AdapterTradingDataProvider:
             except Exception:
                 pass
 
-        logger.info(
-            "[TRADING DEBUG] funds: side=%s quantity=%s unit_price=%s estimated_total=%s commission=%s available_money=%s available_position=%s",
-            request.side.value,
-            request.quantity,
-            unit_price,
-            estimated_total,
-            estimated_commission,
-            available_money,
-            available_position,
+        print(
+            f"[TRADING FUNDS] side={request.side.value} quantity={request.quantity} "
+            f"unit_price={unit_price} estimated_total={estimated_total} "
+            f"commission={estimated_commission} available_money={available_money} "
+            f"available_position={available_position} trading_allowed={available}"
         )
 
         return ValidationContext(
