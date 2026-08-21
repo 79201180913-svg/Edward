@@ -51,11 +51,14 @@ class AdapterTradingDataProvider:
         positions = self._client.get_positions(request.account_id)
         money = BalanceService.get_money_positions(positions)
         securities = BalanceService.get_security_positions(positions)
-        available_money = sum(
-            (self._decimal(self._field(item, "available")) or Decimal("0"))
-            for item in money
-            if str(self._field(item, "currency", "")).upper() == "RUB"
-        )
+        available_money = Decimal("0")
+        for item in money:
+            if str(self._field(item, "currency", "")).upper() != "RUB":
+                continue
+            available_money += self._decimal(
+                self._field(item, "available", self._field(item, "available_value", 0))
+            ) or Decimal("0")
+
         available_position = None
         for item in securities:
             if self._uid(item) == request.instrument_uid:
