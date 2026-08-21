@@ -31,27 +31,23 @@ class BalanceService:
         self._api = api
 
     def get_positions(self, account_id: str) -> Any:
-        """Return the raw positions response, including money positions."""
         if self._api is None:
             raise RuntimeError("Portfolio API is not configured")
         return self._api.get_positions(account_id)
 
     def get_portfolio(self, account_id: str) -> Any:
-        """Return the raw portfolio response."""
         if self._api is None:
             raise RuntimeError("Portfolio API is not configured")
         return self._api.get_portfolio(account_id)
 
     @staticmethod
     def get_money_positions(positions_response: Any) -> list[Any]:
-        """Extract money positions from a GetPositions response."""
         if isinstance(positions_response, dict):
             return list(positions_response.get("money", []))
         return list(getattr(positions_response, "money", []))
 
     @staticmethod
     def get_security_positions(positions_response: Any) -> list[Any]:
-        """Extract security positions from a GetPositions response."""
         if isinstance(positions_response, dict):
             return list(positions_response.get("securities", []))
         return list(getattr(positions_response, "securities", []))
@@ -81,12 +77,19 @@ class BalanceService:
         return getattr(value, name, default)
 
     @classmethod
+    def _money_field(cls, position: Any, *names: str) -> Any:
+        for name in names:
+            value = cls._field(position, name, None)
+            if value is not None:
+                return value
+        return None
+
+    @classmethod
     def build_summary(
         cls,
         positions_response: Any,
         portfolio_response: Any | None = None,
     ) -> FinancialSummary:
-        """Build a stable financial summary from T-Invest responses."""
         money = cls.get_money_positions(positions_response)
         securities = cls.get_security_positions(positions_response)
 
@@ -98,13 +101,17 @@ class BalanceService:
             position_currency = cls._field(position, "currency")
             if position_currency:
                 currency = str(position_currency).upper()
-            available += cls._decimal(cls._field(position, "available"))
-            blocked += cls._decimal(cls._field(position, "blocked"))
+            available += cls._decimal(
+                cls._money_field(position, "available", "available_value")
+            )
+            blocked += cls._decimal(
+                cls._money_field(position, "blocked", "blocked_value")
+            )
 
         securities_value = Decimal("0")
         for position in securities:
             value = cls._field(position, "current_price")
-            quantity = cls._field(position, "quantity")
+            quantity = cls._field(position, "quantity", cls._field(position, "balance", 0))
             explicit_value = cls._field(position, "value")
             if explicit_value is not None:
                 securities_value += cls._decimal(explicit_value)
@@ -113,7 +120,7 @@ class BalanceService:
 
         portfolio_value = cls._portfolio_value(portfolio_response)
         if portfolio_value is None:
-            portfolio_value = available + blocked + securities_value
+            portfolio_value = securities_value
 
         return FinancialSummary(
             currency=currency,
@@ -128,10 +135,8 @@ class BalanceService:
     def _portfolio_value(cls, response: Any | None) -> Decimal | None:
         if response is None:
             return None
-
         for name in ("total_amount_portfolio", "total_amount_currencies"):
             value = cls._field(response, name)
             if value is not None:
                 return cls._decimal(value)
-
         return None
