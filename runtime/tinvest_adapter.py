@@ -8,14 +8,13 @@ import ssl
 import sys
 import tempfile
 from decimal import Decimal
-from enum import Enum
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from t_tech.invest import Client, MoneyValue
+from t_tech.invest import Client, MoneyValue, OrderDirection as SDKOrderDirection, OrderType as SDKOrderType
 from t_tech.invest.constants import INVEST_GRPC_API, INVEST_GRPC_API_SANDBOX
 
 HOST = "127.0.0.1"
@@ -28,16 +27,31 @@ logger = logging.getLogger("edward.tinvest_adapter")
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
 
-class _OrderDirection(str, Enum):
-    BUY = "BUY"
-    SELL = "SELL"
+def _sdk_order_direction(value: Any) -> Any:
+    raw = getattr(value, "value", value)
+    mapping = {"BUY": SDKOrderDirection.ORDER_DIRECTION_BUY, "SELL": SDKOrderDirection.ORDER_DIRECTION_SELL}
+    key = str(raw).upper()
+    if key in mapping:
+        return mapping[key]
+    if isinstance(value, SDKOrderDirection):
+        return value
+    raise ValueError(f"Unsupported order direction: {value!r}")
 
 
-class _OrderType(str, Enum):
-    MARKET = "MARKET"
-    LIMIT = "LIMIT"
-    STOP = "STOP"
-    STOP_LIMIT = "STOP_LIMIT"
+def _sdk_order_type(value: Any) -> Any:
+    raw = getattr(value, "value", value)
+    mapping = {
+        "MARKET": SDKOrderType.ORDER_TYPE_MARKET,
+        "LIMIT": SDKOrderType.ORDER_TYPE_LIMIT,
+        "STOP": SDKOrderType.ORDER_TYPE_STOP,
+        "STOP_LIMIT": SDKOrderType.ORDER_TYPE_STOP_LIMIT,
+    }
+    key = str(raw).upper()
+    if key in mapping:
+        return mapping[key]
+    if isinstance(value, SDKOrderType):
+        return value
+    raise ValueError(f"Unsupported order type: {value!r}")
 
 
 def _configure_windows_ca_bundle() -> None:
@@ -135,17 +149,6 @@ def _camel_to_snake(value: Any) -> Any:
     if not isinstance(value, dict):
         return value
     return {"".join("_" + c.lower() if c.isupper() else c for c in str(k)).lstrip("_"): _camel_to_snake(v) for k, v in value.items()}
-
-
-def _enum_value(enum_cls: type[Enum], raw: Any) -> Enum:
-    if isinstance(raw, enum_cls):
-        return raw
-    value = getattr(raw, "value", raw)
-    text = str(value).upper()
-    try:
-        return enum_cls[text]
-    except KeyError:
-        return enum_cls(text)
 
 
 class AdapterState:
@@ -337,7 +340,7 @@ class AdapterState:
 
     def order_price(self, payload):
         if ENVIRONMENT == "sandbox":
-            direction = _enum_value(_OrderDirection, payload["direction"])
+            direction = _sdk_order_direction(payload["direction"])
             return message_to_dict(self._service("sandbox").get_sandbox_order_price(account_id=str(payload["account_id"]), instrument_id=str(payload["instrument_id"]), price=payload.get("price"), direction=direction, quantity=int(payload["quantity"])))
         return self._rest_request("OrdersService/GetOrderPrice", payload)
 
@@ -352,13 +355,13 @@ class AdapterState:
         return self._rest_request("OperationsService/GetOperationsByCursor", {"accountId": account_id, "limit": max(1, min(limit, 1000)), "withoutCommissions": False, "withoutTrades": False})
 
     def create_order(self, payload):
-        direction = _enum_value(_OrderDirection, payload["direction"])
-        order_type = _enum_value(_OrderType, payload["order_type"])
+        direction = _sdk_order_direction(payload["direction"])
+        order_type = _sdk_order_type(payload["order_type"])
         kwargs = {"quantity": payload["quantity"], "direction": direction, "account_id": payload["account_id"], "order_type": order_type, "instrument_id": payload["instrument_uid"], "order_id": payload["request_id"]}
         if payload.get("price") is not None:
             kwargs["price"] = payload["price"]
         if ENVIRONMENT == "sandbox":
-            logger.info("[SANDBOX ORDER] PostSandboxOrder account_id=%s instrument_id=%s direction=%s quantity=%s order_type=%s", payload["account_id"], payload["instrument_uid"], payload["direction"], payload["quantity"], payload["order_type"])
+            logger.info("[SANDBOX ORDER] PostSandboxOrder account_id=%s instrument_id=%s direction=%s quantity=%s order_type=%s", payload["account_id"], payload["instrument_uid"], direction, payload["quantity"], order_type)
             return message_to_dict(self._service("sandbox").post_sandbox_order(**kwargs))
         return message_to_dict(self._service("orders").post_order(**kwargs))
 
