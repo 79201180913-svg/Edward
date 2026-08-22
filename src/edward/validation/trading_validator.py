@@ -19,6 +19,11 @@ class ValidationContext:
     estimated_total: Decimal | None = None
     estimated_commission: Decimal | None = None
     trading_diagnostic: str = ""
+    buy_allowed: bool = True
+    sell_allowed: bool = True
+    schedule_allowed: bool = True
+    user_restrictions_allowed: bool = True
+    validation_errors: tuple[str, ...] = ()
 
 
 class TradingDataProvider(Protocol):
@@ -26,7 +31,7 @@ class TradingDataProvider(Protocol):
 
 
 class TradingValidator:
-    """Performs the final pre-flight validation immediately before submission."""
+    """Final pre-trade validation. The provider must fetch fresh API data."""
 
     def __init__(self, provider: TradingDataProvider) -> None:
         self._provider = provider
@@ -40,36 +45,39 @@ class TradingValidator:
         if not context.trading_allowed:
             detail = f"\n\nДиагностика статуса: {context.trading_diagnostic}" if context.trading_diagnostic else ""
             raise ValueError(f"Торговля сейчас недоступна для выбранного инструмента.{detail}")
+        if not context.schedule_allowed:
+            raise ValueError("Торговая сессия сейчас не позволяет выполнить операцию.")
+        if not context.user_restrictions_allowed:
+            raise ValueError("Для счета или пользователя операция недоступна.")
+        if request.side is OrderSide.BUY and not context.buy_allowed:
+            raise ValueError("Покупка недоступна для выбранного инструмента.")
+        if request.side is OrderSide.SELL and not context.sell_allowed:
+            raise ValueError("Продажа недоступна для выбранного инструмента.")
+        if context.validation_errors:
+            raise ValueError("Проверка заявки не пройдена: " + "; ".join(context.validation_errors))
 
-        if request.order_type in (OrderType.LIMIT, OrderType.STOP_LIMIT):
+        if request.order_type is OrderType.LIMIT:
             if request.price is None or context.price_increment is None:
                 raise ValueError("Недоступны данные для проверки шага цены.")
             validate_price_step(request.price, context.price_increment)
 
-        if request.order_type in (OrderType.STOP, OrderType.STOP_LIMIT):
-            if request.stop_price is None or context.price_increment is None:
-                raise ValueError("Недоступны данные для проверки стоп-цены.")
-            validate_price_step(request.stop_price, context.price_increment)
-
-        if request.side == OrderSide.BUY:
+        if request.side is OrderSide.BUY:
             if context.available_money is None or context.estimated_total is None:
                 raise ValueError("Недоступны данные для проверки баланса.")
             required = context.estimated_total + (context.estimated_commission or Decimal("0"))
             if context.available_money < required:
                 raise ValueError(
                     "Недостаточно доступных денежных средств.\n\n"
-                    f"Доступно: {context.available_money}\n"
-                    f"Требуется: {required}"
+                    f"Доступно: {context.available_money}\nТребуется: {required}"
                 )
 
-        if request.side == OrderSide.SELL:
+        if request.side is OrderSide.SELL:
             if context.available_position is None:
                 raise ValueError("Недоступны данные о доступном количестве позиции.")
             if request.quantity > context.available_position:
                 raise ValueError(
                     "Недостаточно доступного количества инструмента для продажи.\n\n"
-                    f"Доступно лотов: {context.available_position}\n"
-                    f"Запрошено лотов: {request.quantity}"
+                    f"Доступно лотов: {context.available_position}\nЗапрошено лотов: {request.quantity}"
                 )
 
         return context
