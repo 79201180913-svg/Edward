@@ -20,13 +20,13 @@ def request(side=OrderSide.BUY, order_type=OrderType.MARKET, quantity=10):
 
 def test_buy_rejected_without_funds():
     provider = Provider(ValidationContext(True, True, available_money=Decimal("10"), estimated_total=Decimal("100")))
-    with pytest.raises(ValueError, match="Insufficient available funds"):
+    with pytest.raises(ValueError, match="Недостаточно доступных денежных средств"):
         TradingValidator(provider).validate(request())
 
 
 def test_sell_rejected_without_position():
     provider = Provider(ValidationContext(True, True, available_position=5))
-    with pytest.raises(ValueError, match="Insufficient available position"):
+    with pytest.raises(ValueError, match="Недостаточно доступного количества инструмента"):
         TradingValidator(provider).validate(request(OrderSide.SELL))
 
 
