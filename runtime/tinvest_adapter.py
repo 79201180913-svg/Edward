@@ -30,12 +30,7 @@ logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 def _sdk_order_direction(value: Any) -> Any:
     raw = getattr(value, "value", value)
     key = str(raw).upper()
-    mapping = {
-        "BUY": SDKOrderDirection.ORDER_DIRECTION_BUY,
-        "ORDER_DIRECTION_BUY": SDKOrderDirection.ORDER_DIRECTION_BUY,
-        "SELL": SDKOrderDirection.ORDER_DIRECTION_SELL,
-        "ORDER_DIRECTION_SELL": SDKOrderDirection.ORDER_DIRECTION_SELL,
-    }
+    mapping = {"BUY": SDKOrderDirection.ORDER_DIRECTION_BUY, "ORDER_DIRECTION_BUY": SDKOrderDirection.ORDER_DIRECTION_BUY, "SELL": SDKOrderDirection.ORDER_DIRECTION_SELL, "ORDER_DIRECTION_SELL": SDKOrderDirection.ORDER_DIRECTION_SELL}
     if key in mapping:
         return mapping[key]
     if isinstance(value, SDKOrderDirection):
@@ -46,12 +41,7 @@ def _sdk_order_direction(value: Any) -> Any:
 def _sdk_order_type(value: Any) -> Any:
     raw = getattr(value, "value", value)
     key = str(raw).upper()
-    mapping = {
-        "MARKET": SDKOrderType.ORDER_TYPE_MARKET,
-        "ORDER_TYPE_MARKET": SDKOrderType.ORDER_TYPE_MARKET,
-        "LIMIT": SDKOrderType.ORDER_TYPE_LIMIT,
-        "ORDER_TYPE_LIMIT": SDKOrderType.ORDER_TYPE_LIMIT,
-    }
+    mapping = {"MARKET": SDKOrderType.ORDER_TYPE_MARKET, "ORDER_TYPE_MARKET": SDKOrderType.ORDER_TYPE_MARKET, "LIMIT": SDKOrderType.ORDER_TYPE_LIMIT, "ORDER_TYPE_LIMIT": SDKOrderType.ORDER_TYPE_LIMIT}
     if key in mapping:
         return mapping[key]
     if isinstance(value, SDKOrderType):
@@ -246,13 +236,7 @@ class AdapterState:
         return self.sandbox_portfolio(account_id) if ENVIRONMENT == "sandbox" else message_to_dict(self._service("operations").get_portfolio(account_id=account_id))
 
     def list_instruments(self, kind="SHARE", trade=True):
-        methods = {
-            "SHARE": "get_shares",
-            "BOND": "get_bonds",
-            "ETF": "get_etfs",
-            "CURRENCY": "get_currencies",
-            "FUTURES": "get_futures",
-        }
+        methods = {"SHARE": "get_shares", "BOND": "get_bonds", "ETF": "get_etfs", "CURRENCY": "get_currencies", "FUTURES": "get_futures"}
         key = str(kind).upper()
         method_name = methods.get(key)
         if not method_name:
@@ -261,10 +245,7 @@ class AdapterState:
         method = getattr(service, method_name, None)
         if method is None:
             raise RuntimeError(f"T-Invest SDK instruments service does not provide {method_name}()")
-        kwargs = {
-            "instrument_status": "INSTRUMENT_STATUS_BASE" if trade else "INSTRUMENT_STATUS_ALL",
-            "instrument_exchange": "INSTRUMENT_EXCHANGE_UNSPECIFIED",
-        }
+        kwargs = {"instrument_status": "INSTRUMENT_STATUS_BASE" if trade else "INSTRUMENT_STATUS_ALL", "instrument_exchange": "INSTRUMENT_EXCHANGE_UNSPECIFIED"}
         try:
             result = method(**kwargs)
         except TypeError:
@@ -313,13 +294,7 @@ class AdapterState:
             direction = "ORDER_DIRECTION_SELL"
         else:
             raise ValueError(f"Unsupported order direction: {payload['direction']!r}")
-        request = {
-            "accountId": str(payload["account_id"]),
-            "instrumentId": str(payload["instrument_id"]),
-            "price": _quotation_payload(payload.get("price")),
-            "direction": direction,
-            "quantity": str(int(payload["quantity"])),
-        }
+        request = {"accountId": str(payload["account_id"]), "instrumentId": str(payload["instrument_id"]), "price": _quotation_payload(payload.get("price")), "direction": direction, "quantity": str(int(payload["quantity"]))}
         method = "SandboxService/GetSandboxOrderPrice" if ENVIRONMENT == "sandbox" else "OrdersService/GetOrderPrice"
         logger.info("[ORDER PRICE] method=%s payload=%s", method, request)
         return self._rest_request(method, request)
@@ -394,6 +369,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/portfolio": self._send(200, STATE.portfolio(str(p["account_id"]))); return
             if self.path == "/instruments/list": self._send(200, STATE.list_instruments(str(p.get("instrument_kind", "SHARE")), bool(p.get("api_trade_available_flag", True)))); return
             if self.path == "/market/last-prices": self._send(200, STATE.last_prices(list(p.get("instrument_ids", [])))); return
+            if self.path == "/market/close-prices": self._send(200, STATE.close_prices(list(p.get("instrument_ids", [])))); return
             if self.path == "/market/trading-status": self._send(200, STATE.trading_status(str(p["instrument_id"]))); return
             if self.path == "/market/trading-statuses": self._send(200, STATE.trading_statuses(list(p.get("instrument_ids", [])))); return
             if self.path == "/orders": self._send(200, STATE.orders(str(p["account_id"]))); return
@@ -422,5 +398,4 @@ def main():
         server.server_close()
 
 
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__": main()
