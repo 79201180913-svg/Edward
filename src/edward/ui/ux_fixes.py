@@ -58,8 +58,25 @@ def _lot_size(client: Any, instrument_uid: str) -> Decimal:
         return Decimal("1")
 
 
-def _price_per_instrument(value: Any) -> Decimal:
-    return _decimal(value)
+def _load_current_price(client: Any, instrument_uid: str, instrument: Any) -> Decimal:
+    """Get a usable current price without turning a missing price into 0."""
+    selected_price = _decimal(instrument.get("last_price")) if isinstance(instrument, dict) else Decimal("0")
+    if selected_price > 0:
+        return selected_price
+
+    try:
+        response = client.get_last_prices([instrument_uid])
+        prices = _items(response, "last_prices")
+        if prices:
+            price = _decimal(_field(prices[0], "price", _field(prices[0], "last_price", None)))
+            if price > 0:
+                _console(None, f"[ORDER PRICE] uid={instrument_uid} source=last_prices price={price}")
+                return price
+    except Exception as exc:
+        _console(None, f"[ORDER PRICE] uid={instrument_uid} last_prices_error={type(exc).__name__}: {exc}")
+
+    _console(None, f"[ORDER PRICE] uid={instrument_uid} source=unavailable price=0")
+    return Decimal("0")
 
 
 def _append_history_error(app: Any, request: OrderRequest, ticker: str, name: str, error: Exception, price: Decimal | None = None, amount: Decimal | None = None) -> None:
@@ -214,19 +231,20 @@ def _page_order(app: Any) -> None:
         )
 
     lot_size = _lot_size(app.client, uid)
-    instrument_price = _price_per_instrument(ins.get("last_price"))
-    lot_price = instrument_price * lot_size
+    instrument_price = _load_current_price(app.client, uid, ins)
+    lot_price = instrument_price * lot_size if instrument_price > 0 else Decimal("0")
 
     frame = ttk.Frame(app.content)
     frame.pack(fill="x")
     vars: dict[str, Any] = {}
     default_type = "Лимитная" if "Лимитная" in available_types else available_types[0]
+    price_default = str(instrument_price) if instrument_price > 0 else ""
     fields = [
         ("ticker", "Инструмент", ins.get("ticker", "")),
         ("side", "Операция", "Покупка"),
         ("order_type", "Тип заявки", default_type),
         ("quantity", "Количество лотов", "1"),
-        ("price", "Цена 1 бумаги", str(instrument_price) if instrument_price else ""),
+        ("price", "Цена 1 бумаги", price_default),
     ]
     for r, (key, label, default) in enumerate(fields):
         ttk.Label(frame, text=label, width=24).grid(row=r, column=0, sticky="w", pady=5)
@@ -241,15 +259,21 @@ def _page_order(app: Any) -> None:
             widget = ttk.Entry(frame, textvariable=vars[key], width=40)
         widget.grid(row=r, column=1, sticky="w")
 
+    price_text = f"{_money(instrument_price)}" if instrument_price > 0 else "недоступна"
+    lot_text = f"{_money(lot_price)}" if lot_price > 0 else "недоступна"
     info = (
-        f"Цена 1 бумаги: {_money(instrument_price)} | "
+        f"Цена 1 бумаги: {price_text} | "
         f"Лотность: {lot_size:,.0f} шт. | "
-        f"Цена 1 лота: {_money(lot_price)} | "
+        f"Цена 1 лота: {lot_text} | "
         f"Текущий торговый статус: {_text(_field(status, 'trading_status', ''))}"
     )
-    ttk.Label(app.content, text=info).pack(anchor="w", pady=12)
+    ttk.Label(app.content, text=info).pack(anchor="w", pady=(12, 4))
+    if default_type == "Лимитная" and instrument_price <= 0:
+        ttk.Label(app.content, text="Текущая цена недоступна. Для лимитной заявки введите цену вручную.").pack(anchor="w", pady=(0, 12))
+    else:
+        ttk.Label(app.content, text="").pack(anchor="w", pady=(0, 12))
     ttk.Button(app.content, text="Проверить и подтвердить", command=lambda: _submit(app, vars, lot_size)).pack(anchor="w")
-    _console(app, f"[ORDER FORM] account_id={aid} ticker={ins.get('ticker', '')} lot_size={lot_size} price_per_share={instrument_price} price_per_lot={lot_price}")
+    _console(app, f"[ORDER FORM] account_id={aid} ticker={ins.get('ticker', '')} lot_size={lot_size} price_per_share={instrument_price} price_per_lot={lot_price} price_source={'selected_instrument' if _decimal(ins.get('last_price')) > 0 else 'last_prices_or_unavailable'}")
 
 
 def _submit(app: Any, variables: dict[str, Any], lot_size: Decimal) -> None:
@@ -263,9 +287,22 @@ def _submit(app: Any, variables: dict[str, Any], lot_size: Decimal) -> None:
     ctx = None
     try:
         quantity = int(variables["quantity"].get())
+        if quantity <= 0:
+            raise ValueError("Количество лотов должно быть больше нуля.")
         side = OrderSide.BUY if variables["side"].get() == "Покупка" else OrderSide.SELL
         order_type = OrderType.MARKET if variables["order_type"].get() == "Рыночная" else OrderType.LIMIT
-        price = Decimal(variables["price"].get()) if order_type == OrderType.LIMIT else None
+        raw_price = variables["price"].get().strip()
+        if order_type == OrderType.LIMIT:
+            if not raw_price:
+                raise ValueError("Для лимитной заявки необходимо указать цену.")
+            try:
+                price = Decimal(raw_price.replace(",", "."))
+            except Exception as exc:
+                raise ValueError(f"Некорректная цена: {raw_price!r}") from exc
+            if price <= 0:
+                raise ValueError("Цена должна быть больше нуля.")
+        else:
+            price = None
         request = OrderRequest(
             account_id=aid,
             instrument_uid=str(ins["instrument_uid"]),
@@ -286,8 +323,12 @@ def _submit(app: Any, variables: dict[str, Any], lot_size: Decimal) -> None:
 
     total = ctx.estimated_total or Decimal("0")
     commission = ctx.estimated_commission or Decimal("0")
-    price_one = price or ctx.market_price or Decimal("0")
-    lot_price = price_one * lot_size
+    price_one = price or ctx.market_price
+    if order_type == OrderType.LIMIT and (price_one is None or price_one <= 0):
+        app._show_error(ValueError("Не удалось определить цену лимитной заявки."), "проверка заявки")
+        return
+    price_one = price_one or Decimal("0")
+    lot_price = price_one * lot_size if price_one > 0 else Decimal("0")
     confirmation = (
         f"Инструмент: {ticker}\n"
         f"Операция: {side.value}\n"
