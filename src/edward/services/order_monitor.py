@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import time
+from decimal import Decimal
 from typing import Any, Callable
 
 from edward.domain.order_state import OrderSnapshot, OrderStatus
 
 
 class OrderMonitor:
-    """Polls T-Invest order state and emits state changes."""
+    """Poll T-Invest order state and normalize API DTOs into OrderSnapshot."""
 
     def __init__(self, orders_gateway: Any, on_update: Callable[[OrderSnapshot], None] | None = None) -> None:
         self._gateway = orders_gateway
@@ -35,39 +36,70 @@ class OrderMonitor:
 
             if snapshot.is_terminal:
                 return snapshot
-
             if time.monotonic() - started >= timeout_seconds:
                 return snapshot
-
             time.sleep(interval_seconds)
 
     @staticmethod
-    def _to_snapshot(response: Any, account_id: str, order_id: str) -> OrderSnapshot:
-        status_value = str(getattr(response, "execution_report_status", getattr(response, "status", "UNKNOWN"))).upper()
+    def _read(response: Any, *names: str, default: Any = None) -> Any:
+        if isinstance(response, dict):
+            for name in names:
+                if name in response:
+                    return response[name]
+            return default
+        for name in names:
+            value = getattr(response, name, None)
+            if value is not None:
+                return value
+        return default
+
+    @classmethod
+    def _number(cls, value: Any, default: int = 0) -> int:
+        if isinstance(value, dict):
+            if "units" in value or "nano" in value:
+                return int(value.get("units", 0))
+            for key in ("value", "quantity", "lots_executed", "lots_requested"):
+                if key in value:
+                    return cls._number(value[key], default)
+        try:
+            return int(value or default)
+        except (TypeError, ValueError):
+            return default
+
+    @classmethod
+    def _to_snapshot(cls, response: Any, account_id: str, order_id: str) -> OrderSnapshot:
+        raw_status = cls._read(response, "execution_report_status", "status", "state", default="UNKNOWN")
+        status_value = str(getattr(raw_status, "value", raw_status)).upper()
         mapping = {
             "EXECUTION_REPORT_STATUS_NEW": OrderStatus.NEW,
+            "EXECUTION_REPORT_STATUS_EXECUTION_REPORT_STATUS_NEW": OrderStatus.NEW,
             "EXECUTION_REPORT_STATUS_PARTIALLYFILL": OrderStatus.PARTIALLY_FILLED,
+            "EXECUTION_REPORT_STATUS_PARTIALLY_FILLED": OrderStatus.PARTIALLY_FILLED,
             "EXECUTION_REPORT_STATUS_FILL": OrderStatus.FILLED,
             "EXECUTION_REPORT_STATUS_CANCELLED": OrderStatus.CANCELLED,
             "EXECUTION_REPORT_STATUS_REJECTED": OrderStatus.REJECTED,
             "NEW": OrderStatus.NEW,
+            "ACTIVE": OrderStatus.ACTIVE,
             "PARTIALLY_FILLED": OrderStatus.PARTIALLY_FILLED,
             "FILLED": OrderStatus.FILLED,
             "CANCELLED": OrderStatus.CANCELLED,
             "REJECTED": OrderStatus.REJECTED,
+            "ERROR": OrderStatus.ERROR,
         }
         status = mapping.get(status_value, OrderStatus.UNKNOWN)
-        requested = int(getattr(response, "lots_requested", getattr(response, "quantity", 0)) or 0)
-        filled = int(getattr(response, "lots_executed", getattr(response, "filled_quantity", 0)) or 0)
+
+        requested = cls._number(cls._read(response, "lots_requested", "quantity", "requested_quantity"))
+        filled = cls._number(cls._read(response, "lots_executed", "filled_quantity", "executed_quantity"))
         remaining = max(requested - filled, 0)
+
         return OrderSnapshot(
             order_id=order_id,
             account_id=account_id,
-            instrument_uid=str(getattr(response, "instrument_uid", "")),
+            instrument_uid=str(cls._read(response, "instrument_uid", "instrument_id", default="")),
             status=status,
             requested_quantity=requested,
             filled_quantity=filled,
             remaining_quantity=remaining,
-            average_fill_price=getattr(response, "average_position_price", None),
-            commission=getattr(response, "executed_commission", None),
+            average_fill_price=cls._read(response, "average_position_price", "executed_order_price", "average_fill_price"),
+            commission=cls._read(response, "executed_commission", "commission"),
         )
