@@ -2,16 +2,25 @@ from __future__ import annotations
 
 from typing import Any
 
-from edward.services.order_service import OrderRequest
+from edward.services.order_service import OrderRequest, OrderType
 
 
 class OrdersApi:
-    """Adapter between Edward order models and the T-Invest SDK."""
+    """Adapter between Edward ordinary-order models and T-Invest OrdersService."""
 
     def __init__(self, client: Any) -> None:
         self._client = client
 
+    @staticmethod
+    def _validate_order_type(request: OrderRequest) -> None:
+        if request.order_type not in (OrderType.LIMIT, OrderType.MARKET, OrderType.BESTPRICE):
+            raise ValueError(
+                "Stop orders must be sent through StopOrdersService; "
+                f"unsupported OrdersService type: {request.order_type!r}"
+            )
+
     def post_order(self, request: OrderRequest) -> Any:
+        self._validate_order_type(request)
         kwargs = {
             "quantity": request.quantity,
             "direction": request.side.value,
@@ -20,10 +29,8 @@ class OrdersApi:
             "instrument_id": request.instrument_uid,
             "order_id": request.request_id,
         }
-        if request.price is not None:
+        if request.order_type is OrderType.LIMIT:
             kwargs["price"] = request.price
-        if request.stop_price is not None:
-            kwargs["stop_price"] = request.stop_price
         return self._client.orders.post_order(**kwargs)
 
     def get_order_state(self, account_id: str, order_id: str) -> Any:
@@ -36,11 +43,12 @@ class OrdersApi:
         return self._client.orders.cancel_order(account_id, order_id)
 
     def replace_order(self, request: OrderRequest, order_id: str) -> Any:
+        self._validate_order_type(request)
         kwargs = {
             "order_id": order_id,
             "quantity": request.quantity,
             "account_id": request.account_id,
         }
-        if request.price is not None:
+        if request.order_type is OrderType.LIMIT:
             kwargs["price"] = request.price
         return self._client.orders.replace_order(**kwargs)
