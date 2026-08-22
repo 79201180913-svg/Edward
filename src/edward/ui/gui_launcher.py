@@ -21,6 +21,7 @@ from edward.ui.portfolio_quantity_fix import install_portfolio_quantity_fix
 from edward.ui.final_history_fix import install_final_history_fix
 from edward.ui.final_order_history_fix import install_final_order_history_fix
 from edward.ui.final_contract_override import install_final_contract_override
+from edward.ui.price_fallback_fix import install_price_fallback
 from edward.config.settings import Environment
 
 
@@ -55,6 +56,7 @@ install_trading_ui_guard(EdwardApp)
 install_sandbox_funding_ui(EdwardApp)
 install_operations_history_ui(EdwardApp)
 install_ux_fixes(EdwardApp)
+install_price_fallback()
 install_compat_fixes(EdwardApp)
 install_console_logging(EdwardApp)
 install_final_fixes(EdwardApp)
