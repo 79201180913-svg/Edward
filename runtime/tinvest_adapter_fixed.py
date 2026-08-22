@@ -5,6 +5,28 @@ from datetime import datetime, timedelta, timezone
 import tinvest_adapter as _adapter
 
 
+def _sdk_order_type(value):
+    """Map Edward ordinary order types to the T-Invest OrdersService enum."""
+    raw = getattr(value, "value", value)
+    key = str(raw).upper()
+    mapping = {
+        "MARKET": _adapter.SDKOrderType.ORDER_TYPE_MARKET,
+        "ORDER_TYPE_MARKET": _adapter.SDKOrderType.ORDER_TYPE_MARKET,
+        "LIMIT": _adapter.SDKOrderType.ORDER_TYPE_LIMIT,
+        "ORDER_TYPE_LIMIT": _adapter.SDKOrderType.ORDER_TYPE_LIMIT,
+    }
+    bestprice = getattr(_adapter.SDKOrderType, "ORDER_TYPE_BESTPRICE", None)
+    if bestprice is None:
+        bestprice = getattr(_adapter.SDKOrderType, "ORDER_TYPE_BEST_PRICE", None)
+    if bestprice is not None:
+        mapping.update({"BESTPRICE": bestprice, "BEST_PRICE": bestprice, "ORDER_TYPE_BESTPRICE": bestprice})
+    if key in mapping:
+        return mapping[key]
+    if isinstance(value, _adapter.SDKOrderType):
+        return value
+    raise ValueError(f"Unsupported ordinary order type: {value!r}")
+
+
 def _sandbox_positions(self, account_id):
     result = self._rest_request(
         "SandboxService/GetSandboxPositions",
@@ -45,107 +67,46 @@ def _sandbox_operations(self, account_id, limit=1000):
         "withoutTrades": False,
         "withoutOvernights": False,
     }
-    result = self._rest_request(
-        "SandboxService/GetSandboxOperationsByCursor",
-        payload,
-    )
+    result = self._rest_request("SandboxService/GetSandboxOperationsByCursor", payload)
     items = result.get("items", []) or []
-    _adapter.logger.info(
-        "[SANDBOX OPERATIONS REST] account_id=%s items=%s",
-        account_id,
-        len(items),
-    )
-    if items:
-        _adapter.logger.info("[SANDBOX OPERATION SAMPLE] %s", items[0])
+    _adapter.logger.info("[SANDBOX OPERATIONS REST] account_id=%s items=%s", account_id, len(items))
     return result
 
 
 def _list_instruments(self, kind="SHARE", trade=True):
     key = str(kind).upper()
-    method_map = {
-        "SHARE": "Shares",
-        "BOND": "Bonds",
-        "ETF": "Etfs",
-        "CURRENCY": "Currencies",
-        "FUTURES": "Futures",
-    }
+    method_map = {"SHARE": "Shares", "BOND": "Bonds", "ETF": "Etfs", "CURRENCY": "Currencies", "FUTURES": "Futures"}
     method_name = method_map.get(key)
     if method_name is None:
         raise ValueError(f"Unsupported instrument kind: {kind}")
-
     request = {
         "instrumentStatus": "INSTRUMENT_STATUS_BASE" if trade else "INSTRUMENT_STATUS_ALL",
         "instrumentExchange": "INSTRUMENT_EXCHANGE_UNSPECIFIED",
     }
     rest_method = f"InstrumentsService/{method_name}"
     data = self._rest_request(rest_method, request)
-    _adapter.logger.info(
-        "[INSTRUMENTS REST] kind=%s method=%s count=%s",
-        key,
-        rest_method,
-        len(data.get("instruments", []) or []),
-    )
+    _adapter.logger.info("[INSTRUMENTS REST] kind=%s method=%s count=%s", key, rest_method, len(data.get("instruments", []) or []))
     return data
 
 
 def _last_prices(self, ids):
-    return self._rest_request(
-        "MarketDataService/GetLastPrices",
-        {"instrumentId": [str(value) for value in ids], "lastPriceType": "LAST_PRICE_UNSPECIFIED"},
-    )
+    return self._rest_request("MarketDataService/GetLastPrices", {"instrumentId": [str(value) for value in ids], "lastPriceType": "LAST_PRICE_UNSPECIFIED"})
 
 
 def _close_prices(self, ids):
     instruments = [{"instrumentId": str(value)} for value in ids]
-    result = self._rest_request(
-        "MarketDataService/GetClosePrices",
-        {"instruments": instruments, "instrumentStatus": "INSTRUMENT_STATUS_BASE"},
-    )
-    prices = result.get("close_prices", []) or []
-    _adapter.logger.info("[CLOSE PRICES REST] requested=%s returned=%s", len(ids), len(prices))
-    return result
+    return self._rest_request("MarketDataService/GetClosePrices", {"instruments": instruments, "instrumentStatus": "INSTRUMENT_STATUS_BASE"})
 
 
 def _trading_status(self, instrument_id):
-    """Return trading status directly from REST JSON.
-
-    The base adapter uses message_to_dict(), which omits protobuf fields with
-    default values. For trading status that is unsafe because false flags are
-    semantically meaningful. The REST response keeps the fields explicit.
-    """
-    result = self._rest_request(
-        "MarketDataService/GetTradingStatus",
-        {"instrumentId": str(instrument_id)},
-    )
-    _adapter.logger.info(
-        "[TRADING STATUS REST] instrument_id=%s api=%s market=%s limit=%s bestprice=%s ticker=%s trading_status=%s raw=%s",
-        instrument_id,
-        result.get("api_trade_available_flag", result.get("apiTradeAvailableFlag")),
-        result.get("market_order_available_flag", result.get("marketOrderAvailableFlag")),
-        result.get("limit_order_available_flag", result.get("limitOrderAvailableFlag")),
-        result.get("bestprice_order_available_flag", result.get("bestpriceOrderAvailableFlag")),
-        result.get("ticker"),
-        result.get("trading_status", result.get("tradingStatus")),
-        result,
-    )
-    return result
+    return self._rest_request("MarketDataService/GetTradingStatus", {"instrumentId": str(instrument_id)})
 
 
 def _trading_statuses(self, ids):
-    """Return bulk trading statuses directly from REST JSON."""
-    result = self._rest_request(
-        "MarketDataService/GetTradingStatuses",
-        {"instrumentId": [str(value) for value in ids]},
-    )
-    statuses = result.get("trading_statuses", result.get("tradingStatuses", [])) or []
-    _adapter.logger.info(
-        "[TRADING STATUSES REST] requested=%s returned=%s",
-        len(ids),
-        len(statuses),
-    )
-    return result
+    return self._rest_request("MarketDataService/GetTradingStatuses", {"instrumentId": [str(value) for value in ids]})
 
 
+_adapter._sdk_order_type = _sdk_order_type
 _adapter.AdapterState.sandbox_positions = _sandbox_positions
 _adapter.AdapterState.sandbox_portfolio = _sandbox_portfolio
 _adapter.AdapterState.operations = _sandbox_operations
