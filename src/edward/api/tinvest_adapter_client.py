@@ -114,6 +114,7 @@ class TInvestAdapterClient:
     def list_instruments(self, instrument_kind: str = "SHARE", trade_available_only: bool = True) -> dict: return self._request("POST", "/instruments/list", {"instrument_kind": instrument_kind, "api_trade_available_flag": trade_available_only})
     def get_instrument(self, instrument_id: str) -> dict: return self._request("POST", "/instruments/get", {"instrument_id": instrument_id})
     def get_last_prices(self, instrument_ids: list[str]) -> dict: return self._request("POST", "/market/last-prices", {"instrument_ids": instrument_ids})
+    def get_close_prices(self, instrument_ids: list[str]) -> dict: return self._request("POST", "/market/close-prices", {"instrument_ids": instrument_ids})
     def get_trading_status(self, instrument_id: str) -> dict: return self._request("POST", "/market/trading-status", {"instrument_id": instrument_id})
     def get_trading_statuses(self, instrument_ids: list[str]) -> dict: return self._request("POST", "/market/trading-statuses", {"instrument_ids": instrument_ids})
     def get_orders(self, account_id: str) -> dict: return self._request("POST", "/orders", {"account_id": account_id})
