@@ -88,6 +88,24 @@ def _list_instruments(self, kind="SHARE", trade=True):
     return data
 
 
+def _last_prices(self, ids):
+    return self._rest_request(
+        "MarketDataService/GetLastPrices",
+        {"instrumentId": [str(value) for value in ids], "lastPriceType": "LAST_PRICE_UNSPECIFIED"},
+    )
+
+
+def _close_prices(self, ids):
+    instruments = [{"instrumentId": str(value)} for value in ids]
+    result = self._rest_request(
+        "MarketDataService/GetClosePrices",
+        {"instruments": instruments, "instrumentStatus": "INSTRUMENT_STATUS_BASE"},
+    )
+    prices = result.get("close_prices", []) or []
+    _adapter.logger.info("[CLOSE PRICES REST] requested=%s returned=%s", len(ids), len(prices))
+    return result
+
+
 def _trading_status(self, instrument_id):
     """Return trading status directly from REST JSON.
 
@@ -132,6 +150,8 @@ _adapter.AdapterState.sandbox_positions = _sandbox_positions
 _adapter.AdapterState.sandbox_portfolio = _sandbox_portfolio
 _adapter.AdapterState.operations = _sandbox_operations
 _adapter.AdapterState.list_instruments = _list_instruments
+_adapter.AdapterState.last_prices = _last_prices
+_adapter.AdapterState.close_prices = _close_prices
 _adapter.AdapterState.trading_status = _trading_status
 _adapter.AdapterState.trading_statuses = _trading_statuses
 
