@@ -16,8 +16,21 @@ class FakeCatalogClient:
             ]
         }
 
-    def find_instrument(self, query, trade_available_only=True):
-        return {"instruments": []}
+    def get_last_prices(self, instrument_ids):
+        return {
+            "last_prices": [
+                SimpleNamespace(uid="1", price=SimpleNamespace(units=100, nano=0)),
+                SimpleNamespace(uid="2", price=SimpleNamespace(units=200, nano=0)),
+            ]
+        }
+
+    def get_trading_statuses(self, instrument_ids):
+        return {
+            "trading_statuses": [
+                SimpleNamespace(uid="1", api_trade_available_flag=True, limit_order_available_flag=True, market_order_available_flag=True, bestprice_order_available_flag=True, trading_status="SECURITY_TRADING_STATUS_NORMAL_TRADING"),
+                SimpleNamespace(uid="2", api_trade_available_flag=True, limit_order_available_flag=True, market_order_available_flag=True, bestprice_order_available_flag=True, trading_status="SECURITY_TRADING_STATUS_NORMAL_TRADING"),
+            ]
+        }
 
 
 def test_catalog_list_returns_authoritative_list():
@@ -27,6 +40,8 @@ def test_catalog_list_returns_authoritative_list():
     result = service.list("SHARE")
 
     assert [item.ticker for item in result] == ["SBER", "GAZP"]
+    assert [item.last_price for item in result] == ["100", "200"]
+    assert all(item.trading_available for item in result)
     assert client.list_calls == [("SHARE", True)]
 
 
