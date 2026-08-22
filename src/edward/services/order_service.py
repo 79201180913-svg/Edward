@@ -13,10 +13,16 @@ class OrderSide(StrEnum):
 
 
 class OrderType(StrEnum):
+    """Order types accepted by T-Invest OrdersService.
+
+    Stop orders are intentionally not part of this enum. They belong to the
+    separate StopOrdersService contract and will be introduced there in a
+    dedicated adapter in a later 0.2 task.
+    """
+
     MARKET = "MARKET"
     LIMIT = "LIMIT"
-    STOP = "STOP"
-    STOP_LIMIT = "STOP_LIMIT"
+    BESTPRICE = "BESTPRICE"
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,10 +40,12 @@ class OrderRequest:
     def __post_init__(self) -> None:
         if self.quantity <= 0:
             raise ValueError("Order quantity must be positive")
-        if self.order_type in (OrderType.LIMIT, OrderType.STOP_LIMIT) and self.price is None:
-            raise ValueError("Limit price is required for this order type")
-        if self.order_type in (OrderType.STOP, OrderType.STOP_LIMIT) and self.stop_price is None:
-            raise ValueError("Stop price is required for this order type")
+        if self.order_type is OrderType.LIMIT and self.price is None:
+            raise ValueError("Limit price is required for LIMIT order")
+        if self.order_type in (OrderType.MARKET, OrderType.BESTPRICE) and self.price is not None:
+            raise ValueError(f"Price must be omitted for {self.order_type.value} order")
+        if self.stop_price is not None:
+            raise ValueError("stop_price is only valid for StopOrdersService requests")
         if not self.request_id:
             object.__setattr__(self, "request_id", str(uuid4()))
 
@@ -52,15 +60,12 @@ class OrdersGateway(Protocol):
 
 
 class OrderService:
-    """Application service responsible for all order lifecycle operations."""
+    """Application service responsible for ordinary order lifecycle operations."""
 
     def __init__(self, gateway: OrdersGateway) -> None:
         self._gateway = gateway
 
     def create_order(self, request: OrderRequest) -> Any:
-        # T-Invest PostOrder explicitly ignores price for MARKET orders.
-        # The current market price is used by pre-flight validation/confirmation,
-        # but must not be injected into the actual MARKET request.
         return self._gateway.post_order(request)
 
     def get_order_state(self, account_id: str, order_id: str) -> Any:
