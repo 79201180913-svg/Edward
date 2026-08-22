@@ -18,15 +18,22 @@ class TInvestAdapterClient:
         request = Request(f"{self.base_url}{path}", data=data, method=method, headers={"Content-Type": "application/json"})
         try:
             with urlopen(request, timeout=self.timeout) as response:
-                return json.loads(response.read().decode("utf-8"))
+                body = response.read().decode("utf-8")
+                return json.loads(body) if body else {}
         except HTTPError as exc:
             try:
                 body = json.loads(exc.read().decode("utf-8"))
             except Exception:
                 body = {"error": "http_error", "message": str(exc)}
-            raise RuntimeError(body.get("message", body.get("error", str(exc)))) from exc
+            error = RuntimeError(body.get("message", body.get("error", str(exc))))
+            setattr(error, "status_code", exc.code)
+            setattr(error, "error_code", body.get("code", body.get("error")))
+            setattr(error, "retryable", exc.code in (408, 409, 429, 500, 502, 503, 504))
+            raise error from exc
         except URLError as exc:
-            raise RuntimeError(f"T-Invest adapter is unavailable: {exc.reason}") from exc
+            error = RuntimeError(f"T-Invest adapter is unavailable: {exc.reason}")
+            setattr(error, "retryable", True)
+            raise error from exc
 
     def health(self) -> dict: return self._request("GET", "/health")
     def get_accounts(self) -> dict: return self._request("POST", "/accounts", {})
@@ -46,16 +53,9 @@ class TInvestAdapterClient:
         if isinstance(value, dict):
             if "units" in value or "nano" in value:
                 return Decimal(str(value.get("units", 0))) + Decimal(str(value.get("nano", 0))) / Decimal("1000000000")
-            if "available_value" in value:
-                return TInvestAdapterClient._money_decimal(value.get("available_value"))
-            if "available" in value:
-                return TInvestAdapterClient._money_decimal(value.get("available"))
-            if "blocked_value" in value:
-                return TInvestAdapterClient._money_decimal(value.get("blocked_value"))
-            if "blocked" in value:
-                return TInvestAdapterClient._money_decimal(value.get("blocked"))
-            if "value" in value:
-                return TInvestAdapterClient._money_decimal(value.get("value"))
+            for key in ("available_value", "available", "blocked_value", "blocked", "value"):
+                if key in value:
+                    return TInvestAdapterClient._money_decimal(value[key])
         try:
             return Decimal(str(value))
         except Exception:
@@ -64,30 +64,16 @@ class TInvestAdapterClient:
     @classmethod
     def _normalize_sandbox_positions(cls, positions: dict) -> dict:
         result = dict(positions or {})
-        raw_money = result.get("money", []) or []
         normalized_money: list[dict] = []
-        for item in raw_money:
+        for item in result.get("money", []) or []:
             if not isinstance(item, dict):
                 continue
             currency = str(item.get("currency", "")).upper()
             if not currency:
                 continue
-            if "units" in item or "nano" in item:
-                available_amount = cls._money_decimal(item)
-            else:
-                available_amount = cls._money_decimal(item.get("available_value", item.get("available", 0)))
-            blocked_amount = cls._money_decimal(item.get("blocked_value", item.get("blocked", 0)))
-            available_whole = available_amount.quantize(Decimal("1"))
-            available_nano = int((available_amount - available_whole) * Decimal("1000000000"))
-            blocked_whole = blocked_amount.quantize(Decimal("1"))
-            blocked_nano = int((blocked_amount - blocked_whole) * Decimal("1000000000"))
-            normalized_money.append({
-                "currency": currency,
-                "available": {"units": str(available_whole), "nano": available_nano},
-                "available_value": {"units": str(available_whole), "nano": available_nano},
-                "blocked": {"units": str(blocked_whole), "nano": blocked_nano},
-                "blocked_value": {"units": str(blocked_whole), "nano": blocked_nano},
-            })
+            available = cls._money_decimal(item.get("available_value", item.get("available", item)))
+            blocked = cls._money_decimal(item.get("blocked_value", item.get("blocked", 0)))
+            normalized_money.append({"currency": currency, "available": cls._quotation_payload(available), "blocked": cls._quotation_payload(blocked)})
         result["money"] = normalized_money
         return result
 
@@ -99,16 +85,7 @@ class TInvestAdapterClient:
     def get_positions(self, account_id: str) -> dict:
         if str(self.health().get("environment", "")).lower() != "sandbox":
             return self._request("POST", "/positions", {"account_id": account_id})
-        positions = self.get_sandbox_positions(account_id)
-        normalized = self._normalize_sandbox_positions(positions)
-        rub = next((item for item in normalized.get("money", []) if str(item.get("currency", "")).upper() == "RUB"), None)
-        if rub is not None:
-            available = self._money_decimal(rub.get("available"))
-            blocked = self._money_decimal(rub.get("blocked"))
-            print(f"[SANDBOX CASH] account_id={account_id} available={available} blocked={blocked} raw_money={positions.get('money', [])}")
-        else:
-            print(f"[SANDBOX CASH] account_id={account_id} available=0 blocked=0 raw_money={positions.get('money', [])}")
-        return normalized
+        return self._normalize_sandbox_positions(self.get_sandbox_positions(account_id))
 
     def find_instrument(self, query: str, trade_available_only: bool = True) -> dict: return self._request("POST", "/instruments/search", {"query": query, "api_trade_available_flag": trade_available_only})
     def list_instruments(self, instrument_kind: str = "SHARE", trade_available_only: bool = True) -> dict: return self._request("POST", "/instruments/list", {"instrument_kind": instrument_kind, "api_trade_available_flag": trade_available_only})
@@ -131,13 +108,13 @@ class TInvestAdapterClient:
         if isinstance(value, dict) and ("units" in value or "nano" in value):
             return {"units": str(value.get("units", 0)), "nano": int(value.get("nano", 0))}
         amount = value if isinstance(value, Decimal) else Decimal(str(value))
-        whole = amount.quantize(Decimal("1"))
-        nano = int((amount - whole) * Decimal("1000000000"))
+        whole = int(amount)
+        nano = int((amount - Decimal(whole)) * Decimal("1000000000"))
         return {"units": str(whole), "nano": nano}
 
     @staticmethod
     def _order_payload(request: Any) -> dict:
-        payload = {
+        return {
             "quantity": int(getattr(request, "quantity")),
             "direction": getattr(getattr(request, "side"), "value", getattr(request, "side")),
             "account_id": str(getattr(request, "account_id")),
@@ -145,10 +122,7 @@ class TInvestAdapterClient:
             "instrument_uid": str(getattr(request, "instrument_uid")),
             "request_id": str(getattr(request, "request_id")),
             "price": TInvestAdapterClient._quotation_payload(getattr(request, "price", None)),
-            "stop_price": TInvestAdapterClient._quotation_payload(getattr(request, "stop_price", None)),
         }
-        print(f"[ORDER PAYLOAD] type={payload['order_type']} direction={payload['direction']} quantity={payload['quantity']} price={payload['price']!r}")
-        return payload
 
     def post_order(self, request: Any) -> dict:
         return self._request("POST", "/orders/create", self._order_payload(request))
@@ -158,3 +132,12 @@ class TInvestAdapterClient:
         payload = self._order_payload(request)
         payload["order_id"] = order_id
         return self._request("POST", "/orders/replace", payload)
+
+    def post_stop_order(self, request: dict[str, Any]) -> dict:
+        return self._request("POST", "/stop-orders/create", request)
+
+    def get_stop_orders(self, account_id: str) -> dict:
+        return self._request("POST", "/stop-orders", {"account_id": account_id})
+
+    def cancel_stop_order(self, account_id: str, stop_order_id: str) -> dict:
+        return self._request("POST", "/stop-orders/cancel", {"account_id": account_id, "stop_order_id": stop_order_id})
