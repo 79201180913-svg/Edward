@@ -38,12 +38,12 @@ class EdwardApp(tk.Tk):
         return []
     @staticmethod
     def _decimal(v):
-        if v is None: return Decimal('0')
-        if isinstance(v,dict) and ('units' in v or 'nano' in v): return Decimal(str(v.get('units',0)))+Decimal(str(v.get('nano',0)))/Decimal('1000000000')
-        try: return Decimal(str(v))
-        except Exception: return Decimal('0')
+        if v is None:return Decimal('0')
+        if isinstance(v,dict) and ('units' in v or 'nano' in v):return Decimal(str(v.get('units',0)))+Decimal(str(v.get('nano',0)))/Decimal('1000000000')
+        try:return Decimal(str(v))
+        except Exception:return Decimal('0')
     @classmethod
-    def _money(cls,v,c=''): return f'{cls._decimal(v):,.2f}'.replace(',',' ')+(f' {c}' if c else '')
+    def _money(cls,v,c=''):return f'{cls._decimal(v):,.2f}'.replace(',',' ')+(f' {c}' if c else '')
 
     def _style(self):
         s=ttk.Style(self)
@@ -61,12 +61,11 @@ class EdwardApp(tk.Tk):
 
     def _clear(self):
         for c in self.content.winfo_children(): c.destroy()
-    def show_page(self,page): self.current_page=page; self._clear();
     def _show_page(self,page):
         try:getattr(self,f'_page_{page}')()
         except Exception as exc:self._show_error(exc,page)
-    def refresh_current(self): self._refresh_accounts(); self._clear(); self._show_page(self.current_page)
     def show_page(self,page): self.current_page=page; self._clear(); self._show_page(page)
+    def refresh_current(self): self._refresh_accounts(); self._clear(); self._show_page(self.current_page)
 
     def _tick(self):
         try:
@@ -121,7 +120,7 @@ class EdwardApp(tk.Tk):
     def _load_instruments(self):
         kind=next(k for k,v in INSTRUMENT_KINDS if v==self.kind_var.get()); svc=InstrumentCatalogService(self.client); q=self.filter_var.get().strip(); items=svc.search(q,kind,True) if q else svc.list(kind,True)
         for x in self.instrument_tree.get_children():self.instrument_tree.delete(x)
-        for i in items:self.instrument_tree.insert('', 'end', values=(self._field(i,'ticker',''),self._field(i,'name',''),self._field(i,'currency',''),self._field(i,'last_price',''),self._field(i,'min_price_increment',''),'Да' if self._field(i,'buy_available',False) else 'Нет','Да' if self._field(i,'sell_available',False) else 'Нет','Да' if self._field(i,'api_trade_available',False) else 'Нет',self._field(i,'uid',self._field(i,'instrument_uid',''))))
+        for i in items:self.instrument_tree.insert('', 'end', values=(self._field(i,'ticker',''),self._field(i,'name',''),self._field(i,'currency',''),self._field(i,'last_price',''),self._field(i,'min_price_increment',''),'Да' if self._field(i,'buy_available',False) else 'Нет','Да' if self._field(i,'sell_available',False) else 'Нет','Да' if (self._field(i,'api_trade_available',False) and self._field(i,'trading_status','') not in {'SECURITY_TRADING_STATUS_NOT_AVAILABLE_FOR_TRADING','NOT_AVAILABLE_FOR_TRADING'} and (self._field(i,'limit_order_available',False) or self._field(i,'market_order_available',False) or self._field(i,'bestprice_order_available',False))) else 'Нет',self._field(i,'uid',self._field(i,'instrument_uid',''))))
         self.status_var.set(f'Инструментов: {len(items)}')
     def _instrument_selected(self,_=None):
         sel=self.instrument_tree.selection()
@@ -156,28 +155,22 @@ class EdwardApp(tk.Tk):
         ttk.Label(self.content,text='Новая торговая заявка',style='Title.TLabel').pack(anchor='w',pady=(0,16)); aid=self._require_account()
         if not aid:return
         ins=self.selected_instrument or {}; f=ttk.Frame(self.content); f.pack(fill='x'); vars={}
-
-        # Определяем доступные типы заявки непосредственно перед отображением формы.
         status=self.client.get_trading_status(str(ins.get('instrument_uid','')))
         api_trade_available=bool(self._field(status,'api_trade_available_flag',False))
-        market_available=bool(self._field(status,'market_order_available_flag',True))
+        market_available=bool(self._field(status,'market_order_available_flag',False))
         limit_available=bool(self._field(status,'limit_order_available_flag',False))
+        bestprice_available=bool(self._field(status,'bestprice_order_available_flag',False))
         available_types=[]
         if market_available and api_trade_available: available_types.append('Рыночная')
         if limit_available and api_trade_available: available_types.append('Лимитная')
+        if bestprice_available and api_trade_available: available_types.append('Лучшая цена')
         if not available_types:
-            raise ValueError(
-                'Для выбранного инструмента сейчас нет доступных типов заявок.\n\n'
-                f'api_trade_available_flag={api_trade_available}; '
-                f'market_order_available_flag={self._field(status,"market_order_available_flag",None)}; '
-                f'limit_order_available_flag={self._field(status,"limit_order_available_flag",None)}; '
-                f'trading_status={self._field(status,"trading_status",None)}'
-            )
-        default_type=available_types[0]
-        if 'Лимитная' in available_types and api_trade_available:
-            default_type='Лимитная'
+            raise ValueError('Для выбранного инструмента сейчас нет доступных типов заявок.')
+        default_type='Лимитная' if 'Лимитная' in available_types else available_types[0]
 
-        fields=[('ticker','Инструмент',ins.get('ticker','')),('side','Операция','Покупка'),('order_type','Тип заявки',default_type),('quantity','Количество лотов','1'),('price','Цена',str(ins.get('last_price','')))]
+        raw_price=ins.get('last_price','')
+        price_default='' if raw_price in (None,'', '0', 0, '0.0', '0.00') else str(raw_price)
+        fields=[('ticker','Инструмент',ins.get('ticker','')),('side','Операция','Покупка'),('order_type','Тип заявки',default_type),('quantity','Количество лотов','1'),('price','Цена',price_default)]
         for r,(k,l,d) in enumerate(fields):
             ttk.Label(f,text=l,width=22).grid(row=r,column=0,sticky='w',pady=5); vars[k]=tk.StringVar(value=d)
             if k=='side':w=ttk.Combobox(f,textvariable=vars[k],state='readonly',values=['Покупка','Продажа'],width=37)
@@ -185,14 +178,32 @@ class EdwardApp(tk.Tk):
             elif k=='ticker':w=ttk.Entry(f,textvariable=vars[k],state='readonly',width=40)
             else:w=ttk.Entry(f,textvariable=vars[k],width=40)
             w.grid(row=r,column=1,sticky='w')
+        price_note='Введите цену лимитной заявки' if 'Лимитная' in available_types and not price_default else 'Текущая цена может отсутствовать вне активной торговой сессии.'
         type_hint=' / '.join(available_types)
-        ttk.Label(self.content,text=f"Текущая цена: {ins.get('last_price','недоступна')} | Шаг цены: {ins.get('min_price_increment','неизвестен')} | Доступные типы: {type_hint}").pack(anchor='w',pady=12); ttk.Button(self.content,text='Проверить и подтвердить',command=lambda:self._submit(vars)).pack(anchor='w')
+        ttk.Label(self.content,text=f"Текущая цена: {ins.get('last_price') or 'недоступна'} | Шаг цены: {ins.get('min_price_increment') or 'неизвестен'} | Доступные типы: {type_hint}").pack(anchor='w',pady=(12,4)); ttk.Label(self.content,text=price_note).pack(anchor='w',pady=(0,12)); ttk.Button(self.content,text='Проверить и подтвердить',command=lambda:self._submit(vars)).pack(anchor='w')
 
     def _submit(self,v):
         aid=self._require_account(); ins=self.selected_instrument
         if not aid or not ins:return
         try:
-            qty=int(v['quantity'].get()); side=OrderSide.BUY if v['side'].get()=='Покупка' else OrderSide.SELL; typ=OrderType.MARKET if v['order_type'].get()=='Рыночная' else OrderType.LIMIT; price=Decimal(v['price'].get()) if typ==OrderType.LIMIT else None; req=OrderRequest(account_id=aid,instrument_uid=str(ins['instrument_uid']),side=side,order_type=typ,quantity=qty,price=price,instrument_kind=str(ins.get('instrument_kind','SHARE'))); ctx=TradingValidator(AdapterTradingDataProvider(self.client)).validate(req)
+            qty=int(v['quantity'].get())
+            if qty<=0: raise ValueError('Количество лотов должно быть больше нуля.')
+            side=OrderSide.BUY if v['side'].get()=='Покупка' else OrderSide.SELL
+            type_label=v['order_type'].get()
+            typ=OrderType.MARKET if type_label=='Рыночная' else OrderType.LIMIT
+            raw_price=v['price'].get().strip()
+            if typ==OrderType.LIMIT:
+                if not raw_price:
+                    raise ValueError('Для лимитной заявки необходимо указать цену.')
+                try:
+                    price=Decimal(raw_price.replace(',','.'))
+                except Exception as exc:
+                    raise ValueError(f'Некорректная цена: {raw_price!r}') from exc
+                if price<=0: raise ValueError('Цена должна быть больше нуля.')
+            else:
+                price=None
+            req=OrderRequest(account_id=aid,instrument_uid=str(ins['instrument_uid']),side=side,order_type=typ,quantity=qty,price=price,instrument_kind=str(ins.get('instrument_kind','SHARE')))
+            ctx=TradingValidator(AdapterTradingDataProvider(self.client)).validate(req)
             total=ctx.estimated_total or Decimal('0'); commission=ctx.estimated_commission or Decimal('0')
         except Exception as exc:self._show_error(exc,'проверка заявки'); return
         if not messagebox.askyesno('Подтверждение заявки',f"{ins.get('ticker','')}\n{side.value}\nКоличество: {qty}\nЦена: {price or ctx.market_price}\nКомиссия: {self._money(commission)}\nИтого: {self._money(total+commission)}\n\nОтправить?"):return
