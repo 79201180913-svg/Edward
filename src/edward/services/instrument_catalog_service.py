@@ -66,75 +66,91 @@ class InstrumentCatalogService:
             uid = _uid(instrument)
             price_item = prices.get(uid)
             status = statuses.get(uid)
+            raw_price = _field(price_item, "price", _field(price_item, "last_price", ""))
+            normalized_price = _quotation_to_string(raw_price)
 
-            if isinstance(item, dict):
-                item["instrument_kind"] = kind
-                raw_price = _field(price_item, "price", _field(price_item, "last_price", ""))
-                normalized_price = _quotation_to_string(raw_price)
-                item["last_price"] = normalized_price
-                if not normalized_price:
-                    missing_price += 1
-                    if missing_price <= 10:
-                        logger.warning(
-                            "[PRICE DEBUG] Missing price: ticker=%s uid=%s price_item=%r",
-                            _field(instrument, "ticker", ""), uid, price_item,
-                        )
-                else:
-                    if len(result) < 5:
-                        logger.info(
-                            "[PRICE DEBUG] Price matched: ticker=%s uid=%s raw=%r normalized=%s",
-                            _field(instrument, "ticker", ""), uid, raw_price, normalized_price,
-                        )
+            api_available = _bool_flag(
+                status,
+                "api_trade_available_flag",
+                _field(instrument, "api_trade_available_flag", False),
+            )
+            limit_available = _bool_flag(status, "limit_order_available_flag", False)
+            market_available = _bool_flag(status, "market_order_available_flag", False)
+            bestprice_available = _bool_flag(status, "bestprice_order_available_flag", False)
+            trading_status = _field(status, "trading_status", _field(status, "status", ""))
 
-                api_available = _bool_flag(
-                    status,
-                    "api_trade_available_flag",
-                    _field(instrument, "api_trade_available_flag", False),
-                )
-                limit_available = _bool_flag(status, "limit_order_available_flag", False)
-                market_available = _bool_flag(status, "market_order_available_flag", False)
-                bestprice_available = _bool_flag(status, "bestprice_order_available_flag", False)
-                trading_status = _field(status, "trading_status", _field(status, "status", ""))
+            # api_trade_available_flag means that API access exists for the
+            # instrument; it does not mean that an order can be submitted now.
+            # The UI flag must represent actual current order availability.
+            trading_status_text = str(trading_status or "").upper()
+            status_allows_trading = trading_status_text not in {
+                "SECURITY_TRADING_STATUS_NOT_AVAILABLE_FOR_TRADING",
+                "NOT_AVAILABLE_FOR_TRADING",
+            }
+            trade_available = bool(
+                api_available
+                and status_allows_trading
+                and (limit_available or market_available or bestprice_available)
+            )
 
-                # api_trade_available_flag means that API access exists for the
-                # instrument; it does not mean that an order can be submitted now.
-                # The UI flag must represent actual current order availability.
-                trading_status_text = str(trading_status or "").upper()
-                status_allows_trading = trading_status_text not in {
-                    "SECURITY_TRADING_STATUS_NOT_AVAILABLE_FOR_TRADING",
-                    "NOT_AVAILABLE_FOR_TRADING",
-                }
-                trade_available = bool(
-                    api_available
-                    and status_allows_trading
-                    and (limit_available or market_available or bestprice_available)
-                )
-
-                item["buy_available"] = _field(instrument, "buy_available_flag", False)
-                item["sell_available"] = _field(instrument, "sell_available_flag", False)
-                item["api_trade_available"] = api_available
-                item["trading_available"] = trade_available
-                item["trading_status"] = trading_status
-                item["limit_order_available"] = limit_available
-                item["market_order_available"] = market_available
-                item["bestprice_order_available"] = bestprice_available
-                item["min_price_increment"] = _field(
+            fields = {
+                "instrument_kind": kind,
+                "last_price": normalized_price,
+                "buy_available": _field(instrument, "buy_available_flag", False),
+                "sell_available": _field(instrument, "sell_available_flag", False),
+                "api_trade_available": api_available,
+                "trading_available": trade_available,
+                "trading_status": trading_status,
+                "limit_order_available": limit_available,
+                "market_order_available": market_available,
+                "bestprice_order_available": bestprice_available,
+                "min_price_increment": _field(
                     instrument,
                     "min_price_increment",
                     _field(instrument, "min_price_increment_value", ""),
+                ),
+            }
+
+            if isinstance(item, dict):
+                item.update(fields)
+            else:
+                # T-Invest protobuf responses and test doubles are object-shaped,
+                # while REST responses are dict-shaped. Preserve object identity
+                # and expose the same enriched contract for mutable objects.
+                for name, value in fields.items():
+                    try:
+                        setattr(item, name, value)
+                    except (AttributeError, TypeError):
+                        logger.warning(
+                            "[PRICE DEBUG] Cannot enrich object field: type=%s field=%s",
+                            type(item).__name__,
+                            name,
+                        )
+
+            if not normalized_price:
+                missing_price += 1
+                if missing_price <= 10:
+                    logger.warning(
+                        "[PRICE DEBUG] Missing price: ticker=%s uid=%s price_item=%r",
+                        _field(instrument, "ticker", ""), uid, price_item,
+                    )
+            elif len(result) < 5:
+                logger.info(
+                    "[PRICE DEBUG] Price matched: ticker=%s uid=%s raw=%r normalized=%s",
+                    _field(instrument, "ticker", ""), uid, raw_price, normalized_price,
                 )
 
-                logger.debug(
-                    "[TRADING AVAILABILITY] ticker=%s uid=%s api=%s limit=%s market=%s bestprice=%s status=%s available=%s",
-                    _field(instrument, "ticker", ""),
-                    uid,
-                    api_available,
-                    limit_available,
-                    market_available,
-                    bestprice_available,
-                    trading_status,
-                    trade_available,
-                )
+            logger.debug(
+                "[TRADING AVAILABILITY] ticker=%s uid=%s api=%s limit=%s market=%s bestprice=%s status=%s available=%s",
+                _field(instrument, "ticker", ""),
+                uid,
+                api_available,
+                limit_available,
+                market_available,
+                bestprice_available,
+                trading_status,
+                trade_available,
+            )
             result.append(item)
 
         logger.info(
