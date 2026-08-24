@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import subprocess
 import time
 import uuid
@@ -14,7 +15,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-ADAPTER_URL = os.getenv("EDWARD_E2E_ADAPTER_URL", "http://127.0.0.1:8765")
+ADAPTER_URL = os.getenv("EDWARD_E2E_ADAPTER_URL", "")
 ADAPTER_PYTHON = Path(
     os.getenv(
         "EDWARD_TINVEST_PYTHON",
@@ -34,15 +35,28 @@ def _request(method: str, path: str, payload: dict | None = None) -> dict:
         method=method,
         headers={"Content-Type": "application/json", "Accept": "application/json"},
     )
-    with urlopen(request, timeout=30) as response:
-        return json.loads(response.read().decode("utf-8"))
+    try:
+        with urlopen(request, timeout=30) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        try:
+            body = exc.read().decode("utf-8", errors="replace")
+        except Exception:
+            body = ""
+        raise RuntimeError(f"Adapter HTTP {exc.code} for {method} {path}: {body}") from exc
 
 
 def _adapter_is_ready() -> bool:
     try:
         return _request("GET", "/health").get("status") == "ok"
-    except (OSError, HTTPError, URLError, ValueError):
+    except (OSError, HTTPError, URLError, ValueError, RuntimeError):
         return False
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
 
 
 def _items(payload: dict, *keys: str) -> list[dict]:
@@ -73,7 +87,14 @@ def _price_from_item(item: dict) -> Decimal:
 
 @pytest.fixture(scope="session")
 def sandbox_adapter():
-    """Start the real Edward T-Invest adapter against T-Invest Sandbox."""
+    """Start a dedicated real Edward T-Invest adapter against T-Invest Sandbox.
+
+    The test suite deliberately does not reuse an already running adapter on
+    the default GUI port. This prevents stale processes from masking adapter
+    code changes and makes E2E runs reproducible.
+    """
+    global ADAPTER_URL
+
     if os.getenv("EDWARD_TINVEST_ENV", "sandbox").lower() != "sandbox":
         pytest.fail("E2E tests must run with EDWARD_TINVEST_ENV=sandbox")
     if not os.getenv("EDWARD_TINVEST_TOKEN", "").strip():
@@ -83,12 +104,19 @@ def sandbox_adapter():
     if not ADAPTER_SCRIPT.exists():
         pytest.fail(f"Adapter script not found: {ADAPTER_SCRIPT}")
 
-    if _adapter_is_ready():
-        yield None
-        return
+    external_adapter = bool(ADAPTER_URL)
+    if not external_adapter:
+        port = _free_port()
+        ADAPTER_URL = f"http://127.0.0.1:{port}"
+    else:
+        if _adapter_is_ready():
+            yield None
+            return
+        pytest.fail(f"Configured E2E adapter is not reachable: {ADAPTER_URL}")
 
     env = os.environ.copy()
     env["EDWARD_TINVEST_ENV"] = "sandbox"
+    env["EDWARD_TINVEST_PORT"] = str(port)
     process = subprocess.Popen(
         [str(ADAPTER_PYTHON), str(ADAPTER_SCRIPT)],
         cwd=ROOT,
@@ -189,6 +217,7 @@ def _wait_terminal(account_id: str, order_id: str) -> dict:
 
 
 def _create_market_order(account_id: str, instrument_uid: str, side: str) -> dict:
+    request_id = str(uuid.uuid4())
     return _request(
         "POST",
         "/orders/create",
@@ -199,8 +228,8 @@ def _create_market_order(account_id: str, instrument_uid: str, side: str) -> dic
             "direction": side,
             "order_type": "MARKET",
             "quantity": 1,
-            "order_id": str(uuid.uuid4()),
-            "request_id": str(uuid.uuid4()),
+            "order_id": request_id,
+            "request_id": request_id,
         },
     )
 
