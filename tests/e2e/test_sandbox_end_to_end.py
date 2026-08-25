@@ -111,9 +111,6 @@ def _get_tradable_instrument() -> tuple[str, Decimal]:
         if not uid:
             continue
 
-        # Contract-level preconditions for a BUY market order.
-        # These fields are defined by InstrumentsService.Instrument and
-        # GetTradingStatus in the provided invest-contracts-master archive.
         if item.get("api_trade_available_flag") is False:
             continue
         if item.get("buy_available_flag") is False:
@@ -138,8 +135,6 @@ def _get_tradable_instrument() -> tuple[str, Decimal]:
             marker in status for marker in ("NORMAL_TRADING", "OPENING", "CLOSING")
         ):
             continue
-
-        # The contract explicitly exposes whether a MARKET order can be placed.
         if status_payload.get("market_order_available_flag") is False:
             continue
 
@@ -157,9 +152,7 @@ def _wait_terminal(account_id: str, order_id: str) -> dict:
     last_state: dict = {}
     while time.monotonic() < deadline:
         last_state = _request(
-            "POST",
-            "/orders/state",
-            {"account_id": account_id, "order_id": order_id},
+            "POST", "/orders/state", {"account_id": account_id, "order_id": order_id}
         )
         status = str(
             last_state.get("execution_report_status")
@@ -193,9 +186,7 @@ def _create_market_order(account_id: str, instrument_uid: str, side: str) -> dic
 
 def _cancel_if_active(account_id: str, order_id: str) -> dict:
     return _request(
-        "POST",
-        "/orders/cancel",
-        {"account_id": account_id, "order_id": order_id},
+        "POST", "/orders/cancel", {"account_id": account_id, "order_id": order_id}
     )
 
 
@@ -206,7 +197,7 @@ def sandbox_adapter():
         yield None
         return
 
-    token = TokenStore().get_token()
+    token = TokenStore().get()
     if not token:
         pytest.skip("No locally stored T-Invest token available")
 
@@ -256,7 +247,6 @@ def test_sandbox_read_only_end_to_end(sandbox_adapter):
     assert health["environment"] == "sandbox"
 
     account_id = _get_account_id()
-
     positions = _request("POST", "/accounts/sandbox-positions", {"account_id": account_id})
     assert "money" in positions
     assert "securities" in positions
@@ -277,24 +267,15 @@ def test_sandbox_read_only_end_to_end(sandbox_adapter):
 
     prices = _request("POST", "/market/last-prices", {"instrument_ids": [instrument_uid]})
     assert "last_prices" in prices
-
     statuses = _request("POST", "/market/trading-statuses", {"instrument_ids": [instrument_uid]})
     assert "trading_statuses" in statuses
-
     orders = _request("POST", "/orders", {"account_id": account_id})
     assert "orders" in orders
-
     operations = _request("POST", "/operations", {"account_id": account_id, "limit": 10})
     assert "items" in operations or "operations" in operations
 
 
 def test_sandbox_order_lifecycle_end_to_end(sandbox_adapter):
-    """Buy one Sandbox share, observe lifecycle, and unwind it when filled.
-
-    Enable with EDWARD_E2E_TRADING=1. The test never runs against production.
-    If the order cannot execute within the timeout, it is cancelled and the
-    test records the non-filled terminal state rather than leaving an order open.
-    """
     if os.getenv("EDWARD_E2E_TRADING", "0") != "1":
         pytest.skip("Trading E2E requires EDWARD_E2E_TRADING=1")
 
@@ -302,12 +283,8 @@ def test_sandbox_order_lifecycle_end_to_end(sandbox_adapter):
     instrument_uid, market_price = _get_tradable_instrument()
     assert market_price > 0
 
-    before_positions = _request(
-        "POST", "/accounts/sandbox-positions", {"account_id": account_id}
-    )
-    before_portfolio = _request(
-        "POST", "/accounts/sandbox-portfolio", {"account_id": account_id}
-    )
+    before_positions = _request("POST", "/accounts/sandbox-positions", {"account_id": account_id})
+    before_portfolio = _request("POST", "/accounts/sandbox-portfolio", {"account_id": account_id})
 
     created = _create_market_order(account_id, instrument_uid, "BUY")
     order_id = str(created.get("order_id") or created.get("id") or "")
@@ -315,10 +292,7 @@ def test_sandbox_order_lifecycle_end_to_end(sandbox_adapter):
 
     state = _wait_terminal(account_id, order_id)
     status = str(
-        state.get("execution_report_status")
-        or state.get("status")
-        or state.get("state")
-        or ""
+        state.get("execution_report_status") or state.get("status") or state.get("state") or ""
     ).upper()
     lots_executed = int(str(state.get("lots_executed", 0) or 0))
     lots_requested = int(str(state.get("lots_requested", 1) or 1))
@@ -327,25 +301,15 @@ def test_sandbox_order_lifecycle_end_to_end(sandbox_adapter):
         _cancel_if_active(account_id, order_id)
         cancelled = _wait_terminal(account_id, order_id)
         cancelled_status = str(
-            cancelled.get("execution_report_status")
-            or cancelled.get("status")
-            or cancelled.get("state")
-            or ""
+            cancelled.get("execution_report_status") or cancelled.get("status") or cancelled.get("state") or ""
         ).upper()
-        assert any(
-            token in cancelled_status
-            for token in ("CANCEL", "REJECT", "FAIL", "INACTIVE")
-        ), f"Unexpected terminal state after cancellation: {cancelled}"
+        assert any(token in cancelled_status for token in ("CANCEL", "REJECT", "FAIL", "INACTIVE")), f"Unexpected terminal state after cancellation: {cancelled}"
         return
 
     assert "FILL" in status or lots_executed >= lots_requested
 
-    after_buy_positions = _request(
-        "POST", "/accounts/sandbox-positions", {"account_id": account_id}
-    )
-    after_buy_portfolio = _request(
-        "POST", "/accounts/sandbox-portfolio", {"account_id": account_id}
-    )
+    after_buy_positions = _request("POST", "/accounts/sandbox-positions", {"account_id": account_id})
+    after_buy_portfolio = _request("POST", "/accounts/sandbox-portfolio", {"account_id": account_id})
     assert after_buy_positions != before_positions or after_buy_portfolio != before_portfolio
 
     sell_created = _create_market_order(account_id, instrument_uid, "SELL")
@@ -354,10 +318,7 @@ def test_sandbox_order_lifecycle_end_to_end(sandbox_adapter):
 
     sell_state = _wait_terminal(account_id, sell_order_id)
     sell_status = str(
-        sell_state.get("execution_report_status")
-        or sell_state.get("status")
-        or sell_state.get("state")
-        or ""
+        sell_state.get("execution_report_status") or sell_state.get("status") or sell_state.get("state") or ""
     ).upper()
     sell_lots_executed = int(str(sell_state.get("lots_executed", 0) or 0))
     sell_lots_requested = int(str(sell_state.get("lots_requested", 1) or 1))
@@ -366,15 +327,9 @@ def test_sandbox_order_lifecycle_end_to_end(sandbox_adapter):
         _cancel_if_active(account_id, sell_order_id)
         cancelled = _wait_terminal(account_id, sell_order_id)
         cancelled_status = str(
-            cancelled.get("execution_report_status")
-            or cancelled.get("status")
-            or cancelled.get("state")
-            or ""
+            cancelled.get("execution_report_status") or cancelled.get("status") or cancelled.get("state") or ""
         ).upper()
-        assert any(
-            token in cancelled_status
-            for token in ("CANCEL", "REJECT", "FAIL", "INACTIVE")
-        ), f"Unexpected SELL terminal state: {cancelled}"
+        assert any(token in cancelled_status for token in ("CANCEL", "REJECT", "FAIL", "INACTIVE")), f"Unexpected SELL terminal state: {cancelled}"
         return
 
     assert "FILL" in sell_status or sell_lots_executed >= sell_lots_requested
