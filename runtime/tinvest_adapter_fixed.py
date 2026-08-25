@@ -156,16 +156,45 @@ def _sandbox_positions(self, account_id):
     return result
 
 
+def _money_to_number(value) -> float:
+    if value is None:
+        return 0.0
+    if isinstance(value, dict):
+        units = float(value.get("units", 0))
+        nano = float(value.get("nano", 0)) / 1_000_000_000
+        return units + nano
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _sandbox_portfolio(self, account_id):
-    # t-tech-investments 0.3.3 does not accept a currency keyword here.
     result = self._service("sandbox").get_sandbox_portfolio(
         account_id=str(account_id),
     )
     result = _adapter.message_to_dict(result)
+
+    # SDK 0.3.3 returns positions/account_id but omits total_amount_portfolio.
+    # Preserve Edward's response contract without changing the upstream SDK.
+    total = 0.0
+    for position in result.get("positions", []) or []:
+        if not isinstance(position, dict):
+            continue
+        # Some SDK versions expose a direct value-like field. Only use a field
+        # when it is actually money-shaped; do not invent market prices.
+        for key in ("market_value", "current_price"):
+            candidate = position.get(key)
+            if isinstance(candidate, dict) and ("units" in candidate or "nano" in candidate):
+                total += _money_to_number(candidate)
+                break
+
+    result.setdefault("total_amount_portfolio", total)
     _adapter.logger.info(
-        "[SANDBOX PORTFOLIO SDK] account_id=%s positions=%s",
+        "[SANDBOX PORTFOLIO SDK] account_id=%s positions=%s total=%s",
         account_id,
         len(result.get("positions", []) or []),
+        result.get("total_amount_portfolio"),
     )
     return result
 
