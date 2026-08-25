@@ -11,7 +11,6 @@ from edward.services.opportunity_search_service import (
     PORTFOLIO_SCOPE,
     OpportunitySearchService,
 )
-from edward.ui.instrument_catalog import INSTRUMENT_KINDS
 
 
 SCOPE_VALUES = (
@@ -53,6 +52,10 @@ REGIME_LABELS = {
     "MEAN_REVERSION": "Возврат к среднему",
     "UNCLEAR": "Неясный",
     "UNCLEAR_REGIME": "Неясный",
+    "Trend": "Тренд",
+    "Momentum": "Импульс",
+    "Breakout": "Пробой",
+    "Mean Reversion": "Возврат к среднему",
 }
 STRATEGY_LABELS = {
     "Trend Following": "Следование за трендом",
@@ -87,6 +90,16 @@ def _label(mapping: dict[str, str], value: str | None, default: str = "—") -> 
         return default
     text = str(value)
     return mapping.get(text, text)
+
+
+def _safe_configure(widget: Any, **kwargs: Any) -> bool:
+    try:
+        if widget.winfo_exists():
+            widget.configure(**kwargs)
+            return True
+    except tk.TclError:
+        return False
+    return False
 
 
 def install_opportunity_search_ui(app_class: type[Any]) -> None:
@@ -154,8 +167,8 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
             width=16,
         )
         kind_combo.pack(side="left")
-        ttk.Label(top, textvariable=status_var).pack(side="left", padx=18)
-        scan_button = ttk.Button(top, text="Сканировать")
+        ttk.Label(top, textvariable=status_var, width=12).pack(side="left", padx=12)
+        scan_button = ttk.Button(top, text="Сканировать", width=13)
         scan_button.pack(side="right")
 
         progress_frame = ttk.Frame(frame)
@@ -204,6 +217,12 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
 
         state: dict[str, Any] = {"results": []}
 
+        def page_alive() -> bool:
+            try:
+                return bool(frame.winfo_exists())
+            except tk.TclError:
+                return False
+
         def _scope_code() -> str:
             return SCOPE_BY_LABEL.get(scope_var.get(), MARKET_SCOPE)
 
@@ -219,6 +238,8 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
             return FILTER_CODE_BY_LABEL.get(decision_var.get(), "ALL")
 
         def render() -> None:
+            if not page_alive():
+                return
             selected = _decision_code()
             for item in tree.get_children():
                 tree.delete(item)
@@ -265,6 +286,8 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
             )
 
         def update_scope_ui(*_args: Any) -> None:
+            if not page_alive():
+                return
             is_portfolio = _scope_code() == PORTFOLIO_SCOPE
             title_var.set("Анализ портфеля" if is_portfolio else "Возможности рынка")
             decision_var.set("Все")
@@ -278,14 +301,10 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
             replacements = (
                 ("Market Data: candles ", "Рыночные данные: свечи "),
                 ("Market Data: ", "Рыночные данные: "),
-                ("Анализ стратегий: ", "Анализ стратегий: "),
                 ("Risk / Opportunity: ", "Риск и возможность: "),
                 ("Decision Engine: ", "Формирование решения: "),
                 ("Portfolio Context загружается", "Загрузка контекста портфеля"),
                 ("Portfolio Context загружен", "Контекст портфеля загружен"),
-                ("Ранжирование возможностей", "Ранжирование возможностей"),
-                ("Обработано: ", "Обработано: "),
-                ("Сканирование завершено", "Сканирование завершено"),
                 ("Вселенная анализа:", "Инструментов для анализа:"),
             )
             localized = stage
@@ -296,24 +315,36 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
             return localized
 
         def update_progress(stage: str, percent: float, current: int, total: int) -> None:
+            if not page_alive():
+                return
             stage = _localize_stage(stage)
             progress_var.set(percent)
             suffix = f" ({current}/{total})" if total else ""
             progress_text_var.set(f"{stage} — {percent:.0f}%{suffix}")
-            status_var.set(f"Выполняется: {stage}")
+            status_var.set("Выполняется")
 
         def progress_from_worker(stage: str, percent: float, current: int, total: int) -> None:
-            self.after(0, lambda: update_progress(stage, percent, current, total))
+            try:
+                self.after(0, lambda: update_progress(stage, percent, current, total))
+            except tk.TclError:
+                pass
+
+        def _set_controls(enabled: bool) -> None:
+            state_value = "normal" if enabled else "disabled"
+            combo_state = "readonly" if enabled else "disabled"
+            _safe_configure(scan_button, state=state_value)
+            _safe_configure(scope_combo, state=combo_state)
+            _safe_configure(profile_combo, state=combo_state)
+            _safe_configure(kind_combo, state=combo_state)
+            _safe_configure(filter_combo, state=combo_state)
 
         def scan() -> None:
-            scan_button.configure(state="disabled")
-            scope_combo.configure(state="disabled")
-            profile_combo.configure(state="disabled")
-            kind_combo.configure(state="disabled")
-            filter_combo.configure(state="disabled")
+            if not page_alive():
+                return
+            _set_controls(False)
             progress_var.set(0.0)
             progress_text_var.set("Подготовка сканирования — 0%")
-            status_var.set("Запуск сканирования")
+            status_var.set("Запуск")
             scope = _scope_code()
             kind = _kind_code()
             profile = _profile_code()
@@ -326,33 +357,35 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
                         scope=scope,
                         progress_callback=progress_from_worker,
                     )
-                    self.after(0, lambda: finish(results))
+                    try:
+                        self.after(0, lambda result=results: finish(result))
+                    except tk.TclError:
+                        pass
                 except Exception as exc:
-                    self.after(0, lambda error=exc: fail(error))
+                    try:
+                        self.after(0, lambda error=exc: fail(error))
+                    except tk.TclError:
+                        pass
 
             threading.Thread(target=worker, daemon=True).start()
 
         def finish(results: list[Any]) -> None:
+            if not page_alive():
+                return
             state["results"] = results
             progress_var.set(100.0)
             label = "позиций" if _scope_code() == PORTFOLIO_SCOPE else "инструментов"
             progress_text_var.set(f"Анализ завершён — 100% ({len(results)} {label})")
-            status_var.set(f"Анализ завершён: {len(results)} {label}")
-            scan_button.configure(state="normal")
-            scope_combo.configure(state="readonly")
-            profile_combo.configure(state="readonly")
-            kind_combo.configure(state="readonly")
-            filter_combo.configure(state="readonly")
+            status_var.set("Готово")
+            _set_controls(True)
             render()
 
         def fail(exc: Exception) -> None:
+            if not page_alive():
+                return
             progress_text_var.set(f"Анализ завершён с ошибкой на {progress_var.get():.0f}%")
-            status_var.set(f"Ошибка: {exc}")
-            scan_button.configure(state="normal")
-            scope_combo.configure(state="readonly")
-            profile_combo.configure(state="readonly")
-            kind_combo.configure(state="readonly")
-            filter_combo.configure(state="readonly")
+            status_var.set("Ошибка")
+            _set_controls(True)
 
         scope_combo.bind("<<ComboboxSelected>>", update_scope_ui)
         scan_button.configure(command=scan)
