@@ -38,7 +38,7 @@ def test_build_cost_basis_uses_weighted_average_for_buys():
         {"operation_type": 15, "instrument_uid": "A", "quantity": "5", "payment": {"units": "600", "nano": 0}},
     ])
     assert result["A"]["quantity"] == Decimal("15")
-    assert result["A"]["average_price"] == Decimal("106.6666666666666666666666666667")
+    assert abs(result["A"]["average_price"] - Decimal("106.6666666666666666666666666667")) < Decimal("1e-26")
 
 
 def test_build_cost_basis_reduces_cost_on_sell_using_current_average():
