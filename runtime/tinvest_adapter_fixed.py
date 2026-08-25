@@ -170,7 +170,6 @@ def _money_to_number(value) -> float:
 
 
 def _sandbox_portfolio(self, account_id):
-    # t-tech-investments 0.3.3 does not accept a currency keyword here.
     result = self._service("sandbox").get_sandbox_portfolio(
         account_id=str(account_id),
     )
@@ -215,6 +214,51 @@ def _sandbox_operations(self, account_id, limit=1000):
     items = result.get("items")
     if isinstance(items, list):
         result["items"] = items[: max(0, int(limit))]
+    return result
+
+
+def _sandbox_create_order(self, payload):
+    direction = str(payload["direction"]).upper()
+    if direction in {"BUY", "ORDER_DIRECTION_BUY"}:
+        direction = "ORDER_DIRECTION_BUY"
+    elif direction in {"SELL", "ORDER_DIRECTION_SELL"}:
+        direction = "ORDER_DIRECTION_SELL"
+    else:
+        raise ValueError(f"Unsupported order direction: {payload['direction']!r}")
+
+    order_type = str(payload["order_type"]).upper()
+    if order_type in {"MARKET", "ORDER_TYPE_MARKET"}:
+        order_type = "ORDER_TYPE_MARKET"
+    elif order_type in {"LIMIT", "ORDER_TYPE_LIMIT"}:
+        order_type = "ORDER_TYPE_LIMIT"
+    elif order_type in {"BESTPRICE", "BEST_PRICE", "ORDER_TYPE_BESTPRICE"}:
+        order_type = "ORDER_TYPE_BESTPRICE"
+    else:
+        raise ValueError(f"Unsupported sandbox order type: {payload['order_type']!r}")
+
+    request = {
+        "quantity": str(int(payload["quantity"])),
+        "direction": direction,
+        "accountId": str(payload["account_id"]),
+        "orderType": order_type,
+        "orderId": str(payload.get("request_id") or payload.get("order_id") or ""),
+        "instrumentId": str(payload.get("instrument_uid") or payload.get("instrument_id") or ""),
+    }
+    if payload.get("price") is not None:
+        request["price"] = _adapter._quotation_payload(payload["price"])
+
+    if not request["orderId"]:
+        raise ValueError("Sandbox order request_id/order_id is required")
+    if not request["instrumentId"]:
+        raise ValueError("Sandbox order instrument_uid/instrument_id is required")
+
+    result = self._rest_request("SandboxService/PostSandboxOrder", request)
+    _adapter.logger.info(
+        "[SANDBOX ORDER REST] request_id=%s order_id=%s status=%s",
+        request["orderId"],
+        result.get("order_id"),
+        result.get("execution_report_status"),
+    )
     return result
 
 
@@ -284,6 +328,7 @@ _adapter.AdapterState.accounts = _sandbox_accounts
 _adapter.AdapterState.sandbox_positions = _sandbox_positions
 _adapter.AdapterState.sandbox_portfolio = _sandbox_portfolio
 _adapter.AdapterState.operations = _sandbox_operations
+_adapter.AdapterState.create_order = _sandbox_create_order
 _adapter.AdapterState.list_instruments = _list_instruments
 _adapter.AdapterState.last_prices = _last_prices
 _adapter.AdapterState.close_prices = _close_prices
