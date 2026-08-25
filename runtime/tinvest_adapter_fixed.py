@@ -94,9 +94,13 @@ def _refresh_adapter_config() -> None:
     _adapter.TOKEN = os.getenv("EDWARD_TINVEST_TOKEN", "").strip()
     _adapter.ENVIRONMENT = os.getenv("EDWARD_TINVEST_ENV", "sandbox").lower()
     _adapter.PORT = int(os.getenv("EDWARD_TINVEST_PORT", "8765"))
-    # T-Bank REST SandboxService methods are exposed on invest-public-api.tbank.ru.
-    # The gRPC client still uses the sandbox target configured by tinvest_adapter.
-    _adapter.REST_TARGET = "https://invest-public-api.tbank.ru"
+    # REST must use the same sandbox contour as the gRPC client when running in Sandbox.
+    # T-Bank documents sandbox REST at sandbox-invest-public-api.tbank.ru/rest/.
+    _adapter.REST_TARGET = (
+        "https://invest-public-api.tbank.ru"
+        if _adapter.ENVIRONMENT == "production"
+        else "https://sandbox-invest-public-api.tbank.ru"
+    )
 
 
 def _sdk_order_type(value):
