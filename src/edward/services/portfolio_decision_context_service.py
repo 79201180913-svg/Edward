@@ -43,7 +43,9 @@ class PortfolioDecisionContextService:
         position = _position(row)
         current_value = _decimal(_first(row, "current_value", "value")) if row is not None else Decimal("0")
         if current_value == Decimal("0") and row is not None:
-            current_value = position.quantity * position.current_price if position.current_price is not None else Decimal("0")
+            quantity = _decimal(_first(row, "quantity", "balance"))
+            current_price = _decimal(_first(row, "current_price", "price"))
+            current_value = quantity * current_price
 
         current_weight = 0.0
         if portfolio_value:
