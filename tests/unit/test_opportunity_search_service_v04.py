@@ -103,7 +103,7 @@ def test_scan_reports_staged_progress():
     assert any(stage.startswith("Инструменты загружены:") for stage in stages)
     assert "Загрузка Portfolio Context" in stages
     assert "Portfolio Context загружен" in stages
-    assert any(stage.startswith("Market Data:") for stage in stages) is False
+    assert any(stage.startswith("Market Data:") for stage in stages)
     assert "Ранжирование возможностей" in stages
     assert stages[-1] == "Сканирование завершено"
     assert events[-1][1] == 100.0
