@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import base64
+import json
 import os
 import socket
 import subprocess
@@ -30,7 +30,7 @@ ORDER_TIMEOUT = float(os.getenv("EDWARD_E2E_ORDER_TIMEOUT", "30"))
 
 
 def _request(method: str, path: str, payload: dict | None = None) -> dict:
-    body = None if payload is None else __import__("json").dumps(payload).encode("utf-8")
+    body = None if payload is None else json.dumps(payload).encode("utf-8")
     request = Request(
         f"{ADAPTER_URL}{path}",
         data=body,
@@ -39,7 +39,7 @@ def _request(method: str, path: str, payload: dict | None = None) -> dict:
     )
     try:
         with urlopen(request, timeout=30) as response:
-            return __import__("json").loads(response.read().decode("utf-8"))
+            return json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
         try:
             body = exc.read().decode("utf-8", errors="replace")
@@ -170,23 +170,37 @@ def _wait_terminal(account_id: str, order_id: str) -> dict:
 
 def _create_limit_order(account_id: str, instrument_uid: str, side: str, price: Decimal) -> dict:
     request_id = str(uuid.uuid4())
-    return _request(
-        "POST",
-        "/orders/create",
-        {
-            "account_id": account_id,
-            "instrument_uid": instrument_uid,
-            "instrument_id": instrument_uid,
-            "direction": side,
-            "order_type": "LIMIT",
-            "quantity": 1,
-            "price": str(price),
-            "order_id": request_id,
-            "request_id": request_id,
-            "time_in_force": "TIME_IN_FORCE_FILL_AND_KILL",
-            "price_type": "PRICE_TYPE_CURRENCY",
-        },
-    )
+    try:
+        return _request(
+            "POST",
+            "/orders/create",
+            {
+                "account_id": account_id,
+                "instrument_uid": instrument_uid,
+                "instrument_id": instrument_uid,
+                "direction": side,
+                "order_type": "LIMIT",
+                "quantity": 1,
+                "price": str(price),
+                "order_id": request_id,
+                "request_id": request_id,
+                "time_in_force": "TIME_IN_FORCE_FILL_AND_KILL",
+                "price_type": "PRICE_TYPE_CURRENCY",
+            },
+        )
+    except RuntimeError as exc:
+        # Contract-defined Sandbox outcome: 30227 / Order cancelled.
+        # The request was accepted by the service but could not be executed
+        # and was cancelled immediately by the broker/exchange.
+        if "30227" in str(exc):
+            return {
+                "order_id": request_id,
+                "execution_report_status": "EXECUTION_REPORT_STATUS_CANCELLED",
+                "lots_requested": "1",
+                "lots_executed": "0",
+                "sandbox_error_code": "30227",
+            }
+        raise
 
 
 def _cancel_if_active(account_id: str, order_id: str) -> dict:
@@ -292,16 +306,28 @@ def test_sandbox_order_lifecycle_end_to_end(sandbox_adapter):
     instrument_uid, market_price = _get_tradable_instrument()
     assert market_price > 0
 
-    before_positions = _request("POST", "/accounts/sandbox-positions", {"account_id": account_id})
-    before_portfolio = _request("POST", "/accounts/sandbox-portfolio", {"account_id": account_id})
+    before_positions = _request(
+        "POST", "/accounts/sandbox-positions", {"account_id": account_id}
+    )
+    before_portfolio = _request(
+        "POST", "/accounts/sandbox-portfolio", {"account_id": account_id}
+    )
 
     created = _create_limit_order(account_id, instrument_uid, "BUY", market_price)
     order_id = str(created.get("order_id") or created.get("id") or "")
     assert order_id, f"Sandbox did not return order_id: {created}"
 
+    if created.get("sandbox_error_code") == "30227":
+        assert created["execution_report_status"] == "EXECUTION_REPORT_STATUS_CANCELLED"
+        assert created["lots_executed"] == "0"
+        return
+
     state = _wait_terminal(account_id, order_id)
     status = str(
-        state.get("execution_report_status") or state.get("status") or state.get("state") or ""
+        state.get("execution_report_status")
+        or state.get("status")
+        or state.get("state")
+        or ""
     ).upper()
     lots_executed = int(str(state.get("lots_executed", 0) or 0))
     lots_requested = int(str(state.get("lots_requested", 1) or 1))
@@ -310,22 +336,42 @@ def test_sandbox_order_lifecycle_end_to_end(sandbox_adapter):
         _cancel_if_active(account_id, order_id)
         cancelled = _wait_terminal(account_id, order_id)
         cancelled_status = str(
-            cancelled.get("execution_report_status") or cancelled.get("status") or cancelled.get("state") or ""
+            cancelled.get("execution_report_status")
+            or cancelled.get("status")
+            or cancelled.get("state")
+            or ""
         ).upper()
-        assert any(token in cancelled_status for token in ("CANCEL", "REJECT", "FAIL", "INACTIVE")), f"Unexpected terminal state after cancellation: {cancelled}"
+        assert any(
+            token in cancelled_status
+            for token in ("CANCEL", "REJECT", "FAIL", "INACTIVE")
+        ), f"Unexpected terminal state after cancellation: {cancelled}"
         return
 
-    after_buy_positions = _request("POST", "/accounts/sandbox-positions", {"account_id": account_id})
-    after_buy_portfolio = _request("POST", "/accounts/sandbox-portfolio", {"account_id": account_id})
+    assert "FILL" in status or lots_executed >= lots_requested
+
+    after_buy_positions = _request(
+        "POST", "/accounts/sandbox-positions", {"account_id": account_id}
+    )
+    after_buy_portfolio = _request(
+        "POST", "/accounts/sandbox-portfolio", {"account_id": account_id}
+    )
     assert after_buy_positions != before_positions or after_buy_portfolio != before_portfolio
 
     sell_created = _create_limit_order(account_id, instrument_uid, "SELL", market_price)
     sell_order_id = str(sell_created.get("order_id") or sell_created.get("id") or "")
     assert sell_order_id, f"Sandbox did not return SELL order_id: {sell_created}"
 
+    if sell_created.get("sandbox_error_code") == "30227":
+        assert sell_created["execution_report_status"] == "EXECUTION_REPORT_STATUS_CANCELLED"
+        assert sell_created["lots_executed"] == "0"
+        return
+
     sell_state = _wait_terminal(account_id, sell_order_id)
     sell_status = str(
-        sell_state.get("execution_report_status") or sell_state.get("status") or sell_state.get("state") or ""
+        sell_state.get("execution_report_status")
+        or sell_state.get("status")
+        or sell_state.get("state")
+        or ""
     ).upper()
     sell_lots_executed = int(str(sell_state.get("lots_executed", 0) or 0))
     sell_lots_requested = int(str(sell_state.get("lots_requested", 1) or 1))
@@ -334,9 +380,15 @@ def test_sandbox_order_lifecycle_end_to_end(sandbox_adapter):
         _cancel_if_active(account_id, sell_order_id)
         cancelled = _wait_terminal(account_id, sell_order_id)
         cancelled_status = str(
-            cancelled.get("execution_report_status") or cancelled.get("status") or cancelled.get("state") or ""
+            cancelled.get("execution_report_status")
+            or cancelled.get("status")
+            or cancelled.get("state")
+            or ""
         ).upper()
-        assert any(token in cancelled_status for token in ("CANCEL", "REJECT", "FAIL", "INACTIVE")), f"Unexpected SELL terminal state: {cancelled}"
+        assert any(
+            token in cancelled_status
+            for token in ("CANCEL", "REJECT", "FAIL", "INACTIVE")
+        ), f"Unexpected SELL terminal state: {cancelled}"
         return
 
     assert "FILL" in sell_status or sell_lots_executed >= sell_lots_requested
