@@ -6,7 +6,7 @@ import socket
 import subprocess
 import time
 import uuid
-from decimal import Decimal
+from decimal import Decimal, ROUND_DOWN
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -79,6 +79,27 @@ def _price_from_item(item: dict) -> Decimal:
     return Decimal("0")
 
 
+def _get_price_step(instrument_uid: str) -> Decimal:
+    response = _request("POST", "/instruments/get", {"instrument_id": instrument_uid})
+    candidates = []
+    if isinstance(response, dict):
+        candidates.append(response)
+        candidates.extend(_items(response, "instrument", "instruments"))
+    for item in candidates:
+        step = _number(item.get("min_price_increment")) if isinstance(item, dict) else Decimal("0")
+        if step > 0:
+            return step
+    return Decimal("0.0001")
+
+
+def _align_price(value: Decimal, step: Decimal) -> Decimal:
+    if step <= 0:
+        return value.quantize(Decimal("0.0001"), rounding=ROUND_DOWN)
+    units = (value / step).to_integral_value(rounding=ROUND_DOWN)
+    result = units * step
+    return result.quantize(step)
+
+
 def _get_account_id() -> str:
     accounts = _request("POST", "/accounts")
     account_items = _items(accounts, "accounts")
@@ -143,8 +164,6 @@ def _create_limit_order(account_id: str, instrument_uid: str, side: str, price: 
             "price_type": "PRICE_TYPE_CURRENCY",
         })
     except RuntimeError as exc:
-        # Sandbox contract outcome: 30227 / Order cancelled.
-        # This is a valid terminal non-filled outcome, not a test failure.
         if "30227" in str(exc):
             return {
                 "order_id": request_id,
