@@ -59,16 +59,24 @@ class LiveOpportunitySearchService(OpportunitySearchService):
                 risk_reward_ok=risk_reward_ok,
             )
         )
-        if gate.execution_ready == result.execution_ready:
+
+        readiness_text = "Исполнение: ДА" if gate.execution_ready else "Исполнение: НЕТ"
+        forecast_text = "Прогноз: уверенность подтверждена" if bool(getattr(result, "forecast_confidence", None)) else "Прогноз: качество не подтверждено"
+        current_reason = str(getattr(result, "reason", "") or "")
+        execution_explanation = f"{current_reason} | {forecast_text} | {readiness_text}"
+
+        changes = {"execution_ready": gate.execution_ready}
+        if hasattr(result, "reason"):
+            changes["reason"] = execution_explanation
+        if gate.execution_ready == result.execution_ready and execution_explanation == current_reason:
             return result
         try:
-            return replace(result, execution_ready=gate.execution_ready)
+            return replace(result, **changes)
         except TypeError:
-            # Unit tests and lightweight callers may provide SimpleNamespace-like
-            # result objects instead of the production dataclass. Keep the helper
-            # compatible with both shapes.
             try:
                 result.execution_ready = gate.execution_ready
+                if hasattr(result, "reason"):
+                    result.reason = execution_explanation
             except Exception:
                 return result
             return result
@@ -94,7 +102,7 @@ class LiveOpportunitySearchService(OpportunitySearchService):
         instruments = self._build_universe(scope=scope, instrument_kind=instrument_kind, positions=positions)
         total = len(instruments)
         scope_title = "торговых инструментов" if scope == "MARKET" else "позиций портфеля"
-        self._notify(progress_callback, f"Вселенная анализа: {total} {scope_title}", 8.0, 0, total)
+        self._notify(progress_callback, f"Вселенная: {total} {scope_title}", 8.0, 0, total)
         self._notify(progress_callback, "Portfolio Context загружается", 11.0, 0, total)
         self._notify(progress_callback, "Portfolio Context загружен", 14.0, 0, total)
 
