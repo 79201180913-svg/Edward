@@ -7,12 +7,12 @@ from edward.domain.execution import ExecutionRequest, ExecutionResult, Execution
 
 
 class TInvestExecutionClient(Protocol):
-    """Minimal client boundary required by the T-Invest execution adapter."""
+    """Existing T-Invest adapter-client boundary used by Edward GUI/runtime."""
 
-    def create_order(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    def post_order(self, request: Any) -> Mapping[str, Any]:
         ...
 
-    def order_state(self, account_id: str, order_id: str) -> Mapping[str, Any]:
+    def get_order_state(self, account_id: str, order_id: str) -> Mapping[str, Any]:
         ...
 
     def cancel_order(self, account_id: str, order_id: str) -> Mapping[str, Any]:
@@ -77,24 +77,14 @@ def _status(value: Any) -> ExecutionStatus:
 
 
 class TInvestExecutionAdapter:
-    """Maps Edward execution contracts to the existing T-Invest adapter boundary."""
+    """Maps Execution Engine requests to the existing T-Invest adapter client."""
 
     def __init__(self, client: TInvestExecutionClient) -> None:
         self.client = client
         self._orders: dict[str, tuple[str, str]] = {}
 
     def submit(self, request: ExecutionRequest) -> str:
-        payload: dict[str, Any] = {
-            "request_id": request.execution_id,
-            "account_id": request.account_id,
-            "instrument_uid": request.instrument_uid,
-            "direction": request.side,
-            "order_type": request.order_type,
-            "quantity": int(request.quantity),
-        }
-        if request.entry_price is not None:
-            payload["price"] = request.entry_price
-        result = self.client.create_order(payload)
+        result = self.client.post_order(request)
         order_id = _value(result, "order_id", "orderId", "id")
         if not order_id:
             raise RuntimeError("T-Invest did not return broker order id")
@@ -106,10 +96,10 @@ class TInvestExecutionAdapter:
         account_id, execution_id = self._orders.get(broker_order_id, ("", ""))
         if not account_id:
             raise KeyError(f"Unknown broker order id: {broker_order_id}")
-        raw = self.client.order_state(account_id, broker_order_id)
+        raw = self.client.get_order_state(account_id, broker_order_id)
         status = _status(_value(raw, "execution_report_status", "status", "order_status", "state"))
         filled = _decimal(_value(raw, "lots_executed", "filled_quantity", "filledQuantity", "quantity_executed"))
-        average_price = _value(raw, "executed_order_price", "average_fill_price", "averageFillPrice")
+        average_price = _value(raw, "executed_order_price", "average_fill_price", "averageFillPrice", "initial_security_price")
         commission = _decimal(_value(raw, "executed_commission", "commission"))
         error_code = _value(raw, "error_code", "errorCode")
         error_message = _value(raw, "error_message", "errorMessage", "message")
