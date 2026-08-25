@@ -75,17 +75,9 @@ def _configure_grpc_tls() -> None:
         if getattr(original, "__edward_windows_roots__", False):
             return
 
-        def ssl_channel_credentials_with_windows_roots(
-            root_certificates=None,
-            private_key=None,
-            certificate_chain=None,
-        ):
+        def ssl_channel_credentials_with_windows_roots(root_certificates=None, private_key=None, certificate_chain=None):
             effective_roots = roots if root_certificates is None else root_certificates
-            return original(
-                root_certificates=effective_roots,
-                private_key=private_key,
-                certificate_chain=certificate_chain,
-            )
+            return original(root_certificates=effective_roots, private_key=private_key, certificate_chain=certificate_chain)
 
         ssl_channel_credentials_with_windows_roots.__edward_windows_roots__ = True
         grpc.ssl_channel_credentials = ssl_channel_credentials_with_windows_roots
@@ -97,18 +89,14 @@ _load_local_env()
 _configure_grpc_tls()
 
 import tinvest_adapter as _adapter
-from datetime import datetime, timedelta, timezone
+from stop_order_adapter_patch import install as install_stop_order_adapter_patch
 
 
 def _refresh_adapter_config() -> None:
     _adapter.TOKEN = os.getenv("EDWARD_TINVEST_TOKEN", "").strip()
     _adapter.ENVIRONMENT = os.getenv("EDWARD_TINVEST_ENV", "sandbox").lower()
     _adapter.PORT = int(os.getenv("EDWARD_TINVEST_PORT", "8765"))
-    _adapter.REST_TARGET = (
-        "https://invest-public-api.tbank.ru"
-        if _adapter.ENVIRONMENT == "production"
-        else "https://sandbox-invest-public-api.tbank.ru"
-    )
+    _adapter.REST_TARGET = "https://invest-public-api.tbank.ru" if _adapter.ENVIRONMENT == "production" else "https://sandbox-invest-public-api.tbank.ru"
 
 
 def _sdk_order_type(value):
@@ -122,11 +110,7 @@ def _sdk_order_type(value):
     }
     bestprice = getattr(_adapter.SDKOrderType, "ORDER_TYPE_BESTPRICE", None) or getattr(_adapter.SDKOrderType, "ORDER_TYPE_BEST_PRICE", None)
     if bestprice is not None:
-        mapping.update({
-            "BESTPRICE": bestprice,
-            "BEST_PRICE": bestprice,
-            "ORDER_TYPE_BESTPRICE": bestprice,
-        })
+        mapping.update({"BESTPRICE": bestprice, "BEST_PRICE": bestprice, "ORDER_TYPE_BESTPRICE": bestprice})
     if key in mapping:
         return mapping[key]
     if isinstance(value, _adapter.SDKOrderType):
@@ -137,22 +121,14 @@ def _sdk_order_type(value):
 def _sandbox_accounts(self):
     result = self._service("users").get_accounts()
     result = _adapter.message_to_dict(result)
-    _adapter.logger.info(
-        "[SANDBOX ACCOUNTS SDK] accounts=%s",
-        len(result.get("accounts", []) or []),
-    )
+    _adapter.logger.info("[SANDBOX ACCOUNTS SDK] accounts=%s", len(result.get("accounts", []) or []))
     return result
 
 
 def _sandbox_positions(self, account_id):
     result = self._service("sandbox").get_sandbox_positions(account_id=str(account_id))
     result = _adapter.message_to_dict(result)
-    _adapter.logger.info(
-        "[SANDBOX POSITIONS SDK] account_id=%s securities=%s money=%s",
-        account_id,
-        len(result.get("securities", []) or []),
-        len(result.get("money", []) or []),
-    )
+    _adapter.logger.info("[SANDBOX POSITIONS SDK] account_id=%s securities=%s money=%s", account_id, len(result.get("securities", []) or []), len(result.get("money", []) or []))
     return result
 
 
@@ -170,11 +146,8 @@ def _money_to_number(value) -> float:
 
 
 def _sandbox_portfolio(self, account_id):
-    result = self._service("sandbox").get_sandbox_portfolio(
-        account_id=str(account_id),
-    )
+    result = self._service("sandbox").get_sandbox_portfolio(account_id=str(account_id))
     result = _adapter.message_to_dict(result)
-
     total = 0.0
     for position in result.get("positions", []) or []:
         if not isinstance(position, dict):
@@ -186,22 +159,14 @@ def _sandbox_portfolio(self, account_id):
             if isinstance(candidate, dict) and "units" in candidate:
                 total += _money_to_number(candidate)
                 break
-
     result.setdefault("total_amount_portfolio", total)
-    _adapter.logger.info(
-        "[SANDBOX PORTFOLIO SDK] account_id=%s positions=%s total=%s",
-        account_id,
-        len(result.get("positions", []) or []),
-        result.get("total_amount_portfolio"),
-    )
+    _adapter.logger.info("[SANDBOX PORTFOLIO SDK] account_id=%s positions=%s total=%s", account_id, len(result.get("positions", []) or []), result.get("total_amount_portfolio"))
     return result
 
 
 def _sandbox_operations(self, account_id, limit=1000):
     service = self._service("sandbox")
-    method = getattr(service, "get_sandbox_operations_by_cursor", None)
-    if method is None:
-        method = getattr(service, "get_sandbox_operations", None)
+    method = getattr(service, "get_sandbox_operations_by_cursor", None) or getattr(service, "get_sandbox_operations", None)
     if method is None:
         raise RuntimeError("T-Invest SDK sandbox service does not provide operations methods")
     try:
@@ -223,7 +188,6 @@ def _sandbox_create_order(self, payload):
         direction = "ORDER_DIRECTION_SELL"
     else:
         raise ValueError(f"Unsupported order direction: {payload['direction']!r}")
-
     order_type = str(payload["order_type"]).upper()
     if order_type in {"MARKET", "ORDER_TYPE_MARKET"}:
         order_type = "ORDER_TYPE_MARKET"
@@ -232,23 +196,14 @@ def _sandbox_create_order(self, payload):
     elif order_type in {"BESTPRICE", "BEST_PRICE", "ORDER_TYPE_BESTPRICE"}:
         order_type = "ORDER_TYPE_BESTPRICE"
     else:
-        raise ValueError(f"Unsupported sandbox order type: {payload['order_type']!r}")
-
+        raise ValueError(f"Unsupported order type: {payload['order_type']!r}")
     request_id = str(payload.get("request_id") or payload.get("order_id") or "")
     instrument_id = str(payload.get("instrument_uid") or payload.get("instrument_id") or "")
     if not request_id:
         raise ValueError("Sandbox order request_id/order_id is required")
     if not instrument_id:
         raise ValueError("Sandbox order instrument_uid/instrument_id is required")
-
-    request = {
-        "quantity": str(int(payload["quantity"])),
-        "direction": direction,
-        "accountId": str(payload["account_id"]),
-        "orderType": order_type,
-        "orderId": request_id,
-        "instrumentId": instrument_id,
-    }
+    request = {"quantity": str(int(payload["quantity"])), "direction": direction, "accountId": str(payload["account_id"]), "orderType": order_type, "orderId": request_id, "instrumentId": instrument_id}
     if payload.get("price") is not None:
         request["price"] = _adapter._quotation_payload(payload["price"])
     if payload.get("time_in_force") is not None:
@@ -257,68 +212,35 @@ def _sandbox_create_order(self, payload):
         request["priceType"] = str(payload["price_type"])
     if payload.get("confirm_margin_trade") is not None:
         request["confirmMarginTrade"] = bool(payload["confirm_margin_trade"])
-
     result = self._rest_request("SandboxService/PostSandboxOrder", request)
-    _adapter.logger.info(
-        "[SANDBOX ORDER REST] request_id=%s order_id=%s status=%s",
-        request_id,
-        result.get("order_id"),
-        result.get("execution_report_status"),
-    )
+    _adapter.logger.info("[SANDBOX ORDER REST] request_id=%s order_id=%s status=%s", request_id, result.get("order_id"), result.get("execution_report_status"))
     return result
 
 
 def _list_instruments(self, kind="SHARE", trade=True):
     key = str(kind).upper()
-    method_map = {
-        "SHARE": "Shares",
-        "BOND": "Bonds",
-        "ETF": "Etfs",
-        "CURRENCY": "Currencies",
-        "FUTURES": "Futures",
-    }
+    method_map = {"SHARE": "Shares", "BOND": "Bonds", "ETF": "Etfs", "CURRENCY": "Currencies", "FUTURES": "Futures"}
     method_name = method_map.get(key)
     if method_name is None:
         raise ValueError(f"Unsupported instrument kind: {kind}")
-    request = {
-        "instrumentStatus": "INSTRUMENT_STATUS_BASE" if trade else "INSTRUMENT_STATUS_ALL",
-        "instrumentExchange": "INSTRUMENT_EXCHANGE_UNSPECIFIED",
-    }
+    request = {"instrumentStatus": "INSTRUMENT_STATUS_BASE" if trade else "INSTRUMENT_STATUS_ALL", "instrumentExchange": "INSTRUMENT_EXCHANGE_UNSPECIFIED"}
     return self._rest_request(f"InstrumentsService/{method_name}", request)
 
 
 def _last_prices(self, ids):
-    return self._rest_request(
-        "MarketDataService/GetLastPrices",
-        {
-            "instrumentId": [str(value) for value in ids],
-            "lastPriceType": "LAST_PRICE_UNSPECIFIED",
-        },
-    )
+    return self._rest_request("MarketDataService/GetLastPrices", {"instrumentId": [str(value) for value in ids], "lastPriceType": "LAST_PRICE_UNSPECIFIED"})
 
 
 def _close_prices(self, ids):
-    return self._rest_request(
-        "MarketDataService/GetClosePrices",
-        {
-            "instruments": [{"instrumentId": str(value)} for value in ids],
-            "instrumentStatus": "INSTRUMENT_STATUS_BASE",
-        },
-    )
+    return self._rest_request("MarketDataService/GetClosePrices", {"instruments": [{"instrumentId": str(value)} for value in ids], "instrumentStatus": "INSTRUMENT_STATUS_BASE"})
 
 
 def _trading_status(self, instrument_id):
-    return self._rest_request(
-        "MarketDataService/GetTradingStatus",
-        {"instrumentId": str(instrument_id)},
-    )
+    return self._rest_request("MarketDataService/GetTradingStatus", {"instrumentId": str(instrument_id)})
 
 
 def _trading_statuses(self, ids):
-    return self._rest_request(
-        "MarketDataService/GetTradingStatuses",
-        {"instrumentId": [str(value) for value in ids]},
-    )
+    return self._rest_request("MarketDataService/GetTradingStatuses", {"instrumentId": [str(value) for value in ids]})
 
 
 _refresh_adapter_config()
@@ -333,7 +255,7 @@ _adapter.AdapterState.last_prices = _last_prices
 _adapter.AdapterState.close_prices = _close_prices
 _adapter.AdapterState.trading_status = _trading_status
 _adapter.AdapterState.trading_statuses = _trading_statuses
-
+install_stop_order_adapter_patch(_adapter)
 
 if __name__ == "__main__":
     _adapter.main()
