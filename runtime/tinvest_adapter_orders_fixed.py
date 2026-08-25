@@ -1,16 +1,38 @@
 from __future__ import annotations
 
-"""Canonical Sandbox orders adapter.
+"""Canonical Sandbox adapter for orders and operations.
 
-The installed SDK response conversion in tinvest_adapter_fixed.py does not expose
-all order fields needed by the UI (direction, order type, execution status).
-For Sandbox orders we therefore restore the REST contract directly, preserving
-all fields returned by GetSandboxOrders.
+The installed SDK exposes legacy Sandbox aliases whose converted protobuf payloads
+are incomplete for Edward. This wrapper keeps the existing adapter implementation
+for everything else, while restoring the REST contracts for Sandbox orders and
+operations so the UI receives the full order/operation fields.
 """
 
 import tinvest_adapter_fixed as fixed
 
 _adapter = fixed._adapter
+
+
+def _operations(self, account_id, limit=1000):
+    if _adapter.ENVIRONMENT != "sandbox":
+        return _adapter.message_to_dict(
+            self._service("operations").get_operations_by_cursor(
+                account_id=str(account_id),
+                limit=max(1, min(int(limit), 1000)),
+                without_commissions=False,
+                without_trades=False,
+            )
+        )
+
+    return self._rest_request(
+        "SandboxService/GetSandboxOperationsByCursor",
+        {
+            "accountId": str(account_id),
+            "limit": max(1, min(int(limit), 1000)),
+            "withoutCommissions": False,
+            "withoutTrades": False,
+        },
+    )
 
 
 def _orders(self, account_id):
@@ -25,6 +47,7 @@ def _orders(self, account_id):
     )
 
 
+_adapter.AdapterState.operations = _operations
 _adapter.AdapterState.orders = _orders
 
 
