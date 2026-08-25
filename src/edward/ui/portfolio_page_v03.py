@@ -6,8 +6,6 @@ from typing import Any
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from edward.services.balance_service import BalanceService
-
 
 def field(value: Any, name: str, default: Any = None) -> Any:
     if isinstance(value, dict):
@@ -103,6 +101,22 @@ def _last_price_map(app: Any, positions: list[Any]) -> dict[str, Decimal]:
     return result
 
 
+def _cash_summary(positions_response: Any) -> tuple[Decimal, Decimal, str]:
+    money = items(positions_response, "money")
+    available = Decimal("0")
+    blocked = Decimal("0")
+    currency = "RUB"
+
+    for position in money:
+        raw_currency = field(position, "currency", None)
+        if raw_currency:
+            currency = str(raw_currency).upper()
+        available += decimal(field(position, "available", field(position, "available_value", 0)))
+        blocked += decimal(field(position, "blocked", field(position, "blocked_value", 0)))
+
+    return available, blocked, currency
+
+
 def install_portfolio_page(app_class: type[Any]) -> None:
     """Install the production portfolio page without adding a UI overlay."""
     if getattr(app_class, "_portfolio_page_v03_installed", False):
@@ -184,16 +198,16 @@ def install_portfolio_page(app_class: type[Any]) -> None:
             total_pnl = None
         total_pnl_pct = (total_pnl / total_cost * Decimal("100")) if total_pnl is not None and total_cost != 0 else None
 
-        try:
-            portfolio = self.client.get_portfolio(account_id)
-            summary = BalanceService.build_summary(positions_response, portfolio)
-            balance_value = summary.cash
-            currency = summary.currency or "RUB"
-        except Exception:
-            balance_value = Decimal("0")
-            currency = "RUB"
-
+        cash_available, cash_blocked, currency = _cash_summary(positions_response)
+        balance_value = cash_available + cash_blocked
         portfolio_value = balance_value + total_positions_value
+
+        print(
+            f"[PORTFOLIO PAGE FINAL] account_id={account_id} "
+            f"cash={balance_value} securities={total_positions_value} "
+            f"total={portfolio_value} pnl={total_pnl} rows={len(rows)}",
+            flush=True,
+        )
 
         summary_frame = ttk.Frame(self.content)
         summary_frame.pack(fill="x", pady=(0, 12))
@@ -212,7 +226,10 @@ def install_portfolio_page(app_class: type[Any]) -> None:
             ttk.Label(frame, text=title, style="CardTitle.TLabel").pack(anchor="w")
             ttk.Label(frame, text=value, style="CardValue.TLabel").pack(anchor="w", pady=(7, 0))
 
-        ttk.Label(self.content, text=f"Позиции: {len(rows)} | Денежный баланс: {format_money(balance_value, currency)}").pack(anchor="w", pady=(0, 8))
+        ttk.Label(
+            self.content,
+            text=f"Позиции: {len(rows)} | Денежный баланс: {format_money(balance_value, currency)}",
+        ).pack(anchor="w", pady=(0, 8))
 
         container = ttk.Frame(self.content)
         container.pack(fill="both", expand=True)
