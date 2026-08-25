@@ -3,7 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 import tkinter as tk
-from tkinter import ttk
+from tkinter import messagebox, ttk
 
 from edward.services.order_service import OrderRequest, OrderService, OrderSide, OrderType
 from edward.services.trading_data_provider import AdapterTradingDataProvider
@@ -172,12 +172,10 @@ def install_instrument_screen_ux(app_class: type[Any]) -> None:
         if _field(status, "bestprice_order_available_flag", False):
             available_types.append(OrderType.BESTPRICE.value)
 
-        type_box = ttk.Combobox(order, textvariable=order_type, state="readonly", values=available_types, width=12)
+        type_box = ttk.Combobox(order, textvariable=order_type, state="readonly" if available_types else "disabled", values=available_types, width=12)
         type_box.grid(row=0, column=3, padx=(0, 18), sticky="w")
         if available_types:
             order_type.set(available_types[0])
-        else:
-            type_box.configure(state="disabled")
 
         ttk.Label(order, text="Количество лотов:").grid(row=0, column=4, padx=(0, 6), sticky="w")
         ttk.Entry(order, textvariable=quantity, width=10).grid(row=0, column=5, padx=(0, 18), sticky="w")
@@ -217,20 +215,25 @@ def install_instrument_screen_ux(app_class: type[Any]) -> None:
                 instrument_kind=detail.get("instrument_kind", "SHARE"),
             )
             context = TradingValidator(AdapterTradingDataProvider(self.client)).validate(request)
-            if not tk.messagebox.askyesno if False else False:
+            if not messagebox.askyesno(
+                "Подтверждение заявки",
+                f"{request.side.value} {request.quantity} лот(ов) {detail.get('ticker', '')}\n"
+                f"Тип: {request.order_type.value}\n"
+                f"Оценочная сумма: {context.estimated_total or Decimal('0')}\n"
+                f"Комиссия: {context.estimated_commission or Decimal('0')}",
+            ):
                 return
             result = OrderService(self.client).create_order(request)
-            tk.messagebox.showinfo("Заявка отправлена", f"Order ID: {_field(result, 'order_id', '')}")
+            messagebox.showinfo("Заявка отправлена", f"Order ID: {_field(result, 'order_id', '')}")
             self.show_page("instrument")
         except Exception as exc:
-            # Convert the API/validator failure to a trader-facing message.
             if request_type is OrderType.MARKET:
-                message = "Рыночная заявка недоступна для этого инструмента. Выберите LIMIT."
+                message = "Рыночная заявка недоступна для этого инструмента."
             elif request_type is OrderType.BESTPRICE:
-                message = "Заявка по лучшей цене недоступна для этого инструмента. Выберите LIMIT."
+                message = "Заявка по лучшей цене недоступна для этого инструмента."
             else:
                 message = str(exc)
-            tk.messagebox.showerror("Ошибка заявки", message)
+            messagebox.showerror("Ошибка заявки", message)
 
     app_class._page_instrument = page_instrument
     app_class._instrument_screen_ux_v03_installed = True
