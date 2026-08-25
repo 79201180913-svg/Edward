@@ -5,6 +5,7 @@ from typing import Any, Callable
 
 from edward.config.application_settings import ApplicationSettingsStore
 from edward.services.cached_analysis_service import CachedAnalysisService
+from edward.services.execution_readiness_service import ExecutionReadinessInput, ExecutionReadinessService
 from edward.services.opportunity_search_service import (
     MARKET_SCOPE,
     ProgressCallback,
@@ -35,25 +36,32 @@ class LiveOpportunitySearchService(OpportunitySearchService):
         if decision not in {"BUY", "ADD", "HOLD", "REDUCE", "SELL"}:
             return result
 
-        ready = bool(result.execution_ready)
         plan = getattr(result, "trade_plan", None)
         risk_reward = getattr(plan, "risk_reward", None) if plan is not None else None
+        strategy_quality_pass = str(result.reason or "") not in {"STRATEGY_QUALITY_FAIL", "RISK_FAIL", "CRITICAL_RISK"}
+        risk_reward_ok = decision not in {"BUY", "ADD", "REDUCE", "SELL"} or (risk_reward is not None and risk_reward > 0)
+        position_size_ready = decision not in {"REDUCE", "SELL"} or int(getattr(result, "recommended_quantity", 0) or 0) > 0
+        plan_ready = plan is not None
 
-        # A failed strategy quality gate or a non-positive trade plan cannot be sent
-        # to a future execution engine, even when the legacy v0.4 decision branch
-        # produced an actionable decision.
-        if str(result.reason or "") in {"STRATEGY_QUALITY_FAIL", "RISK_FAIL", "CRITICAL_RISK"}:
-            ready = False
-        if plan is None:
-            ready = False
-        if decision in {"BUY", "ADD", "REDUCE", "SELL"} and (risk_reward is None or risk_reward <= 0):
-            ready = False
-        if decision in {"REDUCE", "SELL"} and int(getattr(result, "recommended_quantity", 0) or 0) <= 0:
-            ready = False
-
-        if ready == result.execution_ready:
+        gate = ExecutionReadinessService.evaluate(
+            ExecutionReadinessInput(
+                decision=decision,
+                forecast_quality_pass=bool(getattr(result, "forecast_confidence", None)),
+                risk_ok=str(result.reason or "") not in {"RISK_FAIL", "CRITICAL_RISK"},
+                portfolio_available=True,
+                trading_status_ok=True,
+                position_size_ready=position_size_ready,
+                entry_ready=plan_ready,
+                target_ready=plan_ready,
+                stop_ready=plan_ready,
+                liquidity_ok=True,
+                strategy_quality_pass=strategy_quality_pass,
+                risk_reward_ok=risk_reward_ok,
+            )
+        )
+        if gate.execution_ready == result.execution_ready:
             return result
-        return replace(result, execution_ready=ready)
+        return replace(result, execution_ready=gate.execution_ready)
 
     def scan(
         self,
