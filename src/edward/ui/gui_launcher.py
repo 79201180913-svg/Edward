@@ -22,6 +22,7 @@ from edward.ui.final_history_fix import install_final_history_fix
 from edward.ui.final_order_history_fix import install_final_order_history_fix
 from edward.ui.final_contract_override import install_final_contract_override
 from edward.ui.price_fallback_fix import install_price_fallback
+from edward.ui.version_ui_fix import install_version_ui_fix
 from edward.config.settings import Environment
 
 
@@ -65,6 +66,7 @@ install_portfolio_quantity_fix(EdwardApp)
 install_final_history_fix(EdwardApp)
 install_final_order_history_fix(EdwardApp)
 install_final_contract_override(EdwardApp)
+install_version_ui_fix(EdwardApp)
 
 
 if __name__ == "__main__":
