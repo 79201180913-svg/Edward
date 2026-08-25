@@ -242,7 +242,6 @@ class OpportunitySearchService:
                     critical_risk=False,
                 )
                 strategy_context = StrategyContextData(strategy_name=None, strategy_score=0.0, quality_gate=False, available=True)
-                explanation = "Приемлемая стратегия не сформирована."
             else:
                 opportunity = OpportunityEngine.evaluate(analysis, candles, selected if selected.quality_gate else None)
                 opportunity_context = opportunity.context
@@ -257,7 +256,6 @@ class OpportunitySearchService:
                     quality_degraded=not selected.quality_gate,
                     available=True,
                 )
-                explanation = opportunity.explanation
 
             risk_context = RiskContextData(
                 risk_gate=opportunity_context.risk_ok,
@@ -280,8 +278,9 @@ class OpportunitySearchService:
             )
 
             self._notify(progress_callback, f"Decision Engine: {ticker}", progress_base + progress_span * 0.82, current, total)
+            decision_scenario = Scenario.SINGLE_INSTRUMENT if position_data.is_open else Scenario.OPPORTUNITY_SEARCH
             request = DecisionRequest(
-                scenario=Scenario.OPPORTUNITY_SEARCH,
+                scenario=decision_scenario,
                 instrument=instrument_data,
                 market=market,
                 strategy=strategy_context,
