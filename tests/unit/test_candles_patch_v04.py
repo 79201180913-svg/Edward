@@ -19,7 +19,7 @@ class FakeState:
         return {"candles": []}
 
 
-def test_candles_request_uses_market_data_contract():
+def test_candles_request_uses_market_data_contract_without_source_when_limit_is_set():
     state = FakeState()
     result = tinvest_candles_patch._candles(
         state,
@@ -38,4 +38,4 @@ def test_candles_request_uses_market_data_contract():
     assert payload["instrumentId"] == "uid-1"
     assert payload["interval"] == "CANDLE_INTERVAL_DAY"
     assert payload["limit"] == 2400
-    assert payload["candleSourceType"] == "CANDLE_SOURCE_EXCHANGE"
+    assert "candleSourceType" not in payload
