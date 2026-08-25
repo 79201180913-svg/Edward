@@ -8,8 +8,6 @@ from edward.services.analysis_service import AnalysisService, Candle, StrategyRe
 from edward.services.decision_engine import (
     DecisionEngine,
     DecisionRequest,
-    InstrumentContextData,
-    MarketContextData,
     OpportunityContext,
     PortfolioContextData,
     PositionContextData,
@@ -24,6 +22,11 @@ from edward.services.opportunity_engine import OpportunityEngine
 from edward.services.portfolio_decision_context_service import PortfolioDecisionContextService
 
 ProgressCallback = Callable[[str, float, int, int], None]
+
+INSTRUMENT_KIND_ALL = "ALL"
+MARKET_SCOPE = "MARKET"
+PORTFOLIO_SCOPE = "PORTFOLIO"
+SUPPORTED_SCOPES = (MARKET_SCOPE, PORTFOLIO_SCOPE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,7 +47,7 @@ class OpportunitySearchResult:
 
 
 class OpportunitySearchService:
-    """Run the v0.4 OPPORTUNITY_SEARCH pipeline across the live catalog."""
+    """Run the v0.4 decision pipeline over a deliberately bounded instrument universe."""
 
     def __init__(self, client: Any, analysis_service: AnalysisService | None = None):
         self.client = client
@@ -61,7 +64,6 @@ class OpportunitySearchService:
         try:
             progress_callback(stage, round(max(0.0, min(100.0, percent)), 1), current, total)
         except Exception:
-            # Progress reporting must never break the trading analysis pipeline.
             pass
 
     def scan(
@@ -69,17 +71,28 @@ class OpportunitySearchService:
         *,
         profile: str = "medium_term",
         instrument_kind: str = "SHARE",
+        scope: str = MARKET_SCOPE,
         progress_callback: ProgressCallback | None = None,
     ) -> list[OpportunitySearchResult]:
-        self._notify(progress_callback, "Загрузка списка инструментов", 2.0, 0, 0)
-        instruments = self.catalog.list(instrument_kind, trade_available_only=True)
-        total = len(instruments)
-        self._notify(progress_callback, f"Инструменты загружены: {total}", 8.0, 0, total)
+        scope = str(scope or MARKET_SCOPE).upper()
+        if scope not in SUPPORTED_SCOPES:
+            raise ValueError(f"Unsupported opportunity scope: {scope}")
 
-        self._notify(progress_callback, "Загрузка Portfolio Context", 11.0, 0, total)
+        self._notify(progress_callback, "Загрузка списка инструментов", 2.0, 0, 0)
         account_id = self._active_account()
         positions = self.client.get_positions(account_id) if account_id else None
         portfolio = self.client.get_portfolio(account_id) if account_id else None
+
+        instruments = self._build_universe(
+            scope=scope,
+            instrument_kind=instrument_kind,
+            positions=positions,
+        )
+        total = len(instruments)
+        scope_title = "торговых инструментов" if scope == MARKET_SCOPE else "позиций портфеля"
+        self._notify(progress_callback, f"Вселенная анализа: {total} {scope_title}", 8.0, 0, total)
+
+        self._notify(progress_callback, "Portfolio Context загружается", 11.0, 0, total)
         self._notify(progress_callback, "Portfolio Context загружен", 14.0, 0, total)
 
         results: list[OpportunitySearchResult] = []
@@ -106,25 +119,72 @@ class OpportunitySearchService:
                 total=total,
             )
             results.append(result)
-            self._notify(
-                progress_callback,
-                f"Обработано: {ticker}",
-                progress_base + progress_span,
-                valid_index,
-                total,
-            )
+            self._notify(progress_callback, f"Обработано: {ticker}", progress_base + progress_span, valid_index, total)
 
         self._notify(progress_callback, "Ранжирование возможностей", 97.0, valid_index, total)
         results = sorted(
             results,
             key=lambda item: (
-                item.decision not in {"BUY", "WAIT"},
-                item.decision != "BUY",
+                item.decision not in {"BUY", "WAIT", "HOLD", "ADD", "REDUCE", "SELL"},
+                item.decision not in {"BUY", "ADD", "REDUCE", "SELL", "HOLD"},
                 -item.opportunity_score,
             ),
         )
         self._notify(progress_callback, "Сканирование завершено", 100.0, valid_index, total)
         return results
+
+    def _build_universe(self, *, scope: str, instrument_kind: str, positions: Any) -> list[Any]:
+        if scope == MARKET_SCOPE:
+            return self._market_universe(instrument_kind)
+        return self._portfolio_universe(instrument_kind, positions)
+
+    def _market_universe(self, instrument_kind: str) -> list[Any]:
+        kinds = self._kinds(instrument_kind)
+        result: list[Any] = []
+        seen: set[str] = set()
+        for kind in kinds:
+            for instrument in self.catalog.list(kind, trade_available_only=True):
+                uid = _uid(instrument)
+                if not uid or uid in seen:
+                    continue
+                # Opportunity Search is about new positions, therefore the
+                # instrument must be currently buyable, not merely API-visible.
+                if not _bool_field(instrument, "buy_available", False):
+                    continue
+                if not _bool_field(instrument, "trading_available", False):
+                    continue
+                seen.add(uid)
+                result.append(instrument)
+        return result
+
+    def _portfolio_universe(self, instrument_kind: str, positions: Any) -> list[Any]:
+        held = _held_positions(positions)
+        if not held:
+            return []
+        held_uids = {_uid(item) for item in held if _uid(item)}
+        kinds = self._kinds(instrument_kind)
+        catalog_items: dict[str, Any] = {}
+        for kind in kinds:
+            for instrument in self.catalog.list(kind, trade_available_only=False):
+                uid = _uid(instrument)
+                if uid in held_uids:
+                    catalog_items[uid] = instrument
+
+        result: list[Any] = []
+        for position in held:
+            uid = _uid(position)
+            instrument = catalog_items.get(uid)
+            if instrument is None:
+                instrument = dict(position) if isinstance(position, dict) else position
+            result.append(instrument)
+        return result
+
+    @staticmethod
+    def _kinds(instrument_kind: str) -> tuple[str, ...]:
+        kind = str(instrument_kind or "SHARE").upper()
+        if kind == INSTRUMENT_KIND_ALL:
+            return ("SHARE", "BOND", "ETF", "CURRENCY", "FUTURES", "OPTION")
+        return (kind,)
 
     def _evaluate_instrument(
         self,
@@ -160,12 +220,7 @@ class OpportunitySearchService:
             self._notify(progress_callback, f"Market Data: candles {ticker}", progress_base + progress_span * 0.08, current, total)
             candles = self._get_candles(uid)
             if len(candles) < 150:
-                return self._unavailable(
-                    instrument,
-                    price,
-                    position_context.position.quantity,
-                    "Недостаточно исторических данных для анализа.",
-                )
+                return self._unavailable(instrument, price, position_context.position.quantity, "Недостаточно исторических данных для анализа.")
 
             self._notify(progress_callback, f"Анализ стратегий: {ticker}", progress_base + progress_span * 0.28, current, total)
             analysis = self.analysis.analyze(
@@ -175,11 +230,7 @@ class OpportunitySearchService:
                 profile=profile,
             )
             selected = self._best_strategy(analysis.strategies)
-            market = self.market_context.build(
-                last_price=raw_price,
-                candles=candles,
-                market_regime=analysis.market_regime,
-            )
+            market = self.market_context.build(last_price=raw_price, candles=candles, market_regime=analysis.market_regime)
 
             self._notify(progress_callback, f"Risk / Opportunity: {ticker}", progress_base + progress_span * 0.58, current, total)
             if selected is None:
@@ -191,12 +242,7 @@ class OpportunitySearchService:
                     market_regime_compatible=False,
                     critical_risk=False,
                 )
-                strategy_context = StrategyContextData(
-                    strategy_name=None,
-                    strategy_score=0.0,
-                    quality_gate=False,
-                    available=True,
-                )
+                strategy_context = StrategyContextData(strategy_name=None, strategy_score=0.0, quality_gate=False, available=True)
                 explanation = "Приемлемая стратегия не сформирована."
             else:
                 opportunity = OpportunityEngine.evaluate(analysis, candles, selected if selected.quality_gate else None)
@@ -271,12 +317,7 @@ class OpportunitySearchService:
                 quantity=position_data.quantity,
             )
         except Exception as exc:
-            return self._unavailable(
-                instrument,
-                price,
-                position_context.position.quantity,
-                f"Ошибка анализа: {exc}",
-            )
+            return self._unavailable(instrument, price, position_context.position.quantity, f"Ошибка анализа: {exc}")
 
     @staticmethod
     def _best_strategy(strategies: list[StrategyResult]) -> StrategyResult | None:
@@ -286,11 +327,7 @@ class OpportunitySearchService:
         return max(passing or strategies, key=lambda item: item.score)
 
     def _get_candles(self, instrument_uid: str) -> list[Candle]:
-        payload = self.client.get_candles(
-            instrument_uid,
-            interval="CANDLE_INTERVAL_DAY",
-            days=2400,
-        )
+        payload = self.client.get_candles(instrument_uid, interval="CANDLE_INTERVAL_DAY", days=2400)
         items = payload.get("candles", []) if isinstance(payload, dict) else []
         result: list[Candle] = []
         for item in items:
@@ -337,13 +374,15 @@ class OpportunitySearchService:
         )
 
 
+def _held_positions(positions: Any) -> list[Any]:
+    raw = _field(positions, "securities", []) if positions is not None else []
+    return [item for item in (raw or []) if abs(_number(_field(item, "balance", _field(item, "quantity", 0)))) > 0]
+
+
 def _empty_portfolio():
     from edward.services.portfolio_decision_context_service import PortfolioDecisionContext
 
-    return PortfolioDecisionContext(
-        portfolio=PortfolioContextData(available=False),
-        position=PositionContextData(),
-    )
+    return PortfolioDecisionContext(portfolio=PortfolioContextData(available=False), position=PositionContextData())
 
 
 def account_id_or_none(positions: Any, portfolio: Any) -> bool:
@@ -354,6 +393,17 @@ def _field(value: Any, name: str, default: Any = None) -> Any:
     if isinstance(value, dict):
         return value.get(name, default)
     return getattr(value, name, default)
+
+
+def _uid(value: Any) -> str:
+    return str(_field(value, "uid", _field(value, "instrument_uid", "")))
+
+
+def _bool_field(value: Any, name: str, default: bool = False) -> bool:
+    raw = _field(value, name, default)
+    if isinstance(raw, str):
+        return raw.strip().casefold() in {"true", "1", "yes", "да"}
+    return bool(raw)
 
 
 def _number(value: Any) -> float:
