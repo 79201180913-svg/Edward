@@ -13,7 +13,6 @@ import pytest
 from tests.e2e.test_sandbox_end_to_end import (
     _align_price,
     _get_account_id,
-    _get_price_step,
     _items,
     _number,
     _request,
@@ -52,6 +51,22 @@ def _position_in_account(account_id: str) -> tuple[str, int, Decimal]:
                 if price > 0:
                     return uid, balance, price
     pytest.skip("Sandbox account has no position suitable for protective-order E2E")
+
+
+def _get_price_step(instrument_uid: str) -> Decimal:
+    instruments = _request(
+        "POST",
+        "/instruments/list",
+        {"instrument_kind": "SHARE", "api_trade_available_flag": False},
+    )
+    for item in _items(instruments, "instruments"):
+        uid = str(item.get("instrument_uid") or item.get("uid") or item.get("instrument_id") or "")
+        if uid != instrument_uid:
+            continue
+        step = _number(item.get("min_price_increment"))
+        if step > 0:
+            return step
+    return Decimal("0.0001")
 
 
 def _create_stop(
