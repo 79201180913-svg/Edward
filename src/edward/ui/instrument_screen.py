@@ -28,6 +28,19 @@ def decimal(value: Any) -> Decimal:
         return Decimal("0")
 
 
+def format_price_increment(value: Any) -> str:
+    """Never display a missing/zero placeholder as a real price step."""
+    if value in (None, ""):
+        return "—"
+    try:
+        amount = decimal(value)
+        if amount <= Decimal("0"):
+            return "—"
+        return format(amount, "f")
+    except Exception:
+        return str(value)
+
+
 def items(response: Any, *names: str) -> list[Any]:
     if isinstance(response, list):
         return response
@@ -36,6 +49,11 @@ def items(response: Any, *names: str) -> list[Any]:
         if value is not None:
             return list(value or [])
     return []
+
+
+def instrument_detail_from_catalog(detail: dict[str, Any]) -> dict[str, Any]:
+    """Return the authoritative instrument attributes already loaded by the catalog."""
+    return dict(detail)
 
 
 def install_instrument_screen(app_class: type[Any]) -> None:
@@ -92,16 +110,14 @@ def install_instrument_screen(app_class: type[Any]) -> None:
             ttk.Button(self.content, text="← К инструментам", command=lambda: self.show_page("instruments")).pack(anchor="w", pady=12)
             return
 
-        uid = self.instrument_detail["instrument_uid"]
-        try:
-            fresh = self.client.get_instrument(uid)
-        except Exception:
-            fresh = self.instrument_detail
+        catalog = instrument_detail_from_catalog(self.instrument_detail)
+        uid = catalog["instrument_uid"]
+        fresh = catalog
         try:
             prices = items(self.client.get_last_prices([uid]), "last_prices")
-            last_price = decimal(field(prices[0], "price")) if prices else decimal(self.instrument_detail.get("last_price"))
+            last_price = decimal(field(prices[0], "price")) if prices else decimal(catalog.get("last_price"))
         except Exception:
-            last_price = decimal(self.instrument_detail.get("last_price"))
+            last_price = decimal(catalog.get("last_price"))
         try:
             close = items(self.client.get_close_prices([uid]), "close_prices")
             close_price = decimal(field(close[0], "price")) if close else Decimal("0")
@@ -112,7 +128,7 @@ def install_instrument_screen(app_class: type[Any]) -> None:
         except Exception:
             status = {}
 
-        title = f"{field(fresh, 'ticker', self.instrument_detail['ticker'])} — {field(fresh, 'name', self.instrument_detail['name'])}"
+        title = f"{field(fresh, 'ticker', catalog['ticker'])} — {field(fresh, 'name', catalog['name'])}"
         ttk.Button(self.content, text="← К инструментам", command=lambda: self.show_page("instruments")).pack(anchor="w", pady=(0, 8))
         ttk.Label(self.content, text=title, style="Title.TLabel").pack(anchor="w", pady=(0, 16))
 
@@ -120,24 +136,24 @@ def install_instrument_screen(app_class: type[Any]) -> None:
         summary.pack(fill="x")
         for col in range(4):
             summary.columnconfigure(col, weight=1)
-        _card(self, summary, "Текущая цена", f"{last_price:,.4f} {field(fresh, 'currency', self.instrument_detail['currency'])}", 0)
+        _card(self, summary, "Текущая цена", f"{last_price:,.4f} {field(fresh, 'currency', catalog['currency'])}", 0)
         change = last_price - close_price if close_price else Decimal("0")
         change_pct = (change / close_price * Decimal("100")) if close_price else Decimal("0")
         _card(self, summary, "Изменение", f"{change:,.4f} ({change_pct:,.2f}%)", 1)
-        _card(self, summary, "Шаг цены", str(field(fresh, "min_price_increment", self.instrument_detail["min_price_increment"])), 2)
+        _card(self, summary, "Шаг цены", format_price_increment(field(fresh, "min_price_increment", catalog.get("min_price_increment"))), 2)
         trading_status = field(status, "trading_status", field(status, "status", ""))
         _card(self, summary, "Торговый статус", str(trading_status or "Неизвестно"), 3)
 
         details = ttk.Frame(self.content)
         details.pack(fill="x", pady=(18, 10))
         rows = [
-            ("Тикер", field(fresh, "ticker", self.instrument_detail["ticker"])),
+            ("Тикер", field(fresh, "ticker", catalog["ticker"])),
             ("UID", uid),
-            ("FIGI", field(fresh, "figi", "")),
-            ("Валюта", field(fresh, "currency", self.instrument_detail["currency"])),
-            ("Тип", self.instrument_detail["instrument_kind"]),
-            ("BUY", "Доступна" if field(status, "buy_available_flag", self.instrument_detail["buy_available"]) else "Недоступна"),
-            ("SELL", "Доступна" if field(status, "sell_available_flag", self.instrument_detail["sell_available"]) else "Недоступна"),
+            ("FIGI", field(fresh, "figi", catalog.get("figi", ""))),
+            ("Валюта", field(fresh, "currency", catalog["currency"])),
+            ("Тип", catalog["instrument_kind"]),
+            ("BUY", "Доступна" if field(status, "buy_available_flag", catalog["buy_available"]) else "Недоступна"),
+            ("SELL", "Доступна" if field(status, "sell_available_flag", catalog["sell_available"]) else "Недоступна"),
             ("LIMIT", "Доступен" if field(status, "limit_order_available_flag", False) else "Недоступен"),
             ("MARKET", "Доступен" if field(status, "market_order_available_flag", False) else "Недоступен"),
         ]

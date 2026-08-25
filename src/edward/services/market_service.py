@@ -6,7 +6,7 @@ from edward.api.market_data import MarketDataApi
 
 
 class MarketService:
-    """Application service for current prices and trading availability."""
+    """Application service for current prices, candles and trading availability."""
 
     def __init__(self, api: MarketDataApi) -> None:
         self._api = api
@@ -19,6 +19,15 @@ class MarketService:
 
     def get_trading_statuses(self, instrument_ids: Iterable[str]) -> Any:
         return self._api.get_trading_statuses(instrument_ids)
+
+    def get_candles(
+        self,
+        instrument_id: str,
+        *,
+        interval: str = "CANDLE_INTERVAL_DAY",
+        days: int = 2400,
+    ) -> Any:
+        return self._api.get_candles(instrument_id, interval=interval, days=days)
 
     @staticmethod
     def is_api_trade_available(status: Any) -> bool:

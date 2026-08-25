@@ -13,6 +13,10 @@ logger = logging.getLogger(__name__)
 class InstrumentCatalogService:
     client: Any
 
+    # Keep MarketDataService batch requests bounded. Large instrument universes
+    # can otherwise cause upstream 500 responses and break the whole catalog.
+    MARKET_DATA_BATCH_SIZE = 50
+
     def list(self, instrument_kind: str = "SHARE", trade_available_only: bool = True) -> list[Any]:
         response = self.client.list_instruments(
             instrument_kind=instrument_kind,
@@ -39,25 +43,23 @@ class InstrumentCatalogService:
 
     def _enrich(self, instruments: list[Any], kind: str) -> list[Any]:
         ids = [_uid(instrument) for instrument in instruments if _uid(instrument)]
-        logger.info("[PRICE DEBUG] Requesting market prices: kind=%s ids=%d", kind, len(ids))
+        logger.info("[PRICE DEBUG] Requesting market data: kind=%s ids=%d batch_size=%d", kind, len(ids), self.MARKET_DATA_BATCH_SIZE)
         logger.info("[PRICE DEBUG] First UIDs: %s", ids[:5])
-        prices_response = self.client.get_last_prices(ids) if ids else {}
-        prices = _index(prices_response, "last_prices") if ids else {}
+
+        prices = self._batched_index(ids, self.client.get_last_prices, "last_prices", "last-prices")
+        status_fetcher = getattr(self.client, "get_trading_statuses", None)
+        statuses = self._batched_index(ids, status_fetcher, "trading_statuses", "trading-statuses") if callable(status_fetcher) else {}
+        if not callable(status_fetcher):
+            logger.info("[MARKET DATA] Bulk trading-status method unavailable; using instrument status fields when present")
+
         logger.info(
-            "[PRICE DEBUG] MarketData response: type=%s prices=%d raw_keys=%s",
-            type(prices_response).__name__,
+            "[PRICE DEBUG] MarketData merged response: prices=%d statuses=%d instruments=%d",
             len(prices),
-            list(prices_response.keys()) if isinstance(prices_response, dict) else "not-dict",
+            len(statuses),
+            len(instruments),
         )
         if ids and not prices:
-            logger.warning("[PRICE DEBUG] NO PRICES MATCHED. Raw response: %r", prices_response)
-
-        statuses = {}
-        if ids:
-            try:
-                statuses = _index(self.client.get_trading_statuses(ids), "trading_statuses")
-            except Exception as exc:
-                logger.warning("[PRICE DEBUG] Trading statuses failed: %s", exc)
+            logger.warning("[PRICE DEBUG] NO PRICES MATCHED. All price batches failed or returned empty.")
 
         result = []
         missing_price = 0
@@ -65,7 +67,7 @@ class InstrumentCatalogService:
             item = dict(instrument) if isinstance(instrument, dict) else instrument
             uid = _uid(instrument)
             price_item = prices.get(uid)
-            status = statuses.get(uid)
+            status = statuses.get(uid) or instrument
             raw_price = _field(price_item, "price", _field(price_item, "last_price", ""))
             normalized_price = _quotation_to_string(raw_price)
 
@@ -96,8 +98,8 @@ class InstrumentCatalogService:
             fields = {
                 "instrument_kind": kind,
                 "last_price": normalized_price,
-                "buy_available": _field(instrument, "buy_available_flag", False),
-                "sell_available": _field(instrument, "sell_available_flag", False),
+                "buy_available": _field(instrument, "buy_available_flag", _field(instrument, "buy_available", False)),
+                "sell_available": _field(instrument, "sell_available_flag", _field(instrument, "sell_available", False)),
                 "api_trade_available": api_available,
                 "trading_available": trade_available,
                 "trading_status": trading_status,
@@ -159,12 +161,59 @@ class InstrumentCatalogService:
         )
         return result
 
+    def _batched_index(
+        self,
+        ids: list[str],
+        fetcher: Any,
+        response_name: str,
+        label: str,
+    ) -> dict[str, Any]:
+        merged: dict[str, Any] = {}
+        if not ids or not callable(fetcher):
+            return merged
+
+        for batch_number, batch in enumerate(_chunks(ids, self.MARKET_DATA_BATCH_SIZE), start=1):
+            try:
+                logger.info(
+                    "[MARKET DATA BATCH] type=%s batch=%d size=%d total=%d",
+                    label,
+                    batch_number,
+                    len(batch),
+                    len(ids),
+                )
+                response = fetcher(batch)
+                indexed = _index(response, response_name)
+                merged.update(indexed)
+                logger.info(
+                    "[MARKET DATA BATCH SUCCESS] type=%s batch=%d size=%d matched=%d",
+                    label,
+                    batch_number,
+                    len(batch),
+                    len(indexed),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[MARKET DATA BATCH FAILED] type=%s batch=%d size=%d error=%s",
+                    label,
+                    batch_number,
+                    len(batch),
+                    exc,
+                )
+                # Continue with remaining batches. One broken request must not
+                # invalidate the whole instrument universe.
+        return merged
+
     @staticmethod
     def _as_list(response: Any, name: str) -> list[Any]:
         if isinstance(response, list):
             return response
         value = response.get(name, []) if isinstance(response, dict) else []
         return list(value or [])
+
+
+def _chunks(values: list[str], size: int):
+    for start in range(0, len(values), size):
+        yield values[start:start + size]
 
 
 def _field(value: Any, name: str, default: Any = None) -> Any:
