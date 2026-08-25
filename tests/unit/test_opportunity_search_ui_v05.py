@@ -27,10 +27,43 @@ def test_trade_plan_text_contains_execution_fields():
         holding_horizon_days=20,
         confidence="High",
     )
-    item = SimpleNamespace(trade_plan=plan, recommended_quantity=50, recommended_weight_pct=6.5, execution_ready=True)
+    item = SimpleNamespace(
+        trade_plan=plan,
+        decision="BUY",
+        quantity=0,
+        recommended_quantity=50,
+        recommended_weight_pct=6.5,
+        execution_ready=True,
+    )
     text = _trade_plan_text(item)
     assert "Вход: 100.0000 — 102.0000" in text
     assert "Цель: 115.0000" in text
     assert "Стоп: 96.0000" in text
     assert "Risk/Reward: 3.75" in text
+    assert "Рекомендуемый размер: 50 шт. / 6.50%" in text
     assert "Execution Ready: ДА" in text
+
+
+def test_trade_plan_text_shows_reduce_quantity_and_remaining_position():
+    plan = SimpleNamespace(
+        entry_low=0.1,
+        entry_high=0.1,
+        target_price=0.09,
+        stop_price=0.11,
+        expected_return_pct=-10.0,
+        expected_risk_pct=10.0,
+        risk_reward=-1.0,
+        holding_horizon_days=20,
+        confidence="High",
+    )
+    item = SimpleNamespace(
+        trade_plan=plan,
+        decision="REDUCE",
+        quantity=2000,
+        recommended_quantity=1000,
+        recommended_weight_pct=0.5,
+        execution_ready=False,
+    )
+    text = _trade_plan_text(item)
+    assert "Объём сокращения: 1000 шт. / останется: 1000 шт." in text
+    assert "Execution Ready: НЕТ" in text
