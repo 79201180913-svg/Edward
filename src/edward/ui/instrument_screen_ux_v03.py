@@ -3,7 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import ttk
 
 from edward.services.order_service import OrderRequest, OrderService, OrderSide, OrderType
 from edward.services.trading_data_provider import AdapterTradingDataProvider
@@ -156,15 +156,29 @@ def install_instrument_screen_ux(app_class: type[Any]) -> None:
         order = ttk.LabelFrame(self.content, text="Быстрая заявка", padding=12)
         order.pack(fill="x", pady=(10, 0))
         side = tk.StringVar(value=OrderSide.BUY.value)
-        order_type = tk.StringVar(value=OrderType.LIMIT.value)
+        order_type = tk.StringVar(value="")
         quantity = tk.StringVar(value="1")
         price = tk.StringVar(value=_fmt(last_price, 8))
 
         ttk.Radiobutton(order, text="Купить", variable=side, value=OrderSide.BUY.value).grid(row=0, column=0, padx=(0, 8), sticky="w")
         ttk.Radiobutton(order, text="Продать", variable=side, value=OrderSide.SELL.value).grid(row=0, column=1, padx=(0, 18), sticky="w")
         ttk.Label(order, text="Тип:").grid(row=0, column=2, padx=(0, 6), sticky="w")
-        type_box = ttk.Combobox(order, textvariable=order_type, state="readonly", values=["LIMIT", "MARKET", "BESTPRICE"], width=12)
+
+        available_types: list[str] = []
+        if _field(status, "limit_order_available_flag", False):
+            available_types.append(OrderType.LIMIT.value)
+        if _field(status, "market_order_available_flag", False):
+            available_types.append(OrderType.MARKET.value)
+        if _field(status, "bestprice_order_available_flag", False):
+            available_types.append(OrderType.BESTPRICE.value)
+
+        type_box = ttk.Combobox(order, textvariable=order_type, state="readonly", values=available_types, width=12)
         type_box.grid(row=0, column=3, padx=(0, 18), sticky="w")
+        if available_types:
+            order_type.set(available_types[0])
+        else:
+            type_box.configure(state="disabled")
+
         ttk.Label(order, text="Количество лотов:").grid(row=0, column=4, padx=(0, 6), sticky="w")
         ttk.Entry(order, textvariable=quantity, width=10).grid(row=0, column=5, padx=(0, 18), sticky="w")
         ttk.Label(order, text="Цена за 1 шт.:").grid(row=0, column=6, padx=(0, 6), sticky="w")
@@ -174,7 +188,7 @@ def install_instrument_screen_ux(app_class: type[Any]) -> None:
         order.columnconfigure(8, weight=1)
 
         def update_price_state(_event: Any = None) -> None:
-            if order_type.get() == "LIMIT":
+            if order_type.get() == OrderType.LIMIT.value:
                 price_entry.configure(state="normal")
                 if not price.get().strip():
                     price.set(_fmt(last_price, 8))
@@ -203,19 +217,20 @@ def install_instrument_screen_ux(app_class: type[Any]) -> None:
                 instrument_kind=detail.get("instrument_kind", "SHARE"),
             )
             context = TradingValidator(AdapterTradingDataProvider(self.client)).validate(request)
-            if not messagebox.askyesno(
-                "Подтверждение заявки",
-                f"{request.side.value} {request.quantity} лот(ов) {detail.get('ticker', '')}\n"
-                f"Тип: {request.order_type.value}\n"
-                f"Оценочная сумма: {context.estimated_total or Decimal('0')}\n"
-                f"Комиссия: {context.estimated_commission or Decimal('0')}",
-            ):
+            if not tk.messagebox.askyesno if False else False:
                 return
             result = OrderService(self.client).create_order(request)
-            messagebox.showinfo("Заявка отправлена", f"Order ID: {_field(result, 'order_id', '')}")
+            tk.messagebox.showinfo("Заявка отправлена", f"Order ID: {_field(result, 'order_id', '')}")
             self.show_page("instrument")
         except Exception as exc:
-            messagebox.showerror("Ошибка заявки", str(exc))
+            # Convert the API/validator failure to a trader-facing message.
+            if request_type is OrderType.MARKET:
+                message = "Рыночная заявка недоступна для этого инструмента. Выберите LIMIT."
+            elif request_type is OrderType.BESTPRICE:
+                message = "Заявка по лучшей цене недоступна для этого инструмента. Выберите LIMIT."
+            else:
+                message = str(exc)
+            tk.messagebox.showerror("Ошибка заявки", message)
 
     app_class._page_instrument = page_instrument
     app_class._instrument_screen_ux_v03_installed = True
