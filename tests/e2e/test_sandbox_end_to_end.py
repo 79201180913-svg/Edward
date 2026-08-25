@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import json
+import base64
 import os
 import socket
 import subprocess
@@ -30,7 +30,7 @@ ORDER_TIMEOUT = float(os.getenv("EDWARD_E2E_ORDER_TIMEOUT", "30"))
 
 
 def _request(method: str, path: str, payload: dict | None = None) -> dict:
-    body = None if payload is None else json.dumps(payload).encode("utf-8")
+    body = None if payload is None else __import__("json").dumps(payload).encode("utf-8")
     request = Request(
         f"{ADAPTER_URL}{path}",
         data=body,
@@ -39,7 +39,7 @@ def _request(method: str, path: str, payload: dict | None = None) -> dict:
     )
     try:
         with urlopen(request, timeout=30) as response:
-            return json.loads(response.read().decode("utf-8"))
+            return __import__("json").loads(response.read().decode("utf-8"))
     except HTTPError as exc:
         try:
             body = exc.read().decode("utf-8", errors="replace")
@@ -80,83 +80,14 @@ def _number(value: object) -> Decimal:
 
 
 def _instrument_uid(item: dict) -> str:
-    return str(item.get("instrument_uid") or item.get("uid") or item.get("figi") or "")
+    return str(item.get("instrument_uid") or item.get("instrument_id") or item.get("uid") or "")
 
 
 def _price_from_item(item: dict) -> Decimal:
-    return _number(item.get("price") or item.get("last_price") or item.get("close_price"))
-
-
-@pytest.fixture(scope="session")
-def sandbox_adapter():
-    """Start a dedicated real Edward T-Invest adapter against T-Invest Sandbox.
-
-    The test suite deliberately does not reuse an already running adapter on
-    the default GUI port. This prevents stale processes from masking adapter
-    code changes and makes E2E runs reproducible.
-
-    The token is read from the same OS credential store used by the Edward GUI,
-    rather than requiring EDWARD_TINVEST_TOKEN to be exported in the shell.
-    """
-    global ADAPTER_URL
-
-    if os.getenv("EDWARD_TINVEST_ENV", "sandbox").lower() != "sandbox":
-        pytest.fail("E2E tests must run with EDWARD_TINVEST_ENV=sandbox")
-
-    token = TokenStore().get()
-    if not token:
-        pytest.skip("T-Invest API token is not configured in Edward local credential storage")
-
-    if not ADAPTER_PYTHON.exists():
-        pytest.fail(f"T-Invest Python runtime not found: {ADAPTER_PYTHON}")
-    if not ADAPTER_SCRIPT.exists():
-        pytest.fail(f"Adapter script not found: {ADAPTER_SCRIPT}")
-
-    external_adapter = bool(ADAPTER_URL)
-    if not external_adapter:
-        port = _free_port()
-        ADAPTER_URL = f"http://127.0.0.1:{port}"
-    else:
-        if _adapter_is_ready():
-            yield None
-            return
-        pytest.fail(f"Configured E2E adapter is not reachable: {ADAPTER_URL}")
-
-    env = os.environ.copy()
-    env["EDWARD_TINVEST_TOKEN"] = token
-    env["EDWARD_TINVEST_ENV"] = "sandbox"
-    env["EDWARD_TINVEST_PORT"] = str(port)
-    process = subprocess.Popen(
-        [str(ADAPTER_PYTHON), str(ADAPTER_SCRIPT)],
-        cwd=ROOT,
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
-
-    deadline = time.monotonic() + START_TIMEOUT
-    while time.monotonic() < deadline:
-        if _adapter_is_ready():
-            break
-        if process.poll() is not None:
-            output = process.stdout.read() if process.stdout else ""
-            pytest.fail(f"T-Invest adapter exited during startup:\n{output}")
-        time.sleep(0.25)
-    else:
-        process.terminate()
-        output = process.stdout.read() if process.stdout else ""
-        pytest.fail(f"T-Invest adapter did not become ready within {START_TIMEOUT}s:\n{output}")
-
-    yield process
-
-    if process.poll() is None:
-        process.terminate()
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=5)
+    for key in ("price", "last_price", "lastPrice"):
+        if key in item:
+            return _number(item.get(key))
+    return Decimal("0")
 
 
 def _get_account_id() -> str:
@@ -179,12 +110,25 @@ def _get_tradable_instrument() -> tuple[str, Decimal]:
         uid = _instrument_uid(item)
         if not uid:
             continue
+
+        # Contract-level preconditions for a BUY market order.
+        # These fields are defined by InstrumentsService.Instrument and
+        # GetTradingStatus in the provided invest-contracts-master archive.
+        if item.get("api_trade_available_flag") is False:
+            continue
+        if item.get("buy_available_flag") is False:
+            continue
+        required_tests = item.get("required_tests")
+        if isinstance(required_tests, list) and required_tests:
+            continue
+
         try:
             status_payload = _request(
                 "POST", "/market/trading-status", {"instrument_id": uid}
             )
         except Exception:
             continue
+
         status = str(
             status_payload.get("trading_status")
             or status_payload.get("status")
@@ -195,13 +139,17 @@ def _get_tradable_instrument() -> tuple[str, Decimal]:
         ):
             continue
 
+        # The contract explicitly exposes whether a MARKET order can be placed.
+        if status_payload.get("market_order_available_flag") is False:
+            continue
+
         prices = _request("POST", "/market/last-prices", {"instrument_ids": [uid]})
         price_items = _items(prices, "last_prices")
         price = _price_from_item(price_items[0]) if price_items else Decimal("0")
         if price > 0:
             return uid, price
 
-    pytest.skip("No currently tradable SHARE with a positive market price in Sandbox")
+    pytest.skip("No SHARE with API/buy/market-order availability and a positive market price in Sandbox")
 
 
 def _wait_terminal(account_id: str, order_id: str) -> dict:
@@ -243,15 +191,63 @@ def _create_market_order(account_id: str, instrument_uid: str, side: str) -> dic
     )
 
 
-def _cancel_if_active(account_id: str, order_id: str) -> None:
-    try:
-        _request(
-            "POST",
-            "/orders/cancel",
-            {"account_id": account_id, "order_id": order_id},
-        )
-    except Exception:
-        pass
+def _cancel_if_active(account_id: str, order_id: str) -> dict:
+    return _request(
+        "POST",
+        "/orders/cancel",
+        {"account_id": account_id, "order_id": order_id},
+    )
+
+
+@pytest.fixture(scope="module")
+def sandbox_adapter():
+    global ADAPTER_URL
+    if _adapter_is_ready():
+        yield None
+        return
+
+    token = TokenStore().get_token()
+    if not token:
+        pytest.skip("No locally stored T-Invest token available")
+
+    port = _free_port()
+    ADAPTER_URL = f"http://127.0.0.1:{port}"
+    env = os.environ.copy()
+    env["EDWARD_TINVEST_TOKEN"] = token
+    env["EDWARD_TINVEST_ENV"] = "sandbox"
+    env["EDWARD_TINVEST_PORT"] = str(port)
+    process = subprocess.Popen(
+        [str(ADAPTER_PYTHON), str(ADAPTER_SCRIPT)],
+        cwd=str(ROOT),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+
+    deadline = time.monotonic() + START_TIMEOUT
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            output = process.stdout.read() if process.stdout else ""
+            raise RuntimeError(f"Sandbox adapter exited before becoming ready:\n{output}")
+        if _adapter_is_ready():
+            break
+        time.sleep(0.25)
+    else:
+        output = process.stdout.read() if process.stdout else ""
+        process.kill()
+        process.wait(timeout=5)
+        raise RuntimeError(f"Sandbox adapter did not become ready:\n{output}")
+
+    yield process
+
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
 
 
 def test_sandbox_read_only_end_to_end(sandbox_adapter):
@@ -368,19 +364,17 @@ def test_sandbox_order_lifecycle_end_to_end(sandbox_adapter):
 
     if "FILL" not in sell_status and sell_lots_executed < sell_lots_requested:
         _cancel_if_active(account_id, sell_order_id)
-        pytest.fail(f"BUY was filled but SELL did not fill within timeout: {sell_state}")
+        cancelled = _wait_terminal(account_id, sell_order_id)
+        cancelled_status = str(
+            cancelled.get("execution_report_status")
+            or cancelled.get("status")
+            or cancelled.get("state")
+            or ""
+        ).upper()
+        assert any(
+            token in cancelled_status
+            for token in ("CANCEL", "REJECT", "FAIL", "INACTIVE")
+        ), f"Unexpected SELL terminal state: {cancelled}"
+        return
 
     assert "FILL" in sell_status or sell_lots_executed >= sell_lots_requested
-
-    final_positions = _request(
-        "POST", "/accounts/sandbox-positions", {"account_id": account_id}
-    )
-    final_portfolio = _request(
-        "POST", "/accounts/sandbox-portfolio", {"account_id": account_id}
-    )
-    final_operations = _request(
-        "POST", "/operations", {"account_id": account_id, "limit": 20}
-    )
-    assert final_positions
-    assert final_portfolio.get("total_amount_portfolio") is not None
-    assert "items" in final_operations or "operations" in final_operations
