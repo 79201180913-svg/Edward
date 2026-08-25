@@ -72,12 +72,24 @@ def _forecast_probability(points: tuple[tuple[int, float], ...], horizon: int) -
     return "—" if value is None else f"{value:.1f}%"
 
 
+def _execution_ready_text(item: Any) -> str:
+    return "Готово" if bool(getattr(item, "execution_ready", False)) else "Заблокировано"
+
+
+def _display_reason(value: Any) -> str:
+    raw = str(value or "")
+    base = raw.split(" | ", 1)[0].strip()
+    return _label(REASON_LABELS, base, base or "—")
+
+
 def _trade_plan_text(item: Any) -> str:
     plan = getattr(item, "trade_plan", None)
+    decision = str(getattr(item, "decision", "") or "").upper()
+    if decision == "PASS":
+        return "Торговый план: не применяется для решения «Пропустить»."
     if plan is None:
         return "Торговый план: не сформирован"
     rr = "—" if plan.risk_reward is None else f"{plan.risk_reward:.2f}"
-    decision = str(getattr(item, "decision", "") or "")
     current_quantity = int(getattr(item, "quantity", 0) or 0)
     recommended_quantity = int(getattr(item, "recommended_quantity", 0) or 0)
     if decision == "SELL":
@@ -96,7 +108,7 @@ def _trade_plan_text(item: Any) -> str:
         f"Горизонт: {plan.holding_horizon_days} дн.",
         f"Уверенность: {plan.confidence}",
         size_label,
-        f"Execution Ready: {'ДА' if getattr(item, 'execution_ready', False) else 'НЕТ'}",
+        f"Исполнение: {'ДА' if getattr(item, 'execution_ready', False) else 'НЕТ'}",
     ))
 
 
@@ -150,23 +162,24 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
         ttk.Label(filter_frame, text="Фильтр решения:").pack(side="left")
         filter_combo = ttk.Combobox(filter_frame, textvariable=decision_var, state="readonly", values=FILTER_LABELS, width=15); filter_combo.pack(side="left", padx=(6, 12))
 
-        columns = ("ticker", "price", "forecast5", "prob5", "confidence", "strategy", "strategy_score", "risk_score", "opportunity_score", "decision", "reason")
+        columns = ("ticker", "price", "forecast5", "prob5", "confidence", "strategy", "strategy_score", "risk_score", "opportunity_score", "decision", "readiness", "reason")
         tree = ttk.Treeview(frame, columns=columns, show="headings", height=16)
         headers = (
             ("ticker", "Инструмент", 105), ("price", "Цена", 85), ("forecast5", "Прогноз 5Д", 100),
-            ("prob5", "Рост 5Д", 80), ("confidence", "Уверенность", 100), ("strategy", "Стратегия", 180),
+            ("prob5", "Рост 5Д", 80), ("confidence", "Уверенность", 95), ("strategy", "Стратегия", 165),
             ("strategy_score", "Балл стратегии", 105), ("risk_score", "Риск", 75), ("opportunity_score", "Балл возможности", 120),
-            ("decision", "Решение", 100), ("reason", "Причина", 300),
+            ("decision", "Решение", 100), ("readiness", "Готовность", 105), ("reason", "Причина", 250),
         )
         for key, label, width in headers:
-            tree.heading(key, text=label); tree.column(key, width=width, anchor="center" if key not in {"ticker", "strategy", "reason"} else "w")
+            anchor = "w" if key in {"ticker", "strategy", "reason"} else "center"
+            tree.heading(key, text=label); tree.column(key, width=width, anchor=anchor)
         tree.pack(fill="both", expand=True)
 
         detail_frame = ttk.LabelFrame(frame, text="Прогноз и торговый план")
         detail_frame.pack(fill="x", pady=(8, 0))
         ttk.Label(detail_frame, textvariable=detail_var, justify="left", anchor="w").pack(fill="x", padx=8, pady=8)
 
-        summary_var = tk.StringVar(value="Покупка: 0   Ждать: 0   Удерживать: 0   Увеличить: 0   Сократить: 0   Продать: 0   Пропустить: 0   Недоступны: 0   Показано: 0")
+        summary_var = tk.StringVar(value="Покупка: 0   Ждать: 0   Удерживать: 0   Увеличить: 0   Сократить: 0   Продать: 0   Пропустить: 0   Готово: 0   Заблокировано: 0   Недоступны: 0   Показано: 0")
         ttk.Label(frame, textvariable=summary_var).pack(anchor="w", pady=(8, 0))
         state: dict[str, Any] = {"results": []}
 
@@ -203,32 +216,40 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
                 f"{getattr(item, 'risk_score', 0.0):.1f}",
                 f"{item.opportunity_score:.1f}",
                 _label(DECISION_LABELS, decision),
-                _label(REASON_LABELS, item.reason),
+                _execution_ready_text(item) if decision in {"BUY", "ADD", "HOLD", "REDUCE", "SELL"} else "—",
+                _display_reason(item.reason),
             )
 
         def show_detail(item: Any | None) -> None:
             if item is None:
                 detail_var.set("Выберите инструмент, чтобы увидеть прогноз и торговый план.")
                 return
+            decision = str(getattr(item, "decision", "") or "").upper()
             forecast_rows = [
                 f"{h}Д: цена {_forecast_value(getattr(item, 'forecast_prices', ()), h)} / рост {_forecast_probability(getattr(item, 'forecast_probability_up', ()), h)}"
                 for h in (1, 5, 20, 60)
             ]
-            plan = _trade_plan_text(item)
             header = (
                 f"{item.ticker} · {_label(DECISION_LABELS, item.decision)} · "
                 f"Модель: {getattr(item, 'forecast_model', None) or '—'} · "
                 f"Уверенность: {getattr(item, 'forecast_confidence', None) or '—'}"
             )
-            detail_var.set("\n".join((header, "Прогноз:", *forecast_rows, "Торговый план:", plan)))
+            readiness = f"Готовность к исполнению: {_execution_ready_text(item) if decision in {'BUY', 'ADD', 'HOLD', 'REDUCE', 'SELL'} else 'не применяется'}"
+            if decision in {"BUY", "ADD", "HOLD", "REDUCE", "SELL"}:
+                detail_var.set("\n".join((header, "Прогноз:", *forecast_rows, readiness, "Торговый план:", _trade_plan_text(item))))
+            else:
+                detail_var.set("\n".join((header, "Прогноз:", *forecast_rows, readiness, f"Причина: {_display_reason(item.reason)}", "Торговый план: не применяется.")))
 
         def update_summary() -> None:
             if not page_alive(): return
             counts = {value: 0 for value in FILTER_VALUES if value != "ALL"}
             for item in state["results"]: counts[item.decision or "PASS"] = counts.get(item.decision or "PASS", 0) + 1
             unavailable = sum(1 for item in state["results"] if item.status == "ANALYSIS_UNAVAILABLE")
+            actionable = [item for item in state["results"] if item.decision in {"BUY", "ADD", "HOLD", "REDUCE", "SELL"}]
+            ready = sum(1 for item in actionable if item.execution_ready)
+            blocked = sum(1 for item in actionable if not item.execution_ready)
             selected = decision_code(); visible = sum(1 for item in state["results"] if selected == "ALL" or (item.decision or "PASS") == selected)
-            summary_var.set("   ".join((f"Покупка: {counts.get('BUY', 0)}", f"Ждать: {counts.get('WAIT', 0)}", f"Удерживать: {counts.get('HOLD', 0)}", f"Увеличить: {counts.get('ADD', 0)}", f"Сократить: {counts.get('REDUCE', 0)}", f"Продать: {counts.get('SELL', 0)}", f"Пропустить: {counts.get('PASS', 0)}", f"Недоступны: {unavailable}", f"Показано: {visible}")))
+            summary_var.set("   ".join((f"Покупка: {counts.get('BUY', 0)}", f"Ждать: {counts.get('WAIT', 0)}", f"Удерживать: {counts.get('HOLD', 0)}", f"Увеличить: {counts.get('ADD', 0)}", f"Сократить: {counts.get('REDUCE', 0)}", f"Продать: {counts.get('SELL', 0)}", f"Пропустить: {counts.get('PASS', 0)}", f"Готово: {ready}", f"Заблокировано: {blocked}", f"Недоступны: {unavailable}", f"Показано: {visible}")))
 
         def render() -> None:
             if not page_alive(): return
@@ -259,7 +280,7 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
             decision_var.set("Все"); state["results"] = []; progress_var.set(0.0); progress_text_var.set("Готово"); status_var.set("Готово"); show_detail(None); render()
 
         def localize_stage(stage: str) -> str:
-            for source, target in (("Market Data: candles ", "Рыночные данные: свечи "), ("Market Data: ", "Рыночные данные: "), ("Прогноз цены: ", "Прогноз цены: "), ("Анализ стратегий: ", "Анализ стратегий: "), ("Risk / Opportunity: ", "Риск и возможность: "), ("Decision Engine: ", "Формирование решения: "), ("Portfolio Context загружается", "Загрузка контекста портфеля"), ("Portfolio Context загружен", "Контекст портфеля загружен"), ("Вселенная анализа:", "Инструментов для анализа:")):
+            for source, target in (("Market Data: candles ", "Рыночные данные: свечи "), ("Market Data: ", "Рыночные данные: "), ("Прогноз цены: ", "Прогноз цены: "), ("Анализ стратегий: ", "Анализ стратегий: "), ("Контроль качества прогноза: ", "Контроль качества прогноза: "), ("Risk / Opportunity: ", "Риск и возможность: "), ("Decision Engine: ", "Формирование решения: "), ("Portfolio Context загружается", "Загрузка контекста портфеля"), ("Portfolio Context загружен", "Контекст портфеля загружен"), ("Вселенная анализа:", "Инструментов для анализа:")):
                 if stage.startswith(source): return target + stage[len(source):]
             return stage
 
