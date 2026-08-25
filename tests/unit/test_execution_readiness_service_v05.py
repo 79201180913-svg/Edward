@@ -18,6 +18,8 @@ def base_input(**overrides):
         target_ready=True,
         stop_ready=True,
         liquidity_ok=True,
+        strategy_quality_pass=True,
+        risk_reward_ok=True,
     )
     data.update(overrides)
     return ExecutionReadinessInput(**data)
@@ -41,6 +43,8 @@ def test_execution_is_ready_when_all_gates_pass():
         ("target_ready", "TARGET_NOT_READY"),
         ("stop_ready", "STOP_NOT_READY"),
         ("liquidity_ok", "LIQUIDITY_NOT_OK"),
+        ("strategy_quality_pass", "STRATEGY_QUALITY_GATE_FAIL"),
+        ("risk_reward_ok", "RISK_REWARD_NOT_ACCEPTABLE"),
     ],
 )
 def test_each_blocking_gate_is_reported(field, reason):
@@ -58,6 +62,8 @@ def test_hold_does_not_require_trade_entry_and_target_or_stop():
             stop_ready=False,
             position_size_ready=False,
             liquidity_ok=False,
+            strategy_quality_pass=False,
+            risk_reward_ok=False,
         )
     )
     assert result.execution_ready is True
@@ -72,6 +78,19 @@ def test_sell_does_not_require_forecast_quality_or_portfolio_available():
         )
     )
     assert result.execution_ready is True
+
+
+def test_sell_requires_strategy_quality_and_positive_risk_reward():
+    result = ExecutionReadinessService.evaluate(
+        base_input(
+            decision="SELL",
+            strategy_quality_pass=False,
+            risk_reward_ok=False,
+        )
+    )
+    assert result.execution_ready is False
+    assert "STRATEGY_QUALITY_GATE_FAIL" in result.reasons
+    assert "RISK_REWARD_NOT_ACCEPTABLE" in result.reasons
 
 
 def test_invalid_decision_is_rejected():
