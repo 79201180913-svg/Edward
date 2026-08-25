@@ -170,6 +170,23 @@ def test_open_position_reduce_on_risk_deterioration():
     assert "RISK_DETERIORATION" in result.reason_codes
 
 
+def test_open_position_reduce_on_strategy_quality_failure():
+    result = DecisionEngine.evaluate(
+        _open_position_request(
+            strategy_quality=False,
+            opportunity=OpportunityContext(
+                opportunity_score=80.0,
+                entry_ok=True,
+                risk_ok=True,
+                strategy_ok=False,
+                market_regime_compatible=True,
+            ),
+        )
+    )
+    assert result.decision == Decision.REDUCE
+    assert "STRATEGY_QUALITY_FAIL" in result.reason_codes
+
+
 def test_open_position_reduce_on_strategy_quality_degradation():
     result = DecisionEngine.evaluate(_open_position_request(strategy_quality_degraded=True))
     assert result.decision == Decision.REDUCE
@@ -233,22 +250,6 @@ def test_open_position_hold_only_when_strategy_and_risk_are_ok():
                 strategy_ok=True,
                 market_regime_compatible=True,
             )
-        )
-    )
-    assert result.decision == Decision.HOLD
-
-
-def test_open_position_strategy_not_ok_does_not_hold():
-    result = DecisionEngine.evaluate(
-        _open_position_request(
-            strategy_quality=False,
-            opportunity=OpportunityContext(
-                opportunity_score=58.0,
-                entry_ok=False,
-                risk_ok=True,
-                strategy_ok=False,
-                market_regime_compatible=True,
-            ),
         )
     )
     assert result.decision == Decision.HOLD
