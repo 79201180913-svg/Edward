@@ -69,8 +69,21 @@ def install_stop_orders_page(app_class: type[Any]) -> None:
 
     def shell(self: Any) -> None:
         original_shell(self)
-        if not any(getattr(child, "cget", lambda *_: "")("text") == "Защитные заявки" for child in self.nav.winfo_children()):
-            ttk.Button(self.nav, text="Защитные заявки", style="Nav.TButton", command=lambda: self.show_page("stop_orders")).pack(fill="x", pady=2)
+        already_installed = False
+        for child in self.nav.winfo_children():
+            try:
+                if isinstance(child, ttk.Button) and child.cget("text") == "Защитные заявки":
+                    already_installed = True
+                    break
+            except Exception:
+                continue
+        if not already_installed:
+            ttk.Button(
+                self.nav,
+                text="Защитные заявки",
+                style="Nav.TButton",
+                command=lambda: self.show_page("stop_orders"),
+            ).pack(fill="x", pady=2)
 
     def page_stop_orders(self: Any) -> None:
         ttk.Label(self.content, text="Защитные заявки", font=("Segoe UI", 20, "bold")).pack(anchor="w", pady=(0, 12))
