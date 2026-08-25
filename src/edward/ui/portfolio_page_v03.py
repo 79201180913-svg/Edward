@@ -52,23 +52,57 @@ def position_metrics(position: Any) -> dict[str, Decimal | None]:
 
 
 def _operation_kind(operation: Any) -> str:
-    raw = field(operation, "operation_type", field(operation, "type", ""))
+    raw = field(operation, "operation_type", field(operation, "type", field(operation, "operationType", "")))
     if isinstance(raw, int):
         return {15: "BUY", 16: "BUY", 22: "SELL"}.get(raw, "OTHER")
     text = str(raw).upper()
-    if "BUY" in text:
+    if "BUY" in text or "PURCHASE" in text:
         return "BUY"
-    if "SELL" in text:
+    if "SELL" in text or "SALE" in text:
         return "SELL"
     return "OTHER"
 
 
-def _operation_uid(operation: Any) -> str:
-    return str(field(operation, "instrument_uid", field(operation, "instrument_id", field(operation, "uid", ""))) or "")
+def _identifier(value: Any, *names: str) -> str:
+    for name in names:
+        raw = field(value, name, None)
+        if raw not in (None, ""):
+            return str(raw).strip()
+    return ""
+
+
+def _operation_keys(operation: Any) -> list[str]:
+    keys: list[str] = []
+    for name in ("instrument_uid", "instrument_id", "figi", "ticker"):
+        value = field(operation, name, None)
+        if value not in (None, ""):
+            key = str(value).strip()
+            if key and key not in keys:
+                keys.append(key)
+    nested = field(operation, "instrument", None)
+    if nested is not None:
+        for name in ("uid", "instrument_uid", "instrument_id", "figi", "ticker"):
+            value = field(nested, name, None)
+            if value not in (None, ""):
+                key = str(value).strip()
+                if key and key not in keys:
+                    keys.append(key)
+    return keys
+
+
+def _position_keys(position: Any) -> list[str]:
+    keys: list[str] = []
+    for name in ("instrument_uid", "instrument_id", "figi", "ticker"):
+        value = field(position, name, None)
+        if value not in (None, ""):
+            key = str(value).strip()
+            if key and key not in keys:
+                keys.append(key)
+    return keys
 
 
 def _operation_quantity(operation: Any) -> Decimal:
-    for name in ("quantity_done", "quantity", "lots", "executed_lots"):
+    for name in ("quantity_done", "quantity", "lots", "executed_lots", "quantityDone", "executedLots"):
         value = field(operation, name, None)
         if value is not None:
             result = abs(decimal(value))
@@ -78,47 +112,68 @@ def _operation_quantity(operation: Any) -> Decimal:
 
 
 def _operation_payment(operation: Any) -> Decimal:
-    for name in ("payment", "amount", "sum"):
+    for name in ("payment", "amount", "sum", "paymentAmount", "price"):
         value = field(operation, name, None)
         if value is not None:
             result = abs(decimal(value))
             if result != 0:
-                return result
+                return result if name != "price" else result * _operation_quantity(operation)
     return Decimal("0")
 
 
 def _operation_sort_key(operation: Any) -> str:
-    return str(field(operation, "date", field(operation, "timestamp", field(operation, "execution_time", ""))) or "")
+    return str(field(operation, "date", field(operation, "timestamp", field(operation, "execution_time", field(operation, "time", "")))) or "")
 
 
 def build_cost_basis(operations: list[Any]) -> dict[str, dict[str, Decimal]]:
-    """Build current weighted-average cost basis per instrument from executed trades."""
-    state: dict[str, dict[str, Decimal]] = {}
+    """Build current weighted-average cost basis per instrument.
+
+    Operations are keyed by the first stable identifier available and all aliases
+    are mapped to the same internal state, so UID/FIGI/ticker mismatches do not
+    make a valid cost basis invisible to the portfolio row.
+    """
+    state_by_canonical: dict[str, dict[str, Decimal]] = {}
+    alias_to_canonical: dict[str, str] = {}
+
     for operation in sorted(operations, key=_operation_sort_key):
         kind = _operation_kind(operation)
         if kind not in {"BUY", "SELL"}:
             continue
-        uid = _operation_uid(operation)
+        keys = _operation_keys(operation)
         quantity = _operation_quantity(operation)
         payment = _operation_payment(operation)
-        if not uid or quantity <= 0:
+        if not keys or quantity <= 0 or payment <= 0:
             continue
-        entry = state.setdefault(uid, {"quantity": Decimal("0"), "cost": Decimal("0")})
+
+        canonical = next((alias_to_canonical[key] for key in keys if key in alias_to_canonical), keys[0])
+        alias_to_canonical[canonical] = canonical
+        for key in keys:
+            alias_to_canonical[key] = canonical
+        entry = state_by_canonical.setdefault(canonical, {"quantity": Decimal("0"), "cost": Decimal("0")})
+
         if kind == "BUY":
             entry["quantity"] += quantity
             entry["cost"] += payment
             continue
+
         if entry["quantity"] <= 0:
             continue
         average = entry["cost"] / entry["quantity"]
         sold = min(quantity, entry["quantity"])
         entry["quantity"] -= sold
         entry["cost"] -= average * sold
-    return {
-        uid: {"quantity": value["quantity"], "average_price": value["cost"] / value["quantity"], "cost": value["cost"]}
-        for uid, value in state.items()
-        if value["quantity"] > 0
-    }
+
+    result: dict[str, dict[str, Decimal]] = {}
+    for alias, canonical in alias_to_canonical.items():
+        value = state_by_canonical.get(canonical)
+        if not value or value["quantity"] <= 0:
+            continue
+        result[alias] = {
+            "quantity": value["quantity"],
+            "average_price": value["cost"] / value["quantity"],
+            "cost": value["cost"],
+        }
+    return result
 
 
 def format_money(value: Decimal | None, currency: str) -> str:
@@ -136,7 +191,7 @@ def format_number(value: Decimal | None, digits: int = 2) -> str:
 def _last_price_map(app: Any, positions: list[Any]) -> dict[str, Decimal]:
     ids: list[str] = []
     for position in positions:
-        uid = str(field(position, "instrument_uid", field(position, "uid", "")) or "")
+        uid = _identifier(position, "instrument_uid", "uid", "instrument_id")
         if uid and uid not in ids:
             ids.append(uid)
     if not ids:
@@ -147,7 +202,7 @@ def _last_price_map(app: Any, positions: list[Any]) -> dict[str, Decimal]:
         return {}
     result: dict[str, Decimal] = {}
     for item in items(response, "last_prices", "prices"):
-        uid = str(field(item, "instrument_uid", field(item, "instrument_id", field(item, "uid", ""))) or "")
+        uid = _identifier(item, "instrument_uid", "instrument_id", "uid")
         price = field(item, "price", field(item, "last_price", None))
         if uid and price is not None:
             result[uid] = decimal(price)
@@ -171,7 +226,7 @@ def install_portfolio_page(app_class: type[Any]) -> None:
         return
 
     def open_instrument(self: Any, position: Any, side: str | None = None) -> None:
-        uid = str(field(position, "instrument_uid", field(position, "uid", "")) or "")
+        uid = _identifier(position, "instrument_uid", "uid", "instrument_id")
         if not uid:
             messagebox.showwarning("Инструмент", "Для позиции не найден UID инструмента.")
             return
@@ -203,17 +258,25 @@ def install_portfolio_page(app_class: type[Any]) -> None:
             row = dict(position) if isinstance(position, dict) else {
                 "ticker": field(position, "ticker", ""),
                 "instrument_uid": field(position, "instrument_uid", field(position, "uid", "")),
+                "instrument_id": field(position, "instrument_id", ""),
+                "figi": field(position, "figi", ""),
                 "balance": field(position, "balance", field(position, "quantity", 0)),
                 "blocked_lots": field(position, "blocked_lots", field(position, "blocked", 0)),
                 "average_position_price": field(position, "average_position_price", field(position, "average_price", None)),
                 "expected_yield": field(position, "expected_yield", field(position, "expected_yield_fifo", None)),
                 "currency": field(position, "currency", "RUB"),
             }
-            uid = str(field(row, "instrument_uid", field(row, "uid", "")) or "")
+            uid = _identifier(row, "instrument_uid", "uid", "instrument_id")
             if uid in price_map:
                 row["current_price"] = price_map[uid]
-            if uid in cost_basis:
-                row["average_position_price"] = cost_basis[uid]["average_price"]
+
+            basis = None
+            for key in _position_keys(row):
+                if key in cost_basis:
+                    basis = cost_basis[key]
+                    break
+            if basis is not None:
+                row["average_position_price"] = basis["average_price"]
             enriched_positions.append(row)
 
         rows: list[tuple[Any, dict[str, Decimal | None]]] = []
@@ -237,7 +300,7 @@ def install_portfolio_page(app_class: type[Any]) -> None:
         cash_available, cash_blocked, currency = _cash_summary(positions_response)
         cash_total = cash_available + cash_blocked
         portfolio_value = cash_total + total_positions_value
-        print(f"[PORTFOLIO PAGE FINAL] account_id={account_id} cash={cash_total} securities={total_positions_value} total={portfolio_value} pnl={total_pnl} rows={len(rows)} operations={len(operations)}", flush=True)
+        print(f"[PORTFOLIO PAGE FINAL] account_id={account_id} cash={cash_total} securities={total_positions_value} total={portfolio_value} pnl={total_pnl} rows={len(rows)} operations={len(operations)} cost_basis_keys={len(cost_basis)}", flush=True)
 
         summary_frame = ttk.Frame(self.content)
         summary_frame.pack(fill="x", pady=(0, 12))
