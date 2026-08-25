@@ -2,27 +2,89 @@ from __future__ import annotations
 
 import json
 import os
+import socket
+import subprocess
 import time
 import uuid
 from decimal import Decimal
+from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import pytest
 
-from tests.e2e.test_sandbox_end_to_end import (
-    _align_price,
-    _get_account_id,
-    _items,
-    _number,
-    _request,
-    sandbox_adapter,
-)
+from edward.security.token_store import TokenStore
+from tests.e2e import test_sandbox_end_to_end as e2e
+
+ROOT = Path(__file__).resolve().parents[2]
+ADAPTER_PYTHON = Path(os.getenv("EDWARD_TINVEST_PYTHON", str(ROOT / ".venv-tinvest" / "Scripts" / "python.exe")))
+ADAPTER_SCRIPT = ROOT / "runtime" / "tinvest_adapter_combined_fixed.py"
+START_TIMEOUT = float(os.getenv("EDWARD_E2E_START_TIMEOUT", "20"))
+
+
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+@pytest.fixture
+def protective_adapter():
+    """Start and stop a fresh Sandbox adapter for each protective-order scenario."""
+    previous_url = e2e.ADAPTER_URL
+    token = TokenStore().get()
+    if not token:
+        pytest.skip("No locally stored T-Invest token available")
+
+    port = _free_port()
+    e2e.ADAPTER_URL = f"http://127.0.0.1:{port}"
+    env = os.environ.copy()
+    env["EDWARD_TINVEST_TOKEN"] = token
+    env["EDWARD_TINVEST_ENV"] = "sandbox"
+    env["EDWARD_TINVEST_PORT"] = str(port)
+
+    process = subprocess.Popen(
+        [str(ADAPTER_PYTHON), str(ADAPTER_SCRIPT)],
+        cwd=str(ROOT),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+
+    deadline = time.monotonic() + START_TIMEOUT
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            output = process.stdout.read() if process.stdout else ""
+            e2e.ADAPTER_URL = previous_url
+            raise RuntimeError(f"Sandbox adapter exited before becoming ready:\n{output}")
+        try:
+            if e2e._request("GET", "/health").get("status") == "ok":
+                break
+        except Exception:
+            pass
+        time.sleep(0.25)
+    else:
+        output = process.stdout.read() if process.stdout else ""
+        process.kill()
+        process.wait(timeout=5)
+        e2e.ADAPTER_URL = previous_url
+        raise RuntimeError(f"Sandbox adapter did not become ready:\n{output}")
+
+    try:
+        yield process
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+        e2e.ADAPTER_URL = previous_url
 
 
 def _request_stop(path: str, payload: dict | None = None) -> dict:
-    from tests.e2e import test_sandbox_end_to_end as e2e
-
     body = None if payload is None else json.dumps(payload).encode("utf-8")
     request = Request(
         f"{e2e.ADAPTER_URL}{path}",
@@ -39,31 +101,31 @@ def _request_stop(path: str, payload: dict | None = None) -> dict:
 
 
 def _position_in_account(account_id: str) -> tuple[str, int, Decimal]:
-    positions = _request("POST", "/accounts/sandbox-positions", {"account_id": account_id})
-    for item in _items(positions, "securities"):
-        balance = int(abs(_number(item.get("balance", 0))))
+    positions = e2e._request("POST", "/accounts/sandbox-positions", {"account_id": account_id})
+    for item in e2e._items(positions, "securities"):
+        balance = int(abs(e2e._number(item.get("balance", 0))))
         uid = str(item.get("instrument_uid") or item.get("uid") or "")
         if uid and balance > 0:
-            prices = _request("POST", "/market/last-prices", {"instrument_ids": [uid]})
-            prices_items = _items(prices, "last_prices")
+            prices = e2e._request("POST", "/market/last-prices", {"instrument_ids": [uid]})
+            prices_items = e2e._items(prices, "last_prices")
             if prices_items:
-                price = _number(prices_items[0].get("price", 0))
+                price = e2e._number(prices_items[0].get("price", 0))
                 if price > 0:
                     return uid, balance, price
     pytest.skip("Sandbox account has no position suitable for protective-order E2E")
 
 
 def _get_price_step(instrument_uid: str) -> Decimal:
-    instruments = _request(
+    instruments = e2e._request(
         "POST",
         "/instruments/list",
         {"instrument_kind": "SHARE", "api_trade_available_flag": False},
     )
-    for item in _items(instruments, "instruments"):
+    for item in e2e._items(instruments, "instruments"):
         uid = str(item.get("instrument_uid") or item.get("uid") or item.get("instrument_id") or "")
         if uid != instrument_uid:
             continue
-        step = _number(item.get("min_price_increment"))
+        step = e2e._number(item.get("min_price_increment"))
         if step > 0:
             return step
     return Decimal("0.0001")
@@ -78,10 +140,6 @@ def _create_stop(
     stop_price: Decimal,
     price: Decimal | None = None,
 ) -> dict:
-    # PostSandboxStopOrder requires both `price` and `stopPrice`.
-    # For regular STOP_LOSS / TAKE_PROFIT market child orders, `price` is the
-    # required child-order price and must remain a valid current market price.
-    # The trigger itself is carried by `stopPrice`.
     effective_price = price if price is not None else stop_price
     payload = {
         "account_id": account_id,
@@ -103,7 +161,7 @@ def _create_stop(
 
 def _list_stops(account_id: str) -> list[dict]:
     response = _request_stop("/stop-orders", {"account_id": account_id})
-    return _items(response, "stop_orders")
+    return e2e._items(response, "stop_orders")
 
 
 def _cancel_stop(account_id: str, stop_order_id: str) -> dict:
@@ -113,19 +171,19 @@ def _cancel_stop(account_id: str, stop_order_id: str) -> dict:
 @pytest.mark.parametrize(
     "kind, stop_multiplier, side",
     [
-        ("STOP_ORDER_TYPE_STOP_LOSS", Decimal("0.50"), "STOP_ORDER_DIRECTION_SELL"),
-        ("STOP_ORDER_TYPE_TAKE_PROFIT", Decimal("1.50"), "STOP_ORDER_DIRECTION_SELL"),
+        ("STOP_ORDER_TYPE_STOP_LOSS", Decimal("0.99"), "STOP_ORDER_DIRECTION_SELL"),
+        ("STOP_ORDER_TYPE_TAKE_PROFIT", Decimal("1.01"), "STOP_ORDER_DIRECTION_SELL"),
     ],
 )
-def test_sandbox_protective_order_create_get_cancel(kind, stop_multiplier, side, sandbox_adapter):
+def test_sandbox_protective_order_create_get_cancel(kind, stop_multiplier, side, protective_adapter):
     if os.getenv("EDWARD_E2E_TRADING", "0") != "1":
         pytest.skip("Protective-order E2E requires EDWARD_E2E_TRADING=1")
 
-    account_id = _get_account_id()
+    account_id = e2e._get_account_id()
     uid, _balance, current = _position_in_account(account_id)
     step = _get_price_step(uid)
-    stop_price = _align_price(current * stop_multiplier, step)
-    execution_price = _align_price(current, step)
+    stop_price = e2e._align_price(current * stop_multiplier, step)
+    execution_price = e2e._align_price(current, step)
     assert stop_price > 0
     assert execution_price > 0
 
@@ -149,15 +207,15 @@ def test_sandbox_protective_order_create_get_cancel(kind, stop_multiplier, side,
     pytest.fail("Cancelled protective order remained in active stop-order list")
 
 
-def test_sandbox_stop_limit_create_get_cancel(sandbox_adapter):
+def test_sandbox_stop_limit_create_get_cancel(protective_adapter):
     if os.getenv("EDWARD_E2E_TRADING", "0") != "1":
         pytest.skip("Protective-order E2E requires EDWARD_E2E_TRADING=1")
 
-    account_id = _get_account_id()
+    account_id = e2e._get_account_id()
     uid, _balance, current = _position_in_account(account_id)
     step = _get_price_step(uid)
-    stop_price = _align_price(current * Decimal("0.50"), step)
-    limit_price = _align_price(current * Decimal("0.49"), step)
+    stop_price = e2e._align_price(current * Decimal("0.99"), step)
+    limit_price = e2e._align_price(current * Decimal("0.98"), step)
     assert stop_price > 0 and limit_price > 0
     assert limit_price < stop_price
 
