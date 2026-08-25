@@ -15,9 +15,27 @@ class InstrumentDecisionContextService:
         ticker = _field(instrument, "ticker")
 
         status = trading_status if trading_status is not None else instrument
-        api_available = _bool(_field(status, "api_trade_available_flag", _field(instrument, "api_trade_available_flag", False)))
-        buy_available = _bool(_field(instrument, "buy_available_flag", False))
-        sell_available = _bool(_field(instrument, "sell_available_flag", False))
+        api_available = _bool(
+            _field(
+                status,
+                "api_trade_available_flag",
+                _field(status, "api_trade_available", _field(instrument, "api_trade_available_flag", False)),
+            )
+        )
+        buy_available = _bool(
+            _field(
+                instrument,
+                "buy_available_flag",
+                _field(instrument, "buy_available", _field(status, "buy_available_flag", _field(status, "buy_available", False))),
+            )
+        )
+        sell_available = _bool(
+            _field(
+                instrument,
+                "sell_available_flag",
+                _field(instrument, "sell_available", _field(status, "sell_available_flag", _field(status, "sell_available", False))),
+            )
+        )
         trading_status_value = _field(status, "trading_status", _field(status, "status"))
 
         status_text = str(trading_status_value or "").upper()
