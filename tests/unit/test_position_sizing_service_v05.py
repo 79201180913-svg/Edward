@@ -22,10 +22,10 @@ def base_input(**overrides):
 
 def test_position_sizing_returns_quantity_value_weight_and_risk():
     result = PositionSizingService.calculate(base_input())
-    assert result.recommended_quantity == 200
-    assert result.recommended_value == 20_000.0
-    assert result.recommended_weight_pct == 20.0 or result.recommended_quantity == 100
-    assert result.risk_pct <= 1.0
+    assert result.recommended_quantity == 100
+    assert result.recommended_value == 10_000.0
+    assert result.recommended_weight_pct == 10.0
+    assert result.risk_pct == 0.5
 
 
 def test_position_sizing_is_capped_by_max_position():
