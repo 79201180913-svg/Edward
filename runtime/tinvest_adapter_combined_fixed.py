@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 import tinvest_adapter_fixed as fixed
+import tinvest_candles_patch
 
 _adapter = fixed._adapter
 
@@ -74,7 +75,7 @@ def _create_stop_order(self, payload):
 
 def _stop_orders(self, account_id):
     if _adapter.ENVIRONMENT != "sandbox": return _adapter.message_to_dict(self._service("stop_orders").get_stop_orders(account_id=str(account_id)))
-    return self._rest_request("SandboxService/GetSandboxStopOrders", {"accountId": str(account_id)})
+    return _rest_request("SandboxService/GetSandboxStopOrders", {"accountId": str(account_id)})
 
 
 def _cancel_stop_order(self, account_id, stop_order_id):
@@ -91,5 +92,7 @@ _adapter.AdapterState.replace_order = _replace_order
 _adapter.AdapterState.post_stop_order = _create_stop_order
 _adapter.AdapterState.get_stop_orders = _stop_orders
 _adapter.AdapterState.cancel_stop_order = _cancel_stop_order
+
+tinvest_candles_patch.install(_adapter)
 
 if __name__ == "__main__": _adapter.main()
