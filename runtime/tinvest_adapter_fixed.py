@@ -1,6 +1,55 @@
 from __future__ import annotations
 
+import base64
 import os
+import ssl
+import tempfile
+from pathlib import Path
+
+
+def _configure_windows_ca_bundle() -> None:
+    """Prepare Windows trusted roots before importing t_tech/grpc.
+
+    gRPC reads its OpenSSL root configuration during initialization.  The
+    previous implementation configured GRPC_DEFAULT_SSL_ROOTS_FILE_PATH in
+    tinvest_adapter.py only after importing t_tech.invest, which is too late
+    for some grpc builds on Windows.  Build the bundle here first.
+    """
+    if os.name != "nt" or os.environ.get("GRPC_DEFAULT_SSL_ROOTS_FILE_PATH"):
+        return
+
+    certs: list[bytes] = []
+    seen: set[bytes] = set()
+    for store_name in ("ROOT", "CA"):
+        try:
+            entries = ssl.enum_certificates(store_name)
+        except Exception:
+            continue
+        for cert_der, encoding, _trust in entries:
+            if encoding == "x509_asn" and isinstance(cert_der, bytes) and cert_der not in seen:
+                seen.add(cert_der)
+                certs.append(cert_der)
+
+    if not certs:
+        return
+
+    path = Path(tempfile.gettempdir()) / "Edward" / "windows-ca-bundle.pem"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="ascii") as fh:
+        for cert in certs:
+            encoded = base64.b64encode(cert).decode("ascii")
+            fh.write("-----BEGIN CERTIFICATE-----\n")
+            for i in range(0, len(encoded), 64):
+                fh.write(encoded[i:i + 64] + "\n")
+            fh.write("-----END CERTIFICATE-----\n")
+
+    os.environ["GRPC_DEFAULT_SSL_ROOTS_FILE_PATH"] = str(path)
+
+
+_configure_windows_ca_bundle()
+
+# The environment file is deliberately loaded before the base adapter is
+# imported because the adapter reads its configuration at import time.
 from pathlib import Path
 
 
