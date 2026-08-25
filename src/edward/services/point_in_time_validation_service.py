@@ -8,9 +8,7 @@ from edward.services.forecast_service import ForecastService
 from edward.services.forecast_model_selection_service import ForecastModelSelectionService
 from edward.services.forecast_walk_forward_service import ForecastWalkForwardService
 
-
 PIT_VALIDATION_VERSION = "0.5.0"
-
 
 @dataclass(frozen=True, slots=True)
 class PointInTimeValidationResult:
@@ -19,14 +17,8 @@ class PointInTimeValidationResult:
     failures: tuple[str, ...]
     version: str = PIT_VALIDATION_VERSION
 
-
 class PointInTimeValidationService:
-    """Validate that forecast layers do not depend on data after the origin."""
-
-    @staticmethod
-    def _origin_prefix(candles: Sequence[Candle], size: int) -> list[Candle]:
-        ordered = sorted(list(candles), key=lambda item: item.timestamp)
-        return ordered[:size]
+    """Validate that forecast layers are stable when future data is appended after a fixed origin."""
 
     @staticmethod
     def _same_forecast(a, b) -> bool:
@@ -35,47 +27,55 @@ class PointInTimeValidationService:
         return all(x == y for x, y in zip(a.points, b.points))
 
     @classmethod
-    def validate_forecast(cls, candles: Sequence[Candle], *, future_candles: Sequence[Candle] | None = None) -> bool:
-        if future_candles is None:
-            ForecastService.forecast(instrument_uid="pit", ticker="PIT", candles=candles)
-            return True
+    def _origin(cls, candles: Sequence[Candle]):
+        ordered = sorted(list(candles), key=lambda item: item.timestamp)
+        if not ordered:
+            raise ValueError("Для point-in-time проверки нужны свечи")
+        return ordered[-1].timestamp
 
-        origin = len(candles)
-        base = ForecastService.forecast(instrument_uid="pit", ticker="PIT", candles=cls._origin_prefix(candles, origin))
-        # Appended future candles must not change the forecast made at the original origin.
-        extended_prefix = cls._origin_prefix(list(candles) + list(future_candles), origin)
-        extended = ForecastService.forecast(instrument_uid="pit", ticker="PIT", candles=extended_prefix)
+    @classmethod
+    def validate_forecast(cls, candles: Sequence[Candle], *, future_candles: Sequence[Candle] | None = None) -> bool:
+        origin = cls._origin(candles)
+        if future_candles is None:
+            ForecastService.forecast(instrument_uid="pit", ticker="PIT", candles=candles, origin_timestamp=origin)
+            return True
+        base = ForecastService.forecast(instrument_uid="pit", ticker="PIT", candles=candles, origin_timestamp=origin)
+        extended = ForecastService.forecast(
+            instrument_uid="pit", ticker="PIT", candles=list(candles) + list(future_candles), origin_timestamp=origin
+        )
         return cls._same_forecast(base, extended)
 
     @classmethod
     def validate_model_selection(cls, candles: Sequence[Candle], *, future_candles: Sequence[Candle]) -> bool:
-        origin = len(candles)
+        origin = cls._origin(candles)
         base = ForecastModelSelectionService.select_and_forecast(
-            instrument_uid="pit", ticker="PIT", candles=cls._origin_prefix(candles, origin), horizons=(1, 5, 20, 60)
+            instrument_uid="pit", ticker="PIT", candles=candles, horizons=(1, 5, 20, 60), origin_timestamp=origin
         )
-        extended_prefix = cls._origin_prefix(list(candles) + list(future_candles), origin)
         extended = ForecastModelSelectionService.select_and_forecast(
-            instrument_uid="pit", ticker="PIT", candles=extended_prefix, horizons=(1, 5, 20, 60)
+            instrument_uid="pit",
+            ticker="PIT",
+            candles=list(candles) + list(future_candles),
+            horizons=(1, 5, 20, 60),
+            origin_timestamp=origin,
         )
-        base_models = {item.horizon_days: item.selected_model for item in base.selections}
-        extended_models = {item.horizon_days: item.selected_model for item in extended.selections}
-        return base_models == extended_models
+        return {item.horizon_days: item.selected_model for item in base.selections} == {
+            item.horizon_days: item.selected_model for item in extended.selections
+        }
 
     @classmethod
     def validate_walk_forward(cls, candles: Sequence[Candle], *, future_candles: Sequence[Candle]) -> bool:
-        base = ForecastWalkForwardService.validate(candles=candles, horizon=5)
-        extended = ForecastWalkForwardService.validate(candles=list(candles) + list(future_candles), horizon=5)
+        origin = cls._origin(candles)
+        base = ForecastWalkForwardService.validate(candles=candles, horizon=5, origin_timestamp=origin)
+        extended = ForecastWalkForwardService.validate(
+            candles=list(candles) + list(future_candles), horizon=5, origin_timestamp=origin
+        )
         return bool(base.windows) and bool(extended.windows) and base.windows[0] == extended.windows[0]
 
     @classmethod
     def validate_all(cls, candles: Sequence[Candle], *, future_candles: Sequence[Candle]) -> PointInTimeValidationResult:
         checked: list[str] = []
         failures: list[str] = []
-        for name, fn in (
-            ("forecast", cls.validate_forecast),
-            ("model_selection", cls.validate_model_selection),
-            ("walk_forward", cls.validate_walk_forward),
-        ):
+        for name, fn in (("forecast", cls.validate_forecast), ("model_selection", cls.validate_model_selection), ("walk_forward", cls.validate_walk_forward)):
             checked.append(name)
             try:
                 if not fn(candles, future_candles=future_candles):
