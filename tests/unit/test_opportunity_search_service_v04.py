@@ -125,6 +125,17 @@ def test_portfolio_universe_contains_only_held_positions():
     assert [item["ticker"] for item in result] == ["HELD"]
 
 
+def test_active_account_accepts_sandbox_status_code_two():
+    service = OpportunitySearchService.__new__(OpportunitySearchService)
+
+    class FakeClient:
+        def get_accounts(self):
+            return {"accounts": [{"id": "sandbox-1", "status": "2"}]}
+
+    service.client = FakeClient()
+    assert service._active_account() == "sandbox-1"
+
+
 def test_scan_reports_staged_progress():
     service = OpportunitySearchService.__new__(OpportunitySearchService)
     service._active_account = lambda: None
