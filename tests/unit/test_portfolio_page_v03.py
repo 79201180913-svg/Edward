@@ -74,3 +74,21 @@ def test_build_cost_basis_reads_quantity_and_payment_from_trades():
     assert result["UID-1"]["quantity"] == Decimal("10")
     assert result["UID-1"]["cost"] == Decimal("1260")
     assert result["UID-1"]["average_price"] == Decimal("126")
+
+
+def test_build_cost_basis_reads_quantity_and_payment_from_trades_info():
+    result = build_cost_basis([
+        {
+            "type": "OPERATION_TYPE_BUY",
+            "instrument_uid": "UID-2",
+            "trades_info": {
+                "trades": [
+                    {"quantity": "3", "price": {"units": "100", "nano": 0}},
+                    {"quantity": "2", "price": {"units": "110", "nano": 0}},
+                ]
+            },
+        },
+    ])
+    assert result["UID-2"]["quantity"] == Decimal("5")
+    assert result["UID-2"]["cost"] == Decimal("520")
+    assert result["UID-2"]["average_price"] == Decimal("104")
