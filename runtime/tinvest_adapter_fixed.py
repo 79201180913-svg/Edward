@@ -135,8 +135,6 @@ def _sdk_order_type(value):
 
 
 def _sandbox_accounts(self):
-    # In sandbox use the same SDK account service that the current T-Invest
-    # Python SDK documents for SandboxClient: users.get_accounts().
     result = self._service("users").get_accounts()
     result = _adapter.message_to_dict(result)
     _adapter.logger.info(
@@ -159,9 +157,9 @@ def _sandbox_positions(self, account_id):
 
 
 def _sandbox_portfolio(self, account_id):
+    # t-tech-investments 0.3.3 does not accept a currency keyword here.
     result = self._service("sandbox").get_sandbox_portfolio(
         account_id=str(account_id),
-        currency="RUB",
     )
     result = _adapter.message_to_dict(result)
     _adapter.logger.info(
@@ -193,7 +191,6 @@ def _sandbox_operations(self, account_id, limit=1000):
     try:
         result = method(**kwargs)
     except TypeError:
-        # Older SDK signatures may omit from_/to_/without_* arguments.
         result = method(account_id=str(account_id), limit=max(1, min(int(limit), 1000)))
     return _adapter.message_to_dict(result)
 
