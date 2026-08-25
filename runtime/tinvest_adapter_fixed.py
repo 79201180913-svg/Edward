@@ -8,7 +8,6 @@ from pathlib import Path
 
 
 def _load_local_env() -> None:
-    """Load Edward's local .env before importing the T-Invest SDK."""
     env_file = Path(__file__).resolve().parents[1] / ".env"
     if not env_file.exists():
         return
@@ -30,7 +29,6 @@ def _load_local_env() -> None:
 
 
 def _windows_ca_bundle() -> bytes | None:
-    """Return Windows trusted roots as PEM bytes."""
     if os.name != "nt":
         return None
     certs: list[bytes] = []
@@ -64,7 +62,6 @@ def _windows_ca_bundle() -> bytes | None:
 
 
 def _configure_grpc_tls() -> None:
-    """Make gRPC explicitly use Windows trusted roots before SDK import."""
     roots = _windows_ca_bundle()
     if not roots:
         return
@@ -120,7 +117,6 @@ def _sdk_order_type(value):
 
 
 def _sandbox_accounts(self):
-    """Sandbox accounts must use SandboxService/GetSandboxAccounts, not Users/GetAccounts."""
     result = self._rest_request("SandboxService/GetSandboxAccounts", {})
     _adapter.logger.info("[SANDBOX ACCOUNTS REST] accounts=%s", len(result.get("accounts", []) or []))
     return result
