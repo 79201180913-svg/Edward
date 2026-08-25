@@ -2,7 +2,7 @@
 
 Python trading platform for T-Invest.
 
-Current stable version: **0.4.0**
+Current stable version: **0.5.0**
 
 ## Platform overview
 
@@ -20,9 +20,9 @@ Edward combines manual trading through T-Invest with an adaptive market-analysis
 - position and P&L context for decision making;
 - portfolio analysis limited to currently held positions.
 
-## v0.4 Decision Engine
+## v0.4 Decision Engine baseline
 
-Version 0.4 introduces a complete analysis-to-decision pipeline:
+Version 0.4 introduced a complete analysis-to-decision pipeline:
 
 ```text
 Market Data
@@ -110,34 +110,114 @@ Typical decisions:
 
 The Decision Engine also considers trading availability, portfolio limits, risk deterioration and strategy degradation.
 
-## Opportunity search UI
+## v0.5 Forecast and trading-readiness layer
 
-The v0.4 UI provides:
+Version 0.5 extends the v0.4 decision pipeline with forward-looking price analysis and pre-trade controls:
 
-- selectable analysis scope: **Market Opportunities** / **My Portfolio**;
-- instrument-type filtering;
+```text
+Strategy / Risk / Portfolio Context
+              ↓
+       Forecast Model Selection
+              ↓
+      Point-in-Time Forecast
+              ↓
+       Forecast Walk Forward
+              ↓
+       Forecast Quality Gate
+              ↓
+          Trade Plan
+              ↓
+       Position Sizing
+              ↓
+    Execution Readiness Gate
+```
+
+### Price forecast
+
+The platform produces multi-horizon forecasts for:
+
+- 1 trading day;
+- 5 trading days;
+- 20 trading days;
+- 60 trading days.
+
+The forecast includes expected price, expected return, probability of upward/downward movement, downside/upside levels and confidence.
+
+Forecast model selection is adaptive and uses historical validation rather than relying on one permanently fixed model.
+
+### Point-in-time and anti-leakage validation
+
+The v0.5 forecasting pipeline contains explicit point-in-time validation. Forecast, model-selection and Walk Forward results are checked at a fixed historical origin so that adding candles after that origin cannot change the historical result.
+
+The validation is designed to reject future-data leakage rather than merely checking the order of an input list.
+
+### Forecast cache
+
+Forecast and trade-analysis results can be reused through a versioned cache. Cache identity includes the instrument, trading profile, risk context, forecast model, horizon, data snapshot and algorithm version.
+
+The cache supports hit/miss handling, invalidation, clearing and statistics. The UI exposes cache state and controlled Walk Forward recalculation.
+
+### Trade Plan
+
+For an actionable decision Edward can build a trade plan containing:
+
+- entry range;
+- target price;
+- stop price;
+- expected return;
+- expected risk;
+- Risk/Reward;
+- holding horizon;
+- confidence;
+- recommended position size.
+
+For portfolio reductions and exits the UI shows the recommended reduction/closure quantity and the expected remaining position.
+
+### Execution Readiness
+
+Before a decision is considered ready for future automated execution, v0.5 evaluates a dedicated execution gate covering:
+
+- strategy Quality Gate;
+- forecast Quality Gate;
+- risk conditions;
+- portfolio availability;
+- trading status;
+- position sizing;
+- entry/target/stop readiness;
+- liquidity readiness;
+- Risk/Reward.
+
+The result is explicitly exposed as **Execution Ready: YES/NO**. Blocked decisions retain a readable reason instead of presenting a tradable-looking plan.
+
+## v0.5 Opportunity Search UI
+
+The v0.5 UI provides:
+
+- selectable analysis scope: **Торгуемые инструменты** / **Мой портфель**;
 - trading-profile selection;
+- instrument-type selection;
 - decision filtering;
 - staged progress reporting with the current processing stage and instrument count;
 - incremental table population while the scan is running;
-- immediate display of analyzed instruments without waiting for the full scan;
-- Strategy Score, Risk Score, Opportunity Score, Decision and explanation columns;
+- forecast columns for 5-day price and probability of growth;
+- strategy score, risk score and opportunity score;
+- separate **Готовность** status in the results table;
 - localized Russian UI and decision explanations;
+- detailed forecast and trade-plan panel for the selected instrument;
+- explicit execution readiness and reduction sizing;
 - safe handling when the user changes pages while background analysis is running.
 
-## Walk Forward cache
+## Walk Forward cache controls
 
-Walk Forward optimization results are persisted and reused between repeated analyses.
+The UI exposes persistent Walk Forward cache controls:
 
-The cache supports:
-
-- reuse of valid strategy optimization results;
-- invalidation when analysis inputs/data change;
+- current cache size;
+- reuse of valid optimization results;
 - forced Walk Forward recalculation;
 - complete cache clearing;
-- cache usage in both mass opportunity search and individual instrument analysis.
+- cache usage across repeated market and portfolio analyses.
 
-This avoids repeating expensive parameter searches when the analysis context has not changed.
+This reduces repeated parameter-search work when the underlying analysis context has not changed.
 
 ## Market data and T-Invest contract compatibility
 
@@ -154,18 +234,23 @@ Large market-data requests are processed in batches to avoid oversized API reque
 
 ## Testing
 
-The v0.4 release includes unit and E2E coverage for:
+The v0.5 development line includes regression coverage for:
 
 - Decision Engine scenarios and ranking;
 - Risk Engine;
 - Opportunity Engine;
 - portfolio and market opportunity search;
-- Walk Forward cache;
-- candle normalization;
-- instrument and market decision context;
-- UI progress and incremental result updates;
+- Walk Forward and forecast caches;
+- forecast model selection;
+- forecast Walk Forward validation;
+- point-in-time and anti-leakage validation;
+- trade plan and position sizing;
+- execution-readiness gates;
+- UI forecast/trade-plan formatting;
+- UI readiness and blocked-plan behavior;
+- staged progress and incremental result updates;
 - T-Invest adapter compatibility;
-- regression coverage for the v0.4 integration pipeline.
+- regression coverage for the v0.4/v0.5 integration pipeline.
 
 Run the full test suite with:
 
@@ -173,8 +258,8 @@ Run the full test suite with:
 python -m pytest -q
 ```
 
-## Version 0.4.0 status
+## Version 0.5.0 status
 
-Version 0.4.0 is the frozen release baseline for the adaptive analysis and Decision Engine layer.
+Version 0.5.0 is the frozen baseline for the forecast, trade-plan, position-sizing and execution-readiness layers on top of the v0.4 Decision Engine.
 
-The next development cycle can build on top of this baseline without changing the v0.4 architecture.
+The next development cycle can build on this baseline without changing the v0.5 architecture. The next priority is improving decision quality and preparing a controlled Execution Engine for future automated trading.
