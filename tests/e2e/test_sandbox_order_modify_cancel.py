@@ -9,10 +9,9 @@ import pytest
 from tests.e2e.test_sandbox_end_to_end import (
     _align_price,
     _get_account_id,
-    _get_price_step,
     _get_tradable_instrument,
+    _items,
     _request,
-    _wait_terminal,
     _cancel_if_active,
     sandbox_adapter,
 )
@@ -87,6 +86,22 @@ def _number(value) -> Decimal:
     if value in (None, ""):
         return Decimal("0")
     return Decimal(str(value))
+
+
+def _get_price_step(instrument_uid: str) -> Decimal:
+    instruments = _request(
+        "POST",
+        "/instruments/list",
+        {"instrument_kind": "SHARE", "api_trade_available_flag": False},
+    )
+    for item in _items(instruments, "instruments"):
+        uid = str(item.get("instrument_uid") or item.get("uid") or item.get("instrument_id") or "")
+        if uid != instrument_uid:
+            continue
+        step = _number(item.get("min_price_increment"))
+        if step > 0:
+            return step
+    return Decimal("0.0001")
 
 
 def test_sandbox_order_modify_then_cancel_end_to_end(sandbox_adapter):
