@@ -36,8 +36,8 @@ class LiveOpportunitySearchService(OpportunitySearchService):
     def _enforce_execution_readiness(
         result: OpportunitySearchResult,
         *,
-        forecast_quality_pass: bool,
-        forecast_quality_label: str,
+        forecast_quality_pass: bool = False,
+        forecast_quality_label: str = "НЕ ПРОВЕРЕН",
     ) -> OpportunitySearchResult:
         decision = str(result.decision or "").upper()
         if decision not in {"BUY", "ADD", "HOLD", "REDUCE", "SELL"}:
