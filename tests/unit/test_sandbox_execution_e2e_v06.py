@@ -64,14 +64,15 @@ def test_sandbox_confirmed_execution_path_submits_and_updates_journal():
     controller = ExecutionCenterController(ControlledExecutionService(engine, validator))
     engine.event_callback = controller.accept_event
 
-    controller.load_request(request())
+    submitted_request = request()
+    controller.load_request(submitted_request)
     assert controller.prepare().status is ExecutionStatus.READY
     assert controller.request_confirmation().status is ExecutionStatus.WAITING_CONFIRMATION
     result = controller.confirm_and_submit()
 
     assert result.status is ExecutionStatus.SUBMITTED
     assert result.broker_order_id == "broker-1"
-    assert client.submitted == [request()]
+    assert client.submitted == [submitted_request]
     assert controller.state.events
     assert any(event.status is ExecutionStatus.SUBMITTED for event in controller.state.events)
 
