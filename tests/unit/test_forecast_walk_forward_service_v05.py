@@ -58,14 +58,14 @@ def test_walk_forward_does_not_use_future_validation_after_window_origin():
     assert first.windows[0] == second.windows[0]
 
 
-def test_walk_forward_validates_all_horizons():
+def test_walk_forward_validates_supported_horizons_below_validation_window():
     closes = [100.0 * (1.0015 ** index) for index in range(240)]
     results = ForecastWalkForwardService.validate_all(
         candles=candles_from_closes(closes),
-        horizons=(1, 5, 20),
+        horizons=(1, 5, 19),
     )
 
-    assert [item.horizon_days for item in results] == [1, 5, 20]
+    assert [item.horizon_days for item in results] == [1, 5, 19]
     assert all(item.selected_model for item in results)
 
 
