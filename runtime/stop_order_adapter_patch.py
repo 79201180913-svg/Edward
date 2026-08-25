@@ -19,6 +19,8 @@ def _stop_type(value: Any) -> str:
         "STOP_ORDER_TYPE_STOP_LOSS": "STOP_ORDER_TYPE_STOP_LOSS",
         "TAKE_PROFIT": "STOP_ORDER_TYPE_TAKE_PROFIT",
         "STOP_ORDER_TYPE_TAKE_PROFIT": "STOP_ORDER_TYPE_TAKE_PROFIT",
+        "STOP_LIMIT": "STOP_ORDER_TYPE_STOP_LIMIT",
+        "STOP_ORDER_TYPE_STOP_LIMIT": "STOP_ORDER_TYPE_STOP_LIMIT",
     }
     try:
         return mapping[raw]
@@ -52,10 +54,9 @@ def install(adapter_module: Any) -> None:
 
         request["stopPrice"] = adapter_module._quotation_payload(stop_price)
 
-        # PostStopOrder contract requires price in the request schema even
-        # when the child exchange order is MARKET. For MARKET execution the
-        # price is ignored by the backend, so use the activation price.
-        price = payload.get("price", stop_price)
+        price = payload.get("price")
+        if price is None:
+            price = stop_price
         request["price"] = adapter_module._quotation_payload(price)
 
         if payload.get("take_profit_type"):
@@ -71,7 +72,7 @@ def install(adapter_module: Any) -> None:
             else "StopOrdersService/PostStopOrder"
         )
         adapter_module.logger.info(
-            "[STOP ORDER] method=%s account_id=%s instrument_id=%s type=%s direction=%s quantity=%s stop_price=%s",
+            "[STOP ORDER] method=%s account_id=%s instrument_id=%s type=%s direction=%s quantity=%s stop_price=%s price=%s exchange_type=%s",
             method,
             request["accountId"],
             request["instrumentId"],
@@ -79,6 +80,8 @@ def install(adapter_module: Any) -> None:
             request["direction"],
             request["quantity"],
             request["stopPrice"],
+            request["price"],
+            request["exchangeOrderType"],
         )
         return self._rest_request(method, request)
 
