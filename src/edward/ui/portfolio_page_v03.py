@@ -144,8 +144,6 @@ def install_portfolio_page(app_class: type[Any]) -> None:
         positions_response = self.client.get_positions(account_id)
         positions = items(positions_response, "securities", "positions")
 
-        # Get current prices for all portfolio instruments in one request.
-        # GetPositions/SandboxPositions may not contain market prices.
         price_map = _last_price_map(self, positions)
         enriched_positions: list[dict[str, Any]] = []
         for position in positions:
@@ -163,21 +161,8 @@ def install_portfolio_page(app_class: type[Any]) -> None:
                 row["current_price"] = price_map[uid]
             enriched_positions.append(row)
 
-        # Use the established balance calculation for the account-level total.
-        try:
-            portfolio = self.client.get_portfolio(account_id)
-            summary = BalanceService.build_summary(positions_response, portfolio)
-            portfolio_value = summary.portfolio_value
-            positions_value = summary.securities
-            currency = summary.currency or "RUB"
-            balance_value = summary.cash
-        except Exception:
-            portfolio_value = Decimal("0")
-            positions_value = sum((position_metrics(p)["market_value"] for p in enriched_positions), Decimal("0"))
-            currency = "RUB"
-            balance_value = Decimal("0")
-
         rows: list[tuple[Any, dict[str, Decimal | None]]] = []
+        total_positions_value = Decimal("0")
         total_pnl: Decimal | None = Decimal("0")
         total_cost: Decimal = Decimal("0")
         pnl_known = False
@@ -185,6 +170,7 @@ def install_portfolio_page(app_class: type[Any]) -> None:
         for position in enriched_positions:
             metrics = position_metrics(position)
             rows.append((position, metrics))
+            total_positions_value += metrics["market_value"]
             pnl = metrics["pnl"]
             avg = metrics["average_price"]
             qty = metrics["quantity"]
@@ -198,6 +184,17 @@ def install_portfolio_page(app_class: type[Any]) -> None:
             total_pnl = None
         total_pnl_pct = (total_pnl / total_cost * Decimal("100")) if total_pnl is not None and total_cost != 0 else None
 
+        try:
+            portfolio = self.client.get_portfolio(account_id)
+            summary = BalanceService.build_summary(positions_response, portfolio)
+            balance_value = summary.cash
+            currency = summary.currency or "RUB"
+        except Exception:
+            balance_value = Decimal("0")
+            currency = "RUB"
+
+        portfolio_value = balance_value + total_positions_value
+
         summary_frame = ttk.Frame(self.content)
         summary_frame.pack(fill="x", pady=(0, 12))
         for col in range(4):
@@ -205,7 +202,7 @@ def install_portfolio_page(app_class: type[Any]) -> None:
 
         values = (
             ("Стоимость портфеля", format_money(portfolio_value, currency)),
-            ("Стоимость позиций", format_money(positions_value, currency)),
+            ("Стоимость позиций", format_money(total_positions_value, currency)),
             ("P&L", format_money(total_pnl, currency)),
             ("P&L %", "—" if total_pnl_pct is None else f"{total_pnl_pct:+.2f}%"),
         )
@@ -215,10 +212,7 @@ def install_portfolio_page(app_class: type[Any]) -> None:
             ttk.Label(frame, text=title, style="CardTitle.TLabel").pack(anchor="w")
             ttk.Label(frame, text=value, style="CardValue.TLabel").pack(anchor="w", pady=(7, 0))
 
-        ttk.Label(
-            self.content,
-            text=f"Позиции: {len(rows)} | Денежный баланс: {format_money(balance_value, currency)}",
-        ).pack(anchor="w", pady=(0, 8))
+        ttk.Label(self.content, text=f"Позиции: {len(rows)} | Денежный баланс: {format_money(balance_value, currency)}").pack(anchor="w", pady=(0, 8))
 
         container = ttk.Frame(self.content)
         container.pack(fill="both", expand=True)
