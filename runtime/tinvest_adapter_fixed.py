@@ -74,9 +74,19 @@ def _configure_grpc_tls() -> None:
         original = grpc.ssl_channel_credentials
         if getattr(original, "__edward_windows_roots__", False):
             return
-        def ssl_channel_credentials_with_windows_roots(root_certificates=None, private_key=None, certificate_chain=None):
+
+        def ssl_channel_credentials_with_windows_roots(
+            root_certificates=None,
+            private_key=None,
+            certificate_chain=None,
+        ):
             effective_roots = roots if root_certificates is None else root_certificates
-            return original(root_certificates=effective_roots, private_key=private_key, certificate_chain=certificate_chain)
+            return original(
+                root_certificates=effective_roots,
+                private_key=private_key,
+                certificate_chain=certificate_chain,
+            )
+
         ssl_channel_credentials_with_windows_roots.__edward_windows_roots__ = True
         grpc.ssl_channel_credentials = ssl_channel_credentials_with_windows_roots
     except Exception:
@@ -112,7 +122,11 @@ def _sdk_order_type(value):
     }
     bestprice = getattr(_adapter.SDKOrderType, "ORDER_TYPE_BESTPRICE", None) or getattr(_adapter.SDKOrderType, "ORDER_TYPE_BEST_PRICE", None)
     if bestprice is not None:
-        mapping.update({"BESTPRICE": bestprice, "BEST_PRICE": bestprice, "ORDER_TYPE_BESTPRICE": bestprice})
+        mapping.update({
+            "BESTPRICE": bestprice,
+            "BEST_PRICE": bestprice,
+            "ORDER_TYPE_BESTPRICE": bestprice,
+        })
     if key in mapping:
         return mapping[key]
     if isinstance(value, _adapter.SDKOrderType):
@@ -121,71 +135,127 @@ def _sdk_order_type(value):
 
 
 def _sandbox_accounts(self):
-    result = self._rest_request("SandboxService/GetSandboxAccounts", {})
-    _adapter.logger.info("[SANDBOX ACCOUNTS REST] accounts=%s", len(result.get("accounts", []) or []))
+    # In sandbox use the same SDK account service that the current T-Invest
+    # Python SDK documents for SandboxClient: users.get_accounts().
+    result = self._service("users").get_accounts()
+    result = _adapter.message_to_dict(result)
+    _adapter.logger.info(
+        "[SANDBOX ACCOUNTS SDK] accounts=%s",
+        len(result.get("accounts", []) or []),
+    )
     return result
 
 
 def _sandbox_positions(self, account_id):
-    result = self._rest_request("SandboxService/GetSandboxPositions", {"accountId": str(account_id)})
-    _adapter.logger.info("[SANDBOX POSITIONS REST] account_id=%s securities=%s money=%s", account_id, len(result.get("securities", []) or []), len(result.get("money", []) or []))
+    result = self._service("sandbox").get_sandbox_positions(account_id=str(account_id))
+    result = _adapter.message_to_dict(result)
+    _adapter.logger.info(
+        "[SANDBOX POSITIONS SDK] account_id=%s securities=%s money=%s",
+        account_id,
+        len(result.get("securities", []) or []),
+        len(result.get("money", []) or []),
+    )
     return result
 
 
 def _sandbox_portfolio(self, account_id):
-    # Use the SDK's OperationsService for portfolio retrieval. T-Bank documents
-    # GetSandboxPortfolio as a SandboxService method, while the Python SDK exposes
-    # portfolio retrieval through the common operations service in the sandbox
-    # contour. This avoids the REST 70001 response observed for this method.
-    result = self._service("operations").get_portfolio(account_id=str(account_id))
+    result = self._service("sandbox").get_sandbox_portfolio(
+        account_id=str(account_id),
+        currency="RUB",
+    )
     result = _adapter.message_to_dict(result)
-    _adapter.logger.info("[SANDBOX PORTFOLIO SDK] account_id=%s positions=%s total=%s", account_id, len(result.get("positions", []) or []), result.get("total_amount_portfolio"))
+    _adapter.logger.info(
+        "[SANDBOX PORTFOLIO SDK] account_id=%s positions=%s",
+        account_id,
+        len(result.get("positions", []) or []),
+    )
     return result
 
 
 def _sandbox_operations(self, account_id, limit=1000):
+    service = self._service("sandbox")
+    method = getattr(service, "get_sandbox_operations_by_cursor", None)
+    if method is None:
+        method = getattr(service, "get_sandbox_operations", None)
+    if method is None:
+        raise RuntimeError("T-Invest SDK sandbox service does not provide operations methods")
+
     now = datetime.now(timezone.utc)
     start = now - timedelta(days=3650)
-    payload = {
-        "accountId": str(account_id),
-        "from": start.isoformat().replace("+00:00", "Z"),
-        "to": now.isoformat().replace("+00:00", "Z"),
+    kwargs = {
+        "account_id": str(account_id),
+        "from_": start,
+        "to": now,
         "limit": max(1, min(int(limit), 1000)),
-        "withoutCommissions": False,
-        "withoutTrades": False,
-        "withoutOvernights": False,
+        "without_commissions": False,
+        "without_trades": False,
     }
-    result = self._rest_request("SandboxService/GetSandboxOperationsByCursor", payload)
-    _adapter.logger.info("[SANDBOX OPERATIONS REST] account_id=%s items=%s", account_id, len(result.get("items", []) or []))
-    return result
+    try:
+        result = method(**kwargs)
+    except TypeError:
+        # Older SDK signatures may omit from_/to_/without_* arguments.
+        result = method(account_id=str(account_id), limit=max(1, min(int(limit), 1000)))
+    return _adapter.message_to_dict(result)
 
 
 def _list_instruments(self, kind="SHARE", trade=True):
     key = str(kind).upper()
-    method_map = {"SHARE": "Shares", "BOND": "Bonds", "ETF": "Etfs", "CURRENCY": "Currencies", "FUTURES": "Futures"}
+    method_map = {
+        "SHARE": "Shares",
+        "BOND": "Bonds",
+        "ETF": "Etfs",
+        "CURRENCY": "Currencies",
+        "FUTURES": "Futures",
+    }
     method_name = method_map.get(key)
     if method_name is None:
         raise ValueError(f"Unsupported instrument kind: {kind}")
-    request = {"instrumentStatus": "INSTRUMENT_STATUS_BASE" if trade else "INSTRUMENT_STATUS_ALL", "instrumentExchange": "INSTRUMENT_EXCHANGE_UNSPECIFIED"}
+    request = {
+        "instrumentStatus": "INSTRUMENT_STATUS_BASE" if trade else "INSTRUMENT_STATUS_ALL",
+        "instrumentExchange": "INSTRUMENT_EXCHANGE_UNSPECIFIED",
+    }
     data = self._rest_request(f"InstrumentsService/{method_name}", request)
-    _adapter.logger.info("[INSTRUMENTS REST] kind=%s method=%s count=%s", key, method_name, len(data.get("instruments", []) or []))
+    _adapter.logger.info(
+        "[INSTRUMENTS REST] kind=%s method=%s count=%s",
+        key,
+        method_name,
+        len(data.get("instruments", []) or []),
+    )
     return data
 
 
 def _last_prices(self, ids):
-    return self._rest_request("MarketDataService/GetLastPrices", {"instrumentId": [str(value) for value in ids], "lastPriceType": "LAST_PRICE_UNSPECIFIED"})
+    return self._rest_request(
+        "MarketDataService/GetLastPrices",
+        {
+            "instrumentId": [str(value) for value in ids],
+            "lastPriceType": "LAST_PRICE_UNSPECIFIED",
+        },
+    )
 
 
 def _close_prices(self, ids):
-    return self._rest_request("MarketDataService/GetClosePrices", {"instruments": [{"instrumentId": str(value)} for value in ids], "instrumentStatus": "INSTRUMENT_STATUS_BASE"})
+    return self._rest_request(
+        "MarketDataService/GetClosePrices",
+        {
+            "instruments": [{"instrumentId": str(value)} for value in ids],
+            "instrumentStatus": "INSTRUMENT_STATUS_BASE",
+        },
+    )
 
 
 def _trading_status(self, instrument_id):
-    return self._rest_request("MarketDataService/GetTradingStatus", {"instrumentId": str(instrument_id)})
+    return self._rest_request(
+        "MarketDataService/GetTradingStatus",
+        {"instrumentId": str(instrument_id)},
+    )
 
 
 def _trading_statuses(self, ids):
-    return self._rest_request("MarketDataService/GetTradingStatuses", {"instrumentId": [str(value) for value in ids]})
+    return self._rest_request(
+        "MarketDataService/GetTradingStatuses",
+        {"instrumentId": [str(value) for value in ids]},
+    )
 
 
 _refresh_adapter_config()
