@@ -29,7 +29,7 @@ class ExecutionAdapter(Protocol):
 
 
 class InMemoryExecutionJournal:
-    """Small deterministic journal implementation for 0.6.2 tests and local service use."""
+    """Deterministic journal implementation for 0.6.2 tests and local service use."""
 
     def __init__(self) -> None:
         self._entries: dict[str, ExecutionJournalEntry] = {}
@@ -68,14 +68,13 @@ class ExecutionEngine:
     def create(self, request: ExecutionRequest) -> ExecutionResult:
         if self.journal.get(request.execution_id) is not None:
             raise ValueError("execution_id already exists")
-        entry = self._entry(request, ExecutionStatus.CREATED)
-        self.journal.append(entry)
+        self.journal.append(self._entry(request, ExecutionStatus.CREATED))
         self._emit(request.execution_id, ExecutionEventType.CREATED, ExecutionStatus.CREATED, "Исполнение создано")
         return ExecutionResult(request.execution_id, ExecutionStatus.CREATED)
 
     def validate(self, request: ExecutionRequest) -> ExecutionResult:
         self._require_existing(request.execution_id)
-        entry = self._update_status(request.execution_id, ExecutionStatus.VALIDATING)
+        self._update_status(request.execution_id, ExecutionStatus.VALIDATING)
         self._emit(request.execution_id, ExecutionEventType.VALIDATION_STARTED, ExecutionStatus.VALIDATING, "Начата проверка исполнения")
 
         errors: list[str] = []
@@ -83,51 +82,79 @@ class ExecutionEngine:
             errors.append("EXECUTION_NOT_READY")
         if request.quantity <= 0:
             errors.append("INVALID_QUANTITY")
-        if request.decision.value in {"BUY", "ADD"} and request.entry_price is None and request.order_type.lower() == "limit":
+        if request.order_type.lower() == "limit" and request.entry_price is None:
             errors.append("ENTRY_PRICE_REQUIRED")
-        if request.decision.value in {"REDUCE", "SELL"} and request.stop_price is not None and request.stop_price <= 0:
+        if request.stop_price is not None and request.stop_price <= 0:
             errors.append("INVALID_STOP_PRICE")
 
         if errors:
-            self._update_status(request.execution_id, ExecutionStatus.BLOCKED, error_code=errors[0], error_message=";".join(errors))
-            self._emit(request.execution_id, ExecutionEventType.VALIDATION_FAILED, ExecutionStatus.BLOCKED, "Исполнение заблокировано", {"reasons": errors})
-            return ExecutionResult(request.execution_id, ExecutionStatus.BLOCKED, error_code=errors[0], error_message=";".join(errors))
+            self._update_status(
+                request.execution_id,
+                ExecutionStatus.BLOCKED,
+                error_code=errors[0],
+                error_message=";".join(errors),
+            )
+            self._emit(
+                request.execution_id,
+                ExecutionEventType.VALIDATION_FAILED,
+                ExecutionStatus.BLOCKED,
+                "Исполнение заблокировано",
+                {"reasons": errors},
+            )
+            return ExecutionResult(
+                request.execution_id,
+                ExecutionStatus.BLOCKED,
+                error_code=errors[0],
+                error_message=";".join(errors),
+            )
 
         self._update_status(request.execution_id, ExecutionStatus.READY)
-        self._emit(request.execution_id, ExecutionEventType.VALIDATION_PASSED, ExecutionStatus.READY, "Проверка исполнения пройдена")
+        self._emit(
+            request.execution_id,
+            ExecutionEventType.VALIDATION_PASSED,
+            ExecutionStatus.READY,
+            "Проверка исполнения пройдена",
+        )
         return ExecutionResult(request.execution_id, ExecutionStatus.READY)
 
     def plan(self, request: ExecutionRequest) -> ExecutionRequest:
-        current = self.journal.get(request.execution_id)
-        if current is None:
-            raise KeyError(request.execution_id)
+        current = self._require_existing(request.execution_id)
         if current.status not in {ExecutionStatus.READY, ExecutionStatus.WAITING_CONFIRMATION}:
             raise ValueError(f"execution is not ready for planning: {current.status}")
         return request
 
     def require_confirmation(self, request: ExecutionRequest) -> ExecutionResult:
-        current = self.journal.get(request.execution_id)
-        if current is None:
-            raise KeyError(request.execution_id)
+        current = self._require_existing(request.execution_id)
         if current.status != ExecutionStatus.READY:
             raise ValueError(f"confirmation is not available from {current.status}")
         self._update_status(request.execution_id, ExecutionStatus.WAITING_CONFIRMATION)
-        self._emit(request.execution_id, ExecutionEventType.CONFIRMATION_REQUIRED, ExecutionStatus.WAITING_CONFIRMATION, "Требуется подтверждение пользователя")
+        self._emit(
+            request.execution_id,
+            ExecutionEventType.CONFIRMATION_REQUIRED,
+            ExecutionStatus.WAITING_CONFIRMATION,
+            "Требуется подтверждение пользователя",
+        )
         return ExecutionResult(request.execution_id, ExecutionStatus.WAITING_CONFIRMATION)
 
     def confirm(self, request: ExecutionRequest) -> ExecutionResult:
-        current = self.journal.get(request.execution_id)
-        if current is None:
-            raise KeyError(request.execution_id)
+        current = self._require_existing(request.execution_id)
         if current.status != ExecutionStatus.WAITING_CONFIRMATION:
             raise ValueError(f"confirmation is not expected from {current.status}")
-        self._emit(request.execution_id, ExecutionEventType.CONFIRMED, ExecutionStatus.WAITING_CONFIRMATION, "Пользователь подтвердил исполнение")
+        self._emit(
+            request.execution_id,
+            ExecutionEventType.CONFIRMED,
+            ExecutionStatus.WAITING_CONFIRMATION,
+            "Пользователь подтвердил исполнение",
+        )
         return ExecutionResult(request.execution_id, ExecutionStatus.WAITING_CONFIRMATION)
 
-    def submit(self, request: ExecutionRequest, *, mode: ExecutionMode = ExecutionMode.USER_CONFIRMATION) -> ExecutionResult:
-        current = self.journal.get(request.execution_id)
-        if current is None:
-            raise KeyError(request.execution_id)
+    def submit(
+        self,
+        request: ExecutionRequest,
+        *,
+        mode: ExecutionMode = ExecutionMode.USER_CONFIRMATION,
+    ) -> ExecutionResult:
+        current = self._require_existing(request.execution_id)
         if mode != ExecutionMode.USER_CONFIRMATION:
             raise ValueError("v0.6.2 supports controlled user-confirmation execution only")
         if current.status != ExecutionStatus.WAITING_CONFIRMATION:
@@ -136,17 +163,52 @@ class ExecutionEngine:
             raise RuntimeError("execution adapter is not configured")
 
         self._update_status(request.execution_id, ExecutionStatus.SUBMITTING)
-        self._emit(request.execution_id, ExecutionEventType.SUBMITTING, ExecutionStatus.SUBMITTING, "Отправка заявки")
+        self._emit(
+            request.execution_id,
+            ExecutionEventType.SUBMITTING,
+            ExecutionStatus.SUBMITTING,
+            "Отправка заявки",
+        )
         try:
             broker_order_id = self.adapter.submit(request)
         except Exception as exc:
-            self._update_status(request.execution_id, ExecutionStatus.FAILED, error_code=type(exc).__name__, error_message=str(exc))
-            self._emit(request.execution_id, ExecutionEventType.ERROR, ExecutionStatus.FAILED, "Ошибка отправки заявки", {"error": str(exc)})
-            return ExecutionResult(request.execution_id, ExecutionStatus.FAILED, error_code=type(exc).__name__, error_message=str(exc))
+            self._update_status(
+                request.execution_id,
+                ExecutionStatus.FAILED,
+                error_code=type(exc).__name__,
+                error_message=str(exc),
+            )
+            self._emit(
+                request.execution_id,
+                ExecutionEventType.ERROR,
+                ExecutionStatus.FAILED,
+                "Ошибка отправки заявки",
+                {"error": str(exc)},
+            )
+            return ExecutionResult(
+                request.execution_id,
+                ExecutionStatus.FAILED,
+                error_code=type(exc).__name__,
+                error_message=str(exc),
+            )
 
-        self._update_status(request.execution_id, ExecutionStatus.SUBMITTED, broker_order_id=broker_order_id)
-        self._emit(request.execution_id, ExecutionEventType.SUBMITTED, ExecutionStatus.SUBMITTED, "Заявка отправлена", {"broker_order_id": broker_order_id})
-        return ExecutionResult(request.execution_id, ExecutionStatus.SUBMITTED, broker_order_id=broker_order_id)
+        self._update_status(
+            request.execution_id,
+            ExecutionStatus.SUBMITTED,
+            broker_order_id=broker_order_id,
+        )
+        self._emit(
+            request.execution_id,
+            ExecutionEventType.SUBMITTED,
+            ExecutionStatus.SUBMITTED,
+            "Заявка отправлена",
+            {"broker_order_id": broker_order_id},
+        )
+        return ExecutionResult(
+            request.execution_id,
+            ExecutionStatus.SUBMITTED,
+            broker_order_id=broker_order_id,
+        )
 
     def monitor(self, execution_id: str) -> ExecutionResult:
         entry = self._require_existing(execution_id)
@@ -154,11 +216,23 @@ class ExecutionEngine:
             raise ValueError("broker order id is not available")
         if self.adapter is None:
             raise RuntimeError("execution adapter is not configured")
+
         result = self.adapter.get_status(entry.broker_order_id)
         self._update_from_result(execution_id, result)
-        self._emit(execution_id, ExecutionEventType.STATUS_CHANGED, result.status, "Получен статус заявки")
+        self._emit(
+            execution_id,
+            ExecutionEventType.STATUS_CHANGED,
+            result.status,
+            "Получен статус заявки",
+        )
         if result.filled_quantity > 0:
-            self._emit(execution_id, ExecutionEventType.FILL_UPDATED, result.status, "Обновлено исполнение", {"filled_quantity": str(result.filled_quantity)})
+            self._emit(
+                execution_id,
+                ExecutionEventType.FILL_UPDATED,
+                result.status,
+                "Обновлено исполнение",
+                {"filled_quantity": str(result.filled_quantity)},
+            )
         return result
 
     def cancel(self, execution_id: str) -> ExecutionResult:
@@ -169,17 +243,41 @@ class ExecutionEngine:
             raise RuntimeError("execution adapter is not configured")
         if entry.status not in {ExecutionStatus.SUBMITTED, ExecutionStatus.PARTIALLY_FILLED}:
             raise ValueError(f"cancellation is not available from {entry.status}")
-        self._emit(execution_id, ExecutionEventType.CANCEL_REQUESTED, entry.status, "Запрошена отмена заявки")
+
+        self._emit(
+            execution_id,
+            ExecutionEventType.CANCEL_REQUESTED,
+            entry.status,
+            "Запрошена отмена заявки",
+        )
         self.adapter.cancel(entry.broker_order_id)
         self._update_status(execution_id, ExecutionStatus.CANCELLED)
-        self._emit(execution_id, ExecutionEventType.CANCELLED, ExecutionStatus.CANCELLED, "Заявка отменена")
-        return ExecutionResult(execution_id, ExecutionStatus.CANCELLED, broker_order_id=entry.broker_order_id)
+        self._emit(
+            execution_id,
+            ExecutionEventType.CANCELLED,
+            ExecutionStatus.CANCELLED,
+            "Заявка отменена",
+        )
+        return ExecutionResult(
+            execution_id,
+            ExecutionStatus.CANCELLED,
+            broker_order_id=entry.broker_order_id,
+        )
 
     def recover(self, execution_id: str) -> ExecutionResult:
         entry = self._require_existing(execution_id)
         if entry.status in {ExecutionStatus.SUBMITTED, ExecutionStatus.PARTIALLY_FILLED}:
             return self.monitor(execution_id)
-        return ExecutionResult(execution_id, entry.status, broker_order_id=entry.broker_order_id, filled_quantity=entry.filled_quantity, average_fill_price=entry.average_fill_price, commission=entry.commission, error_code=entry.error_code, error_message=entry.error_message)
+        return ExecutionResult(
+            execution_id,
+            entry.status,
+            broker_order_id=entry.broker_order_id,
+            filled_quantity=entry.filled_quantity,
+            average_fill_price=entry.average_fill_price,
+            commission=entry.commission,
+            error_code=entry.error_code,
+            error_message=entry.error_message,
+        )
 
     def _entry(self, request: ExecutionRequest, status: ExecutionStatus) -> ExecutionJournalEntry:
         return ExecutionJournalEntry(
@@ -204,13 +302,13 @@ class ExecutionEngine:
 
     def _update_status(self, execution_id: str, status: ExecutionStatus, **changes: object) -> ExecutionJournalEntry:
         current = self._require_existing(execution_id)
-        updated = replace(current, status=status, updated_at=current.updated_at, **changes)
+        updated = replace(current, status=status, **changes)
         self.journal.update(updated)
         return updated
 
     def _update_from_result(self, execution_id: str, result: ExecutionResult) -> ExecutionJournalEntry:
         current = self._require_existing(execution_id)
-        return replace(
+        updated = replace(
             current,
             status=result.status,
             broker_order_id=result.broker_order_id or current.broker_order_id,
@@ -219,10 +317,7 @@ class ExecutionEngine:
             commission=result.commission,
             error_code=result.error_code,
             error_message=result.error_message,
-        ) | self._commit_update(current)
-
-    def _commit_update(self, current: ExecutionJournalEntry) -> ExecutionJournalEntry:
-        updated = replace(current, updated_at=current.updated_at)
+        )
         self.journal.update(updated)
         return updated
 
@@ -236,4 +331,12 @@ class ExecutionEngine:
     ) -> None:
         if self.event_callback is None:
             return
-        self.event_callback(ExecutionEvent(execution_id=execution_id, event_type=event_type, status=status, message=message, payload=payload or {}))
+        self.event_callback(
+            ExecutionEvent(
+                execution_id=execution_id,
+                event_type=event_type,
+                status=status,
+                message=message,
+                payload=payload or {},
+            )
+        )
