@@ -94,8 +94,6 @@ def _refresh_adapter_config() -> None:
     _adapter.TOKEN = os.getenv("EDWARD_TINVEST_TOKEN", "").strip()
     _adapter.ENVIRONMENT = os.getenv("EDWARD_TINVEST_ENV", "sandbox").lower()
     _adapter.PORT = int(os.getenv("EDWARD_TINVEST_PORT", "8765"))
-    # REST must use the same sandbox contour as the gRPC client when running in Sandbox.
-    # T-Bank documents sandbox REST at sandbox-invest-public-api.tbank.ru/rest/.
     _adapter.REST_TARGET = (
         "https://invest-public-api.tbank.ru"
         if _adapter.ENVIRONMENT == "production"
@@ -135,8 +133,13 @@ def _sandbox_positions(self, account_id):
 
 
 def _sandbox_portfolio(self, account_id):
-    result = self._rest_request("SandboxService/GetSandboxPortfolio", {"accountId": str(account_id), "currency": "RUB"})
-    _adapter.logger.info("[SANDBOX PORTFOLIO REST] account_id=%s positions=%s total=%s", account_id, len(result.get("positions", []) or []), result.get("total_amount_portfolio"))
+    # Use the SDK's OperationsService for portfolio retrieval. T-Bank documents
+    # GetSandboxPortfolio as a SandboxService method, while the Python SDK exposes
+    # portfolio retrieval through the common operations service in the sandbox
+    # contour. This avoids the REST 70001 response observed for this method.
+    result = self._service("operations").get_portfolio(account_id=str(account_id))
+    result = _adapter.message_to_dict(result)
+    _adapter.logger.info("[SANDBOX PORTFOLIO SDK] account_id=%s positions=%s total=%s", account_id, len(result.get("positions", []) or []), result.get("total_amount_portfolio"))
     return result
 
 
