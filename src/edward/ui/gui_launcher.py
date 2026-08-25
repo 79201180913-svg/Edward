@@ -7,6 +7,8 @@ from pathlib import Path
 from edward.ui import localization_bootstrap  # noqa: F401
 from edward.ui import app as app_module
 from edward.ui.app import EdwardApp, main
+from edward.api.tinvest_adapter_client import TInvestAdapterClient
+from edward.api.stop_order_json_fix import install as install_stop_order_json_fix
 from edward.ui.error_reporting import install_error_reporting
 from edward.ui.trading_ui_guard import install_trading_ui_guard
 from edward.ui.sandbox_funding_ui import install_sandbox_funding_ui
@@ -53,6 +55,7 @@ def _contract_adapter_start(token: str, environment: Environment):
 
 
 app_module._start_adapter = _contract_adapter_start
+install_stop_order_json_fix(TInvestAdapterClient)
 
 install_sandbox_data_routing()
 install_error_reporting(EdwardApp)
