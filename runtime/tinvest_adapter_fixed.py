@@ -7,58 +7,8 @@ import tempfile
 from pathlib import Path
 
 
-def _configure_windows_ca_bundle() -> None:
-    """Prepare Windows trusted roots before importing t_tech/grpc.
-
-    gRPC reads its OpenSSL root configuration during initialization.  The
-    previous implementation configured GRPC_DEFAULT_SSL_ROOTS_FILE_PATH in
-    tinvest_adapter.py only after importing t_tech.invest, which is too late
-    for some grpc builds on Windows.  Build the bundle here first.
-    """
-    if os.name != "nt" or os.environ.get("GRPC_DEFAULT_SSL_ROOTS_FILE_PATH"):
-        return
-
-    certs: list[bytes] = []
-    seen: set[bytes] = set()
-    for store_name in ("ROOT", "CA"):
-        try:
-            entries = ssl.enum_certificates(store_name)
-        except Exception:
-            continue
-        for cert_der, encoding, _trust in entries:
-            if encoding == "x509_asn" and isinstance(cert_der, bytes) and cert_der not in seen:
-                seen.add(cert_der)
-                certs.append(cert_der)
-
-    if not certs:
-        return
-
-    path = Path(tempfile.gettempdir()) / "Edward" / "windows-ca-bundle.pem"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="ascii") as fh:
-        for cert in certs:
-            encoded = base64.b64encode(cert).decode("ascii")
-            fh.write("-----BEGIN CERTIFICATE-----\n")
-            for i in range(0, len(encoded), 64):
-                fh.write(encoded[i:i + 64] + "\n")
-            fh.write("-----END CERTIFICATE-----\n")
-
-    os.environ["GRPC_DEFAULT_SSL_ROOTS_FILE_PATH"] = str(path)
-
-
-_configure_windows_ca_bundle()
-
-# The environment file is deliberately loaded before the base adapter is
-# imported because the adapter reads its configuration at import time.
-from pathlib import Path
-
-
 def _load_local_env() -> None:
-    """Load Edward's local .env before importing the base adapter.
-
-    Environment variables already exported by the shell take precedence.
-    The .env file is local-only and is excluded from Git.
-    """
+    """Load Edward's local .env before importing the base adapter."""
     env_file = Path(__file__).resolve().parents[1] / ".env"
     if not env_file.exists():
         return
@@ -79,14 +29,55 @@ def _load_local_env() -> None:
         return
 
 
+def _configure_windows_ca_bundle() -> None:
+    """Prepare Windows trusted roots before importing t_tech/grpc."""
+    if os.name != "nt" or os.environ.get("GRPC_DEFAULT_SSL_ROOTS_FILE_PATH"):
+        return
+    certs: list[bytes] = []
+    seen: set[bytes] = set()
+    for store_name in ("ROOT", "CA"):
+        try:
+            entries = ssl.enum_certificates(store_name)
+        except Exception:
+            continue
+        for cert_der, encoding, _trust in entries:
+            if encoding == "x509_asn" and isinstance(cert_der, bytes) and cert_der not in seen:
+                seen.add(cert_der)
+                certs.append(cert_der)
+    if not certs:
+        return
+    path = Path(tempfile.gettempdir()) / "Edward" / "windows-ca-bundle.pem"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="ascii") as fh:
+        for cert in certs:
+            encoded = base64.b64encode(cert).decode("ascii")
+            fh.write("-----BEGIN CERTIFICATE-----\n")
+            for i in range(0, len(encoded), 64):
+                fh.write(encoded[i:i + 64] + "\n")
+            fh.write("-----END CERTIFICATE-----\n")
+    os.environ["GRPC_DEFAULT_SSL_ROOTS_FILE_PATH"] = str(path)
+
+
 _load_local_env()
+_configure_windows_ca_bundle()
 
 import tinvest_adapter as _adapter
 from datetime import datetime, timedelta, timezone
 
 
+def _refresh_adapter_config() -> None:
+    """Refresh configuration captured by the base module at import time."""
+    _adapter.TOKEN = os.getenv("EDWARD_TINVEST_TOKEN", "").strip()
+    _adapter.ENVIRONMENT = os.getenv("EDWARD_TINVEST_ENV", "sandbox").lower()
+    _adapter.PORT = int(os.getenv("EDWARD_TINVEST_PORT", "8765"))
+    _adapter.REST_TARGET = (
+        "https://invest-public-api.tbank.ru"
+        if _adapter.ENVIRONMENT == "production"
+        else "https://sandbox-invest-public-api.tbank.ru"
+    )
+
+
 def _sdk_order_type(value):
-    """Map Edward ordinary order types to the T-Invest OrdersService enum."""
     raw = getattr(value, "value", value)
     key = str(raw).upper()
     mapping = {
@@ -99,7 +90,11 @@ def _sdk_order_type(value):
     if bestprice is None:
         bestprice = getattr(_adapter.SDKOrderType, "ORDER_TYPE_BEST_PRICE", None)
     if bestprice is not None:
-        mapping.update({"BESTPRICE": bestprice, "BEST_PRICE": bestprice, "ORDER_TYPE_BESTPRICE": bestprice})
+        mapping.update({
+            "BESTPRICE": bestprice,
+            "BEST_PRICE": bestprice,
+            "ORDER_TYPE_BESTPRICE": bestprice,
+        })
     if key in mapping:
         return mapping[key]
     if isinstance(value, _adapter.SDKOrderType):
@@ -109,8 +104,7 @@ def _sdk_order_type(value):
 
 def _sandbox_positions(self, account_id):
     result = self._rest_request(
-        "SandboxService/GetSandboxPositions",
-        {"accountId": str(account_id)},
+        "SandboxService/GetSandboxPositions", {"accountId": str(account_id)}
     )
     _adapter.logger.info(
         "[SANDBOX POSITIONS REST] account_id=%s securities=%s money=%s",
@@ -147,45 +141,77 @@ def _sandbox_operations(self, account_id, limit=1000):
         "withoutTrades": False,
         "withoutOvernights": False,
     }
-    result = self._rest_request("SandboxService/GetSandboxOperationsByCursor", payload)
-    items = result.get("items", []) or []
-    _adapter.logger.info("[SANDBOX OPERATIONS REST] account_id=%s items=%s", account_id, len(items))
+    result = self._rest_request(
+        "SandboxService/GetSandboxOperationsByCursor", payload
+    )
+    _adapter.logger.info(
+        "[SANDBOX OPERATIONS REST] account_id=%s items=%s",
+        account_id,
+        len(result.get("items", []) or []),
+    )
     return result
 
 
 def _list_instruments(self, kind="SHARE", trade=True):
     key = str(kind).upper()
-    method_map = {"SHARE": "Shares", "BOND": "Bonds", "ETF": "Etfs", "CURRENCY": "Currencies", "FUTURES": "Futures"}
+    method_map = {
+        "SHARE": "Shares",
+        "BOND": "Bonds",
+        "ETF": "Etfs",
+        "CURRENCY": "Currencies",
+        "FUTURES": "Futures",
+    }
     method_name = method_map.get(key)
     if method_name is None:
         raise ValueError(f"Unsupported instrument kind: {kind}")
     request = {
-        "instrumentStatus": "INSTRUMENT_STATUS_BASE" if trade else "INSTRUMENT_STATUS_ALL",
+        "instrumentStatus": "INSTRUMENT_STATUS_BASE"
+        if trade
+        else "INSTRUMENT_STATUS_ALL",
         "instrumentExchange": "INSTRUMENT_EXCHANGE_UNSPECIFIED",
     }
     rest_method = f"InstrumentsService/{method_name}"
     data = self._rest_request(rest_method, request)
-    _adapter.logger.info("[INSTRUMENTS REST] kind=%s method=%s count=%s", key, rest_method, len(data.get("instruments", []) or []))
+    _adapter.logger.info(
+        "[INSTRUMENTS REST] kind=%s method=%s count=%s",
+        key,
+        rest_method,
+        len(data.get("instruments", []) or []),
+    )
     return data
 
 
 def _last_prices(self, ids):
-    return self._rest_request("MarketDataService/GetLastPrices", {"instrumentId": [str(value) for value in ids], "lastPriceType": "LAST_PRICE_UNSPECIFIED"})
+    return self._rest_request(
+        "MarketDataService/GetLastPrices",
+        {"instrumentId": [str(value) for value in ids], "lastPriceType": "LAST_PRICE_UNSPECIFIED"},
+    )
 
 
 def _close_prices(self, ids):
-    instruments = [{"instrumentId": str(value)} for value in ids]
-    return self._rest_request("MarketDataService/GetClosePrices", {"instruments": instruments, "instrumentStatus": "INSTRUMENT_STATUS_BASE"})
+    return self._rest_request(
+        "MarketDataService/GetClosePrices",
+        {
+            "instruments": [{"instrumentId": str(value)} for value in ids],
+            "instrumentStatus": "INSTRUMENT_STATUS_BASE",
+        },
+    )
 
 
 def _trading_status(self, instrument_id):
-    return self._rest_request("MarketDataService/GetTradingStatus", {"instrumentId": str(instrument_id)})
+    return self._rest_request(
+        "MarketDataService/GetTradingStatus", {"instrumentId": str(instrument_id)}
+    )
 
 
 def _trading_statuses(self, ids):
-    return self._rest_request("MarketDataService/GetTradingStatuses", {"instrumentId": [str(value) for value in ids]})
+    return self._rest_request(
+        "MarketDataService/GetTradingStatuses",
+        {"instrumentId": [str(value) for value in ids]},
+    )
 
 
+_refresh_adapter_config()
 _adapter._sdk_order_type = _sdk_order_type
 _adapter.AdapterState.sandbox_positions = _sandbox_positions
 _adapter.AdapterState.sandbox_portfolio = _sandbox_portfolio
