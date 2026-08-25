@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -21,6 +22,8 @@ from edward.services.instrument_decision_context_service import InstrumentDecisi
 from edward.services.market_decision_context_service import MarketDecisionContextService
 from edward.services.opportunity_engine import OpportunityEngine
 from edward.services.portfolio_decision_context_service import PortfolioDecisionContextService
+
+logger = logging.getLogger(__name__)
 
 ProgressCallback = Callable[[str, float, int, int], None]
 
@@ -161,7 +164,9 @@ class OpportunitySearchService:
             self._notify(progress_callback, f"Market Data: candles {ticker}", progress_base + progress_span * 0.08, current, total)
             candles = self._get_candles(uid)
             if len(candles) < 150:
-                return self._unavailable(instrument, price, position_data.quantity, "Недостаточно исторических данных для анализа.")
+                reason = f"Недостаточно исторических данных: получено {len(candles)} свечей, требуется не менее 150."
+                logger.warning("[OPPORTUNITY CANDLES] uid=%s ticker=%s count=%d", uid, ticker, len(candles))
+                return self._unavailable(instrument, price, position_data.quantity, reason)
             self._notify(progress_callback, f"Анализ стратегий: {ticker}", progress_base + progress_span * 0.28, current, total)
             analysis = self.analysis.analyze(instrument_uid=uid, ticker=ticker, candles=candles, profile=profile)
             selected = self._best_strategy(analysis.strategies)
@@ -214,14 +219,46 @@ class OpportunitySearchService:
         return max(passing or strategies, key=lambda item: item.score)
 
     def _get_candles(self, instrument_uid: str) -> list[Candle]:
-        payload = self.client.get_candles(instrument_uid, interval="CANDLE_INTERVAL_DAY", days=2400)
-        items = payload.get("candles", []) if isinstance(payload, dict) else []
+        """Load enough daily candles for WF/strategy analysis from the T-Invest client."""
+        payload: Any = None
+        try:
+            payload = self.client.get_candles(instrument_uid, interval="CANDLE_INTERVAL_DAY", limit=2400)
+        except TypeError:
+            payload = self.client.get_candles(instrument_uid, interval="CANDLE_INTERVAL_DAY", days=2400)
+
+        def extract_items(value: Any) -> list[Any]:
+            if isinstance(value, list):
+                return value
+            if not isinstance(value, dict):
+                return []
+            items = value.get("candles")
+            if items is None:
+                items = value.get("data")
+            if isinstance(items, dict):
+                items = items.get("candles", [])
+            return items if isinstance(items, list) else []
+
+        items = extract_items(payload)
+        if len(items) < 150:
+            logger.info("[OPPORTUNITY CANDLES] uid=%s initial_count=%d; retrying with explicit limit", instrument_uid, len(items))
+            try:
+                retry = self.client.get_candles(instrument_uid, interval="CANDLE_INTERVAL_DAY", limit=2400, days=2400)
+                retry_items = extract_items(retry)
+                if len(retry_items) > len(items):
+                    items = retry_items
+            except TypeError:
+                pass
+
         result: list[Candle] = []
         for item in items:
             timestamp = _field(item, "time", _field(item, "timestamp", None))
             if timestamp is None:
                 continue
-            result.append(Candle(timestamp=_parse_timestamp(timestamp), open=_number(_field(item, "open", 0)), high=_number(_field(item, "high", 0)), low=_number(_field(item, "low", 0)), close=_number(_field(item, "close", 0)), volume=_number(_field(item, "volume", 0))))
+            try:
+                result.append(Candle(timestamp=_parse_timestamp(timestamp), open=_number(_field(item, "open", 0)), high=_number(_field(item, "high", 0)), low=_number(_field(item, "low", 0)), close=_number(_field(item, "close", 0)), volume=_number(_field(item, "volume", 0))))
+            except (TypeError, ValueError):
+                continue
+        logger.info("[OPPORTUNITY CANDLES] uid=%s final_count=%d", instrument_uid, len(result))
         return result
 
     def _active_account(self) -> str | None:
@@ -286,6 +323,10 @@ def _float_or_none(value: Any) -> float | None:
 
 
 def _parse_timestamp(value: Any) -> datetime:
+    if isinstance(value, dict):
+        seconds = int(value.get("seconds", 0))
+        nanos = int(value.get("nanos", value.get("nano", 0)))
+        return datetime.fromtimestamp(seconds + nanos / 1_000_000_000, tz=timezone.utc)
     text = str(value or "")
     if text.endswith("Z"):
         text = text[:-1] + "+00:00"
