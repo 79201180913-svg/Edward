@@ -18,6 +18,8 @@ class ExecutionReadinessInput:
     target_ready: bool
     stop_ready: bool
     liquidity_ok: bool
+    strategy_quality_pass: bool = True
+    risk_reward_ok: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +33,7 @@ class ExecutionReadinessService:
     """Pre-trade gate for future Execution Engine integration."""
 
     _VALID_DECISIONS = {"BUY", "ADD", "HOLD", "REDUCE", "SELL"}
+    _ACTIONABLE_DECISIONS = {"BUY", "ADD", "REDUCE", "SELL"}
 
     @classmethod
     def evaluate(cls, data: ExecutionReadinessInput) -> ExecutionReadinessResult:
@@ -41,22 +44,26 @@ class ExecutionReadinessService:
             reasons.append("INVALID_DECISION")
         if decision in {"BUY", "ADD"} and not data.forecast_quality_pass:
             reasons.append("FORECAST_QUALITY_GATE_FAIL")
+        if decision in cls._ACTIONABLE_DECISIONS and not data.strategy_quality_pass:
+            reasons.append("STRATEGY_QUALITY_GATE_FAIL")
         if not data.risk_ok:
             reasons.append("RISK_NOT_OK")
         if decision in {"BUY", "ADD"} and not data.portfolio_available:
             reasons.append("PORTFOLIO_NOT_AVAILABLE")
         if not data.trading_status_ok:
             reasons.append("TRADING_STATUS_NOT_OK")
-        if decision in {"BUY", "ADD", "REDUCE", "SELL"} and not data.position_size_ready:
+        if decision in cls._ACTIONABLE_DECISIONS and not data.position_size_ready:
             reasons.append("POSITION_SIZE_NOT_READY")
         if decision in {"BUY", "ADD"} and not data.entry_ready:
             reasons.append("ENTRY_NOT_READY")
-        if decision in {"BUY", "ADD", "REDUCE", "SELL"} and not data.target_ready:
+        if decision in cls._ACTIONABLE_DECISIONS and not data.target_ready:
             reasons.append("TARGET_NOT_READY")
-        if decision in {"BUY", "ADD", "REDUCE", "SELL"} and not data.stop_ready:
+        if decision in cls._ACTIONABLE_DECISIONS and not data.stop_ready:
             reasons.append("STOP_NOT_READY")
-        if decision in {"BUY", "ADD", "REDUCE", "SELL"} and not data.liquidity_ok:
+        if decision in cls._ACTIONABLE_DECISIONS and not data.liquidity_ok:
             reasons.append("LIQUIDITY_NOT_OK")
+        if decision in cls._ACTIONABLE_DECISIONS and not data.risk_reward_ok:
+            reasons.append("RISK_REWARD_NOT_ACCEPTABLE")
 
         return ExecutionReadinessResult(
             execution_ready=not reasons,
