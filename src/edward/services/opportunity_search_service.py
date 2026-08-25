@@ -209,6 +209,7 @@ class OpportunitySearchService:
             reason = decision.reason_codes[0] if decision.reason_codes else ""
             return OpportunitySearchResult(uid, ticker, name, market.current_price if market.current_price is not None else price, analysis.market_regime, decision.strategy_name, decision.strategy_score, decision.opportunity_score, decision.decision.value if decision.decision else None, decision.status.value, reason, decision.explanation, position_data.quantity, risk_score)
         except Exception as exc:
+            logger.exception("[OPPORTUNITY ANALYSIS ERROR] uid=%s ticker=%s", uid, ticker)
             return self._unavailable(instrument, price, position_data.quantity, f"Ошибка анализа: {exc}")
 
     @staticmethod
@@ -229,16 +230,22 @@ class OpportunitySearchService:
         def extract_items(value: Any) -> list[Any]:
             if isinstance(value, list):
                 return value
-            if not isinstance(value, dict):
-                return []
-            items = value.get("candles")
+            if isinstance(value, dict):
+                items = value.get("candles")
+                if items is None:
+                    items = value.get("data")
+                if isinstance(items, dict):
+                    items = items.get("candles", [])
+                return items if isinstance(items, list) else []
+            items = getattr(value, "candles", None)
             if items is None:
-                items = value.get("data")
+                items = getattr(value, "data", None)
             if isinstance(items, dict):
                 items = items.get("candles", [])
-            return items if isinstance(items, list) else []
+            return list(items) if items is not None and not isinstance(items, (str, bytes)) else []
 
         items = extract_items(payload)
+        logger.info("[OPPORTUNITY CANDLES] uid=%s response_type=%s initial_count=%d", instrument_uid, type(payload).__name__, len(items))
         if len(items) < 150:
             logger.info("[OPPORTUNITY CANDLES] uid=%s initial_count=%d; retrying with explicit limit", instrument_uid, len(items))
             try:
@@ -256,7 +263,7 @@ class OpportunitySearchService:
                 continue
             try:
                 result.append(Candle(timestamp=_parse_timestamp(timestamp), open=_number(_field(item, "open", 0)), high=_number(_field(item, "high", 0)), low=_number(_field(item, "low", 0)), close=_number(_field(item, "close", 0)), volume=_number(_field(item, "volume", 0))))
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 continue
         logger.info("[OPPORTUNITY CANDLES] uid=%s final_count=%d", instrument_uid, len(result))
         return result
@@ -308,7 +315,11 @@ def _bool_field(value: Any, name: str, default: bool = False) -> bool:
 
 def _number(value: Any) -> float:
     if isinstance(value, dict):
-        return float(value.get("units", 0)) + float(value.get("nano", 0)) / 1_000_000_000
+        return float(value.get("units", 0)) + float(value.get("nano", value.get("nanos", 0))) / 1_000_000_000
+    units = getattr(value, "units", None)
+    nano = getattr(value, "nano", getattr(value, "nanos", None))
+    if units is not None or nano is not None:
+        return float(units or 0) + float(nano or 0) / 1_000_000_000
     try:
         return float(value)
     except Exception:
@@ -324,10 +335,15 @@ def _float_or_none(value: Any) -> float | None:
 
 def _parse_timestamp(value: Any) -> datetime:
     if isinstance(value, dict):
-        seconds = int(value.get("seconds", 0))
-        nanos = int(value.get("nanos", value.get("nano", 0)))
+        seconds = int(value.get("seconds", 0) or 0)
+        nanos = int(value.get("nanos", value.get("nano", 0)) or 0)
         return datetime.fromtimestamp(seconds + nanos / 1_000_000_000, tz=timezone.utc)
+    seconds = getattr(value, "seconds", None)
+    nanos = getattr(value, "nanos", getattr(value, "nano", None))
+    if seconds is not None or nanos is not None:
+        return datetime.fromtimestamp(float(seconds or 0) + float(nanos or 0) / 1_000_000_000, tz=timezone.utc)
     text = str(value or "")
     if text.endswith("Z"):
         text = text[:-1] + "+00:00"
-    return datetime.fromisoformat(text)
+    parsed = datetime.fromisoformat(text)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
