@@ -48,12 +48,8 @@ class ForecastResult:
 class ForecastService:
     """v0.5 statistical forecast engine.
 
-    The first increment intentionally uses a transparent log-return model rather
-    than a black-box ML model. It produces a central estimate, a one-sigma range,
-    directional probabilities, volatility, drawdown estimate and confidence.
-
-    The method is point-in-time safe: only candles supplied to ``forecast`` are
-    used, and the final candle is the forecast origin.
+    The method is point-in-time safe when ``origin_timestamp`` is supplied:
+    candles after the origin are ignored before any calculation.
     """
 
     MODEL = "AdaptiveHistoricalDrift"
@@ -81,14 +77,7 @@ class ForecastService:
         return "Medium"
 
     @classmethod
-    def _point(
-        cls,
-        current_price: float,
-        mu: float,
-        sigma: float,
-        horizon: int,
-        confidence: str,
-    ) -> ForecastPoint:
+    def _point(cls, current_price: float, mu: float, sigma: float, horizon: int, confidence: str) -> ForecastPoint:
         drift = mu * horizon
         diffusion = sigma * sqrt(horizon)
         expected_price = current_price * exp(drift)
@@ -113,6 +102,12 @@ class ForecastService:
             confidence=confidence,
         )
 
+    @staticmethod
+    def _slice_to_origin(candles: Sequence[Candle], origin_timestamp) -> list[Candle]:
+        if origin_timestamp is None:
+            return list(candles)
+        return [item for item in candles if item.timestamp <= origin_timestamp]
+
     @classmethod
     def forecast(
         cls,
@@ -121,8 +116,10 @@ class ForecastService:
         ticker: str,
         candles: Iterable[Candle],
         horizons: Sequence[int] = SUPPORTED_HORIZONS,
+        origin_timestamp=None,
     ) -> ForecastResult:
         ordered = sorted(list(candles), key=lambda item: item.timestamp)
+        ordered = cls._slice_to_origin(ordered, origin_timestamp)
         if len(ordered) < cls.MIN_CANDLES:
             raise ValueError(f"Для прогноза требуется не менее {cls.MIN_CANDLES} свечей")
 
