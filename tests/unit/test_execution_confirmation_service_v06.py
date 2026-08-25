@@ -32,7 +32,7 @@ class FakeValidator:
         return self.passed, (() if self.passed else ("TRADING_STATUS_CHANGED",))
 
 
-def request():
+def request(*, execution_ready: bool = True):
     return ExecutionRequest(
         execution_id="ex-1",
         account_id="acc-1",
@@ -43,7 +43,7 @@ def request():
         quantity=Decimal("10"),
         order_type="LIMIT",
         entry_price=Decimal("100"),
-        execution_ready=True,
+        execution_ready=execution_ready,
     )
 
 
@@ -78,8 +78,8 @@ def test_failed_pretrade_revalidation_blocks_submission():
 
 def test_confirmation_is_not_available_before_ready():
     service = ControlledExecutionService(ExecutionEngine(adapter=FakeAdapter()), FakeValidator())
-    req = request()
-    service.prepare(req)
+    req = request(execution_ready=False)
+    assert service.prepare(req).status is ExecutionStatus.BLOCKED
     with pytest.raises(ValueError, match="confirmation is not available"):
         service.request_confirmation(req)
 
