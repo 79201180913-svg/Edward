@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
-from typing import Any
 
 
 @dataclass
@@ -120,12 +120,23 @@ class TInvestAdapterClient:
             "account_id": str(getattr(request, "account_id")),
             "order_type": getattr(getattr(request, "order_type"), "value", getattr(request, "order_type")),
             "instrument_uid": str(getattr(request, "instrument_uid")),
-            "request_id": str(getattr(request, "request_id")),
-            "price": TInvestAdapterClient._quotation_payload(getattr(request, "price", None)),
+            "request_id": str(getattr(request, "request_id", getattr(request, "execution_id", ""))),
+            "price": TInvestAdapterClient._quotation_payload(getattr(request, "price", getattr(request, "entry_price", None))),
         }
 
     def post_order(self, request: Any) -> dict:
         return self._request("POST", "/orders/create", self._order_payload(request))
+
+    def create_order(self, payload: dict[str, Any]) -> dict:
+        """ExecutionEngine-compatible order creation boundary."""
+        normalized = dict(payload)
+        if "price" in normalized:
+            normalized["price"] = self._quotation_payload(normalized["price"])
+        return self._request("POST", "/orders/create", normalized)
+
+    def order_state(self, account_id: str, order_id: str) -> dict:
+        """ExecutionEngine-compatible order state boundary."""
+        return self.get_order_state(account_id, order_id)
 
     def cancel_order(self, account_id: str, order_id: str) -> dict: return self._request("POST", "/orders/cancel", {"account_id": account_id, "order_id": order_id})
     def replace_order(self, request: Any, order_id: str) -> dict:
