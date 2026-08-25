@@ -59,7 +59,6 @@ def _first_number(value: Any, names: tuple[str, ...]) -> Decimal | None:
 
 
 def calculate_pnl_row(source: Any, quantity: Decimal, current_price: Decimal) -> dict[str, Decimal | None]:
-    """Build average price/P&L values without inventing zeros when API data is absent."""
     average_price = _first_positive(
         source,
         ("average_position_price", "average_price", "avg_price", "average_buy_price"),
@@ -101,6 +100,13 @@ def _find_tree(root: Any) -> ttk.Treeview | None:
     return None
 
 
+def _widget_text(widget: Any) -> str:
+    try:
+        return str(widget.cget("text"))
+    except Exception:
+        return ""
+
+
 def _set_instrument_detail(app: Any, row: dict[str, Any]) -> None:
     detail = {
         "ticker": str(row.get("ticker", "")),
@@ -115,7 +121,6 @@ def _set_instrument_detail(app: Any, row: dict[str, Any]) -> None:
         "api_trade_available": True,
     }
     app.selected_instrument = dict(detail)
-    # instrument_screen.py consumes instrument_detail, not selected_instrument.
     app.instrument_detail = dict(detail)
 
 
@@ -152,16 +157,15 @@ def install_portfolio_pnl_fix(app_class: type[Any]) -> None:
         for item_id in tree.get_children():
             values = list(tree.item(item_id).get("values", []))
             tags = tree.item(item_id).get("tags", ())
-            uid = str(tags[0]) if tags else (str(values[1]) if len(values) > 1 else "")
+            uid = str(tags[0]) if tags else ""
             ticker = str(values[0]) if values else ""
-            quantity = _decimal(values[1] if len(values) > 1 else None)
-            current_price = _decimal(values[3] if len(values) > 3 else None)
-            quantity = quantity if quantity is not None else Decimal("0")
-            current_price = current_price if current_price is not None else Decimal("0")
+            quantity = _decimal(values[1] if len(values) > 1 else None) or Decimal("0")
+            current_price = _decimal(values[3] if len(values) > 3 else None) or Decimal("0")
             source = portfolio_by_uid.get(uid) or by_uid.get(uid) or portfolio_by_ticker.get(ticker) or by_ticker.get(ticker) or {}
             currency = str(_field(source, "currency", "RUB") or "RUB").upper()
             kind = str(_field(source, "instrument_kind", _field(source, "instrument_type", "SHARE")) or "SHARE")
             name = str(_field(source, "name", ticker) or ticker)
+
             if current_price <= 0 and uid:
                 try:
                     price_items = _items(self.client.get_last_prices([uid]), "last_prices")
@@ -187,8 +191,6 @@ def install_portfolio_pnl_fix(app_class: type[Any]) -> None:
                 "sell_available": True,
             }
             rows.append(row)
-            pnl_text = _money(calc["pnl"], currency) if calc["pnl"] is not None else "—"
-            pnl_pct_text = f"{calc['pnl_percent']:+.2f}%" if calc["pnl_percent"] is not None else "—"
             tree.item(
                 item_id,
                 values=(
@@ -197,8 +199,8 @@ def install_portfolio_pnl_fix(app_class: type[Any]) -> None:
                     _money(calc["average_price"], currency),
                     _money(current_price, currency),
                     _money(calc["value"], currency),
-                    pnl_text,
-                    pnl_pct_text,
+                    _money(calc["pnl"], currency),
+                    f"{calc['pnl_percent']:+.2f}%" if calc["pnl_percent"] is not None else "—",
                 ),
                 tags=(uid,),
             )
@@ -210,12 +212,13 @@ def install_portfolio_pnl_fix(app_class: type[Any]) -> None:
         cost_total = sum((row["average_price"] * row["quantity"] for row in cost_known), Decimal("0"))
         pnl_pct_total = pnl_total / cost_total * Decimal("100") if cost_total > 0 and pnl_known else None
 
-        # Remove the old summary cards from the previous overlay, if present.
+        # Remove the old summary cards by their actual Tk text option.
         for child in list(self.content.winfo_children()):
-            if isinstance(child, ttk.Frame):
-                labels = [str(_field(grandchild, "text", "")) for grandchild in child.winfo_children() if isinstance(grandchild, ttk.Label)]
-                if any(label in {"Позиций", "Стоимость позиций", "P&L", "P&L %"} for label in labels):
-                    child.destroy()
+            if not isinstance(child, ttk.Frame):
+                continue
+            labels = [_widget_text(grandchild) for grandchild in child.winfo_children() if isinstance(grandchild, ttk.Label)]
+            if any(label in {"Позиций", "Стоимость позиций", "P&L", "P&L %"} for label in labels):
+                child.destroy()
 
         summary = ttk.Frame(self.content)
         summary.pack(fill="x", before=tree.master, pady=(0, 12))
@@ -235,11 +238,12 @@ def install_portfolio_pnl_fix(app_class: type[Any]) -> None:
 
         actions = None
         for child in self.content.winfo_children():
-            if isinstance(child, ttk.Frame):
-                button_texts = [str(_field(grandchild, "text", "")) for grandchild in child.winfo_children() if isinstance(grandchild, ttk.Button)]
-                if "Открыть инструмент" in button_texts or "Продать" in button_texts:
-                    actions = child
-                    break
+            if not isinstance(child, ttk.Frame):
+                continue
+            button_texts = [_widget_text(grandchild) for grandchild in child.winfo_children() if isinstance(grandchild, ttk.Button)]
+            if "Открыть инструмент" in button_texts or "Продать" in button_texts:
+                actions = child
+                break
         if actions is None:
             actions = ttk.Frame(self.content)
             actions.pack(fill="x", pady=(10, 0))
@@ -264,14 +268,16 @@ def install_portfolio_pnl_fix(app_class: type[Any]) -> None:
             if row is None or not row["uid"]:
                 return
             _set_instrument_detail(self, row)
-            self.order_side_v03.set("SELL")
-            self.order_quantity_v03.set(str(int(row["quantity"])))
+            if hasattr(self, "order_side_v03"):
+                self.order_side_v03.set("SELL")
+            if hasattr(self, "order_quantity_v03"):
+                self.order_quantity_v03.set(str(int(row["quantity"])))
             self.show_page("instrument")
 
         for button in actions.winfo_children():
             if not isinstance(button, ttk.Button):
                 continue
-            text = str(button.cget("text"))
+            text = _widget_text(button)
             if text == "Открыть инструмент":
                 button.configure(command=open_instrument)
             elif text == "Продать":
