@@ -6,6 +6,7 @@ from typing import Any
 
 from edward.config.application_settings import ApplicationSettingsStore
 from edward.security.token_store import TokenStore
+from edward.storage.sqlite_store import SQLiteStore
 from edward.ui.token_dialog import request_and_save_token
 
 
@@ -69,6 +70,7 @@ def install_settings_page(app_class: type[Any]) -> None:
         storage_frame.pack(fill="x")
         store = ApplicationSettingsStore()
         settings = store.load()
+        SQLiteStore(settings.storage_path)
         storage_var = StringVar(value=settings.storage_path)
         ttk.Entry(storage_frame, textvariable=storage_var).pack(side="left", fill="x", expand=True)
 
@@ -84,12 +86,14 @@ def install_settings_page(app_class: type[Any]) -> None:
 
         def save_storage() -> None:
             try:
-                store.save(type(settings)(storage_path=storage_var.get()))
-                storage_var.set(str(Path(storage_var.get()).expanduser().resolve()))
+                selected_path = str(Path(storage_var.get()).expanduser().resolve())
+                store.save(type(settings)(storage_path=selected_path))
+                SQLiteStore(selected_path)
+                storage_var.set(selected_path)
                 self.status_var.set("Путь локального хранилища сохранён")
                 messagebox.showinfo(
                     "Настройки",
-                    f"Путь локального хранилища сохранён:\n{storage_var.get()}",
+                    f"Путь локального хранилища сохранён:\n{selected_path}\n\nedward.db готова в выбранной папке.",
                     parent=self,
                 )
             except Exception as exc:
@@ -100,7 +104,7 @@ def install_settings_page(app_class: type[Any]) -> None:
 
         ttk.Label(
             self.content,
-            text="Настройки приложения являются глобальными. Параметры конкретного анализа акции будут задаваться отдельно в сервисе анализа.",
+            text="Настройки приложения являются глобальными. Результаты Walk-Forward и анализа акций будут храниться в edward.db выбранной папки.",
             style="Subtitle.TLabel",
             wraplength=900,
         ).pack(anchor="w", pady=(14, 0))
