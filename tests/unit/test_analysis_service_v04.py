@@ -43,6 +43,68 @@ def test_analysis_returns_all_strategies_and_version():
     assert 0 <= result.score <= 100
 
 
+def test_walk_forward_uses_component_stability():
+    result = AnalysisService().analyze(
+        instrument_uid="uid-stability",
+        ticker="TEST-STABILITY",
+        candles=_candles(),
+        profile="medium_term",
+    )
+
+    for strategy in result.strategies:
+        assert strategy.wf_windows >= 5
+        assert 0 <= strategy.positive_return_windows <= strategy.wf_windows
+        assert 0 <= strategy.risk_ok_windows <= strategy.wf_windows
+        assert 0 <= strategy.positive_sharpe_windows <= strategy.wf_windows
+        assert 0 <= strategy.return_consistency <= 100
+        assert 0 <= strategy.risk_consistency <= 100
+        assert 0 <= strategy.sharpe_consistency <= 100
+        expected_stability = round(
+            strategy.return_consistency * 0.50
+            + strategy.risk_consistency * 0.30
+            + strategy.sharpe_consistency * 0.20,
+            2,
+        )
+        assert strategy.stability == expected_stability
+
+
+def test_score_is_normalized_and_uses_new_weights():
+    service = AnalysisService()
+
+    score = service._score(
+        return_pct=15.0,
+        drawdown_pct=0.0,
+        sharpe=2.0,
+        trades=10,
+        stability_pct=100.0,
+        return_target_pct=15.0,
+        drawdown_limit_pct=25.0,
+    )
+
+    assert score == 100.0
+
+    lower_score = service._score(
+        return_pct=7.5,
+        drawdown_pct=12.5,
+        sharpe=1.0,
+        trades=10,
+        stability_pct=50.0,
+        return_target_pct=15.0,
+        drawdown_limit_pct=25.0,
+    )
+    assert 0 < lower_score < 100
+
+
+def test_quality_gate_depends_on_profile_thresholds():
+    service = AnalysisService()
+    assert service._profile_params("long_term")["max_drawdown_pct"] == 30.0
+    assert service._profile_params("medium_term")["max_drawdown_pct"] == 25.0
+    assert service._profile_params("speculative")["max_drawdown_pct"] == 35.0
+    assert service._profile_params("long_term")["min_stability_pct"] == 60.0
+    assert service._profile_params("medium_term")["min_stability_pct"] == 60.0
+    assert service._profile_params("speculative")["min_stability_pct"] == 55.0
+
+
 def test_analysis_is_saved_to_sqlite(tmp_path):
     store = SQLiteStore(tmp_path)
     service = AnalysisService(store)
