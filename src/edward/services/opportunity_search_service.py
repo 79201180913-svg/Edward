@@ -45,6 +45,7 @@ class OpportunitySearchResult:
     reason: str
     explanation: str
     quantity: float
+    risk_score: float = 0.0
 
 
 class OpportunitySearchService:
@@ -84,15 +85,10 @@ class OpportunitySearchService:
         positions = self.client.get_positions(account_id) if account_id else None
         portfolio = self.client.get_portfolio(account_id) if account_id else None
 
-        instruments = self._build_universe(
-            scope=scope,
-            instrument_kind=instrument_kind,
-            positions=positions,
-        )
+        instruments = self._build_universe(scope=scope, instrument_kind=instrument_kind, positions=positions)
         total = len(instruments)
         scope_title = "торговых инструментов" if scope == MARKET_SCOPE else "позиций портфеля"
         self._notify(progress_callback, f"Вселенная анализа: {total} {scope_title}", 8.0, 0, total)
-
         self._notify(progress_callback, "Portfolio Context загружается", 11.0, 0, total)
         self._notify(progress_callback, "Portfolio Context загружен", 14.0, 0, total)
 
@@ -106,7 +102,6 @@ class OpportunitySearchService:
             progress_base = 15.0 + ((valid_index - 1) / max(1, total)) * 80.0
             progress_span = 80.0 / max(1, total)
             ticker = str(_field(instrument, "ticker", ""))
-
             self._notify(progress_callback, f"Market Data: {ticker}", progress_base, valid_index, total)
             result = self._evaluate_instrument(
                 instrument=instrument,
@@ -205,13 +200,22 @@ class OpportunitySearchService:
         raw_price = _field(instrument, "last_price", None)
         price = _float_or_none(raw_price)
         position_context = (
-            self.portfolio_context.build(
-                positions=positions,
-                portfolio=portfolio,
-                instrument_uid=uid,
-            )
+            self.portfolio_context.build(positions=positions, portfolio=portfolio, instrument_uid=uid)
             if positions is not None
             else _empty_portfolio()
+        )
+        position_data = position_context.position
+        raw_portfolio = position_context.portfolio
+        portfolio_data = PortfolioContextData(
+            portfolio_value=raw_portfolio.portfolio_value,
+            available_cash=raw_portfolio.available_cash,
+            blocked_cash=raw_portfolio.blocked_cash,
+            current_weight_pct=raw_portfolio.current_weight_pct,
+            target_weight_pct=raw_portfolio.target_weight_pct,
+            max_position_weight_pct=raw_portfolio.max_position_weight_pct,
+            allows_buy=raw_portfolio.allows_buy and not position_data.is_open,
+            allows_add=raw_portfolio.allows_add and position_data.is_open,
+            available=raw_portfolio.available if account_id_or_none(positions, portfolio) else True,
         )
 
         try:
@@ -220,15 +224,10 @@ class OpportunitySearchService:
             self._notify(progress_callback, f"Market Data: candles {ticker}", progress_base + progress_span * 0.08, current, total)
             candles = self._get_candles(uid)
             if len(candles) < 150:
-                return self._unavailable(instrument, price, position_context.position.quantity, "Недостаточно исторических данных для анализа.")
+                return self._unavailable(instrument, price, position_data.quantity, "Недостаточно исторических данных для анализа.")
 
             self._notify(progress_callback, f"Анализ стратегий: {ticker}", progress_base + progress_span * 0.28, current, total)
-            analysis = self.analysis.analyze(
-                instrument_uid=uid,
-                ticker=ticker,
-                candles=candles,
-                profile=profile,
-            )
+            analysis = self.analysis.analyze(instrument_uid=uid, ticker=ticker, candles=candles, profile=profile)
             selected = self._best_strategy(analysis.strategies)
             market = self.market_context.build(last_price=raw_price, candles=candles, market_regime=analysis.market_regime)
 
@@ -237,15 +236,30 @@ class OpportunitySearchService:
                 opportunity_context = OpportunityContext(
                     opportunity_score=0.0,
                     entry_ok=False,
-                    risk_ok=True,
+                    risk_ok=False,
                     strategy_ok=False,
                     market_regime_compatible=False,
-                    critical_risk=False,
+                    critical_risk=True,
                 )
                 strategy_context = StrategyContextData(strategy_name=None, strategy_score=0.0, quality_gate=False, available=True)
+                risk_score = 0.0
             else:
-                opportunity = OpportunityEngine.evaluate(analysis, candles, selected if selected.quality_gate else None)
+                estimated_trade_value = None
+                if not position_data.is_open and portfolio_data.available_cash is not None and price is not None:
+                    estimated_trade_value = min(max(0.0, portfolio_data.available_cash), max(0.0, portfolio_data.available_cash * 0.10))
+                opportunity = OpportunityEngine.evaluate(
+                    analysis,
+                    candles,
+                    selected if selected.quality_gate else None,
+                    position_weight_pct=position_data.portfolio_weight_pct or portfolio_data.current_weight_pct,
+                    target_weight_pct=position_data.target_weight_pct or portfolio_data.target_weight_pct,
+                    max_position_weight_pct=portfolio_data.max_position_weight_pct,
+                    portfolio_available=portfolio_data.available,
+                    available_cash=portfolio_data.available_cash,
+                    estimated_trade_value=estimated_trade_value,
+                )
                 opportunity_context = opportunity.context
+                risk_score = opportunity.risk.score if opportunity.risk is not None else 0.0
                 strategy_context = StrategyContextData(
                     strategy_name=selected.strategy,
                     strategy_score=selected.score,
@@ -261,21 +275,9 @@ class OpportunitySearchService:
             risk_context = RiskContextData(
                 risk_gate=opportunity_context.risk_ok,
                 critical_risk=opportunity_context.critical_risk,
+                risk_score=risk_score,
                 max_drawdown_pct=selected.max_drawdown_pct if selected else None,
                 available=True,
-            )
-            portfolio_data = position_context.portfolio
-            position_data = position_context.position
-            portfolio_data = PortfolioContextData(
-                portfolio_value=portfolio_data.portfolio_value,
-                available_cash=portfolio_data.available_cash,
-                blocked_cash=portfolio_data.blocked_cash,
-                current_weight_pct=portfolio_data.current_weight_pct,
-                target_weight_pct=portfolio_data.target_weight_pct,
-                max_position_weight_pct=portfolio_data.max_position_weight_pct,
-                allows_buy=portfolio_data.allows_buy and not position_data.is_open,
-                allows_add=portfolio_data.allows_add and position_data.is_open,
-                available=portfolio_data.available if account_id_or_none(positions, portfolio) else True,
             )
 
             self._notify(progress_callback, f"Decision Engine: {ticker}", progress_base + progress_span * 0.82, current, total)
@@ -314,9 +316,10 @@ class OpportunitySearchService:
                 reason=reason,
                 explanation=decision.explanation,
                 quantity=position_data.quantity,
+                risk_score=risk_score,
             )
         except Exception as exc:
-            return self._unavailable(instrument, price, position_context.position.quantity, f"Ошибка анализа: {exc}")
+            return self._unavailable(instrument, price, position_data.quantity, f"Ошибка анализа: {exc}")
 
     @staticmethod
     def _best_strategy(strategies: list[StrategyResult]) -> StrategyResult | None:
@@ -333,16 +336,7 @@ class OpportunitySearchService:
             timestamp = _field(item, "time", _field(item, "timestamp", None))
             if timestamp is None:
                 continue
-            result.append(
-                Candle(
-                    timestamp=_parse_timestamp(timestamp),
-                    open=_number(_field(item, "open", 0)),
-                    high=_number(_field(item, "high", 0)),
-                    low=_number(_field(item, "low", 0)),
-                    close=_number(_field(item, "close", 0)),
-                    volume=_number(_field(item, "volume", 0)),
-                )
-            )
+            result.append(Candle(timestamp=_parse_timestamp(timestamp), open=_number(_field(item, "open", 0)), high=_number(_field(item, "high", 0)), low=_number(_field(item, "low", 0)), close=_number(_field(item, "close", 0)), volume=_number(_field(item, "volume", 0))))
         return result
 
     def _active_account(self) -> str | None:
@@ -370,6 +364,7 @@ class OpportunitySearchService:
             reason="ANALYSIS_UNAVAILABLE",
             explanation=reason,
             quantity=quantity,
+            risk_score=0.0,
         )
 
 
