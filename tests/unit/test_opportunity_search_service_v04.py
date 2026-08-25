@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from edward.services.analysis_service import AnalysisResult, Candle, StrategyResult
-from edward.services.opportunity_search_service import OpportunitySearchResult, OpportunitySearchService
+from edward.services.opportunity_search_service import OpportunitySearchResult, OpportunitySearchService, MARKET_SCOPE, PORTFOLIO_SCOPE
 
 
 def _strategy(name: str, score: float, quality: bool) -> StrategyResult:
@@ -72,9 +72,46 @@ def test_scan_ranks_buy_before_wait_before_pass(monkeypatch):
     values = iter(ordered)
     service._evaluate_instrument = lambda **_kwargs: next(values)
 
-    results = service.scan(profile="medium_term", instrument_kind="SHARE")
+    results = service.scan(profile="medium_term", instrument_kind="SHARE", scope=MARKET_SCOPE)
     assert [item.ticker for item in results] == ["B", "A", "C"]
     assert [item.decision for item in results] == ["BUY", "WAIT", "PASS"]
+
+
+def test_market_universe_contains_only_buyable_tradeable_instruments():
+    service = OpportunitySearchService.__new__(OpportunitySearchService)
+
+    class FakeCatalog:
+        def list(self, *_args, **_kwargs):
+            return [
+                {"uid": "buy", "ticker": "BUY", "buy_available": True, "trading_available": True},
+                {"uid": "sell", "ticker": "SELL", "buy_available": False, "sell_available": True, "trading_available": True},
+                {"uid": "closed", "ticker": "CLOSED", "buy_available": True, "trading_available": False},
+            ]
+
+    service.catalog = FakeCatalog()
+    result = service._market_universe("SHARE")
+    assert [item["ticker"] for item in result] == ["BUY"]
+
+
+def test_portfolio_universe_contains_only_held_positions():
+    service = OpportunitySearchService.__new__(OpportunitySearchService)
+
+    class FakeCatalog:
+        def list(self, *_args, **_kwargs):
+            return [
+                {"uid": "held", "ticker": "HELD", "name": "Held"},
+                {"uid": "other", "ticker": "OTHER", "name": "Other"},
+            ]
+
+    service.catalog = FakeCatalog()
+    positions = {
+        "securities": [
+            {"instrument_uid": "held", "ticker": "HELD", "balance": 10},
+            {"instrument_uid": "zero", "ticker": "ZERO", "balance": 0},
+        ]
+    }
+    result = service._portfolio_universe("SHARE", positions)
+    assert [item["ticker"] for item in result] == ["HELD"]
 
 
 def test_scan_reports_staged_progress():
@@ -94,14 +131,14 @@ def test_scan_reports_staged_progress():
     results = service.scan(
         profile="medium_term",
         instrument_kind="SHARE",
+        scope=MARKET_SCOPE,
         progress_callback=lambda stage, percent, current, total: events.append((stage, percent, current, total)),
     )
 
     stages = [stage for stage, *_ in events]
     assert results[0].ticker == "A"
     assert "Загрузка списка инструментов" in stages
-    assert any(stage.startswith("Инструменты загружены:") for stage in stages)
-    assert "Загрузка Portfolio Context" in stages
+    assert any(stage.startswith("Вселенная анализа:") for stage in stages)
     assert "Portfolio Context загружен" in stages
     assert any(stage.startswith("Market Data:") for stage in stages)
     assert "Ранжирование возможностей" in stages
