@@ -89,12 +89,21 @@ def _install_analysis_context_pipeline() -> None:
     original_opportunity = OpportunityEngine.evaluate
 
     def evaluate_with_fallback(
-        cls: type[Any], analysis: Any, candles: list[Any], strategy_result: Any | None
+        cls: type[Any],
+        analysis: Any,
+        candles: list[Any],
+        strategy_result: Any | None,
+        **kwargs: Any,
     ):
         selected = strategy_result
         if selected is None and getattr(analysis, "strategies", None):
             selected = max(analysis.strategies, key=lambda item: item.score)
-        return original_opportunity(analysis, candles, selected)
+        return original_opportunity(
+            analysis,
+            candles,
+            selected,
+            **kwargs,
+        )
 
     OpportunityEngine.evaluate = classmethod(evaluate_with_fallback)
 
