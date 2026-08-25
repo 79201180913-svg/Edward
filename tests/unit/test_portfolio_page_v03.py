@@ -58,3 +58,19 @@ def test_build_cost_basis_exposes_aliases_for_position_matching():
     assert result["UID-1"]["average_price"] == Decimal("100")
     assert result["FIGI-1"]["average_price"] == Decimal("100")
     assert result["AAA"]["average_price"] == Decimal("100")
+
+
+def test_build_cost_basis_reads_quantity_and_payment_from_trades():
+    result = build_cost_basis([
+        {
+            "operation_type": "OPERATION_TYPE_BUY",
+            "instrument_uid": "UID-1",
+            "trades": [
+                {"quantity": "4", "price": {"units": "120", "nano": 0}},
+                {"quantity": "6", "price": {"units": "130", "nano": 0}},
+            ],
+        },
+    ])
+    assert result["UID-1"]["quantity"] == Decimal("10")
+    assert result["UID-1"]["cost"] == Decimal("1260")
+    assert result["UID-1"]["average_price"] == Decimal("126")
