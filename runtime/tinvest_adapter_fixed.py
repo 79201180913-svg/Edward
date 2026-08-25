@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 def _load_local_env() -> None:
-    """Load Edward's local .env before importing the base adapter."""
+    """Load Edward's local .env before importing the T-Invest SDK."""
     env_file = Path(__file__).resolve().parents[1] / ".env"
     if not env_file.exists():
         return
@@ -29,12 +29,29 @@ def _load_local_env() -> None:
         return
 
 
-def _configure_windows_ca_bundle() -> None:
-    """Prepare Windows trusted roots before importing t_tech/grpc."""
-    if os.name != "nt" or os.environ.get("GRPC_DEFAULT_SSL_ROOTS_FILE_PATH"):
-        return
+def _windows_ca_bundle() -> bytes | None:
+    """Return Windows trusted roots as PEM bytes.
+
+    gRPC Python uses its bundled OpenSSL roots instead of the Windows trust
+    store. Corporate/security software can therefore make a certificate that
+    Windows trusts appear untrusted to gRPC. Build an explicit PEM bundle from
+    the Windows ROOT/CA stores and also include Python's normal CA set.
+    """
+    if os.name != "nt":
+        return None
+
     certs: list[bytes] = []
     seen: set[bytes] = set()
+
+    try:
+        context = ssl.create_default_context()
+        for cert_der in context.get_ca_certs(binary_form=True):
+            if cert_der not in seen:
+                seen.add(cert_der)
+                certs.append(cert_der)
+    except Exception:
+        pass
+
     for store_name in ("ROOT", "CA"):
         try:
             entries = ssl.enum_certificates(store_name)
@@ -44,22 +61,63 @@ def _configure_windows_ca_bundle() -> None:
             if encoding == "x509_asn" and isinstance(cert_der, bytes) and cert_der not in seen:
                 seen.add(cert_der)
                 certs.append(cert_der)
+
     if not certs:
+        return None
+
+    output: list[str] = []
+    for cert in certs:
+        encoded = base64.b64encode(cert).decode("ascii")
+        output.append("-----BEGIN CERTIFICATE-----")
+        output.extend(encoded[i:i + 64] for i in range(0, len(encoded), 64))
+        output.append("-----END CERTIFICATE-----")
+    return ("\n".join(output) + "\n").encode("ascii")
+
+
+def _configure_grpc_tls() -> None:
+    """Make gRPC explicitly use Windows trusted roots before SDK import.
+
+    Setting GRPC_DEFAULT_SSL_ROOTS_FILE_PATH alone is insufficient for some
+    Python gRPC builds because the Python package installs its own SSL-roots
+    override callback. We therefore provide the roots directly to
+    grpc.ssl_channel_credentials() while retaining the normal API surface.
+    """
+    roots = _windows_ca_bundle()
+    if not roots:
         return
+
     path = Path(tempfile.gettempdir()) / "Edward" / "windows-ca-bundle.pem"
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="ascii") as fh:
-        for cert in certs:
-            encoded = base64.b64encode(cert).decode("ascii")
-            fh.write("-----BEGIN CERTIFICATE-----\n")
-            for i in range(0, len(encoded), 64):
-                fh.write(encoded[i:i + 64] + "\n")
-            fh.write("-----END CERTIFICATE-----\n")
+    path.write_bytes(roots)
     os.environ["GRPC_DEFAULT_SSL_ROOTS_FILE_PATH"] = str(path)
+
+    try:
+        import grpc
+
+        original = grpc.ssl_channel_credentials
+        if getattr(original, "__edward_windows_roots__", False):
+            return
+
+        def ssl_channel_credentials_with_windows_roots(
+            root_certificates=None,
+            private_key=None,
+            certificate_chain=None,
+        ):
+            effective_roots = roots if root_certificates is None else root_certificates
+            return original(
+                root_certificates=effective_roots,
+                private_key=private_key,
+                certificate_chain=certificate_chain,
+            )
+
+        ssl_channel_credentials_with_windows_roots.__edward_windows_roots__ = True
+        grpc.ssl_channel_credentials = ssl_channel_credentials_with_windows_roots
+    except Exception:
+        return
 
 
 _load_local_env()
-_configure_windows_ca_bundle()
+_configure_grpc_tls()
 
 import tinvest_adapter as _adapter
 from datetime import datetime, timedelta, timezone
