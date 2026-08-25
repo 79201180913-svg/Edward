@@ -61,7 +61,17 @@ class LiveOpportunitySearchService(OpportunitySearchService):
         )
         if gate.execution_ready == result.execution_ready:
             return result
-        return replace(result, execution_ready=gate.execution_ready)
+        try:
+            return replace(result, execution_ready=gate.execution_ready)
+        except TypeError:
+            # Unit tests and lightweight callers may provide SimpleNamespace-like
+            # result objects instead of the production dataclass. Keep the helper
+            # compatible with both shapes.
+            try:
+                result.execution_ready = gate.execution_ready
+            except Exception:
+                return result
+            return result
 
     def scan(
         self,
