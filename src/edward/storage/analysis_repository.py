@@ -11,6 +11,7 @@ class AnalysisSnapshotRepository:
         self.store = store
 
     def save(self, result: Any, walk_forward_run_id: int | None = None) -> int:
+        confidence = {"High": 1.0, "Medium": 0.7, "Low": 0.4}.get(result.confidence, 0.0)
         with self.store._connect() as connection:
             cursor = connection.execute(
                 """
@@ -31,7 +32,7 @@ class AnalysisSnapshotRepository:
                     result.recommendation,
                     walk_forward_run_id,
                     "RECOMMENDATION" if result.recommendation else "NO_RECOMMENDATION",
-                    result.score if result.recommendation else 0.0,
+                    confidence,
                     None,
                     None,
                     None,
