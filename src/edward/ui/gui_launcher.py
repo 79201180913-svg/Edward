@@ -35,13 +35,14 @@ from edward.ui.portfolio_cost_basis_v03_fix import install as install_portfolio_
 from edward.ui.portfolio_page_v03 import install_portfolio_page
 from edward.ui.portfolio_instrument_names_v03_fix import install as install_portfolio_instrument_names_fix
 from edward.ui.orders_page_v03 import install as install_orders_page_v03
+from edward.ui.orders_page_v03_ticker_fix import install as install_orders_ticker_fix
 from edward.config.settings import Environment
 
 
 def _contract_adapter_start(token: str, environment: Environment):
     root = Path(__file__).resolve().parents[3]
     python_exe = root / ".venv-tinvest" / "Scripts" / "python.exe"
-    adapter_script = root / "runtime" / "tinvest_adapter_operations_fixed.py"
+    adapter_script = root / "runtime" / "tinvest_adapter_orders_fixed.py"
     if not python_exe.exists():
         raise RuntimeError(f"T-Invest Python runtime not found: {python_exe}")
     if not adapter_script.exists():
@@ -90,6 +91,7 @@ install_portfolio_cost_basis_fix()
 install_portfolio_page(EdwardApp)
 install_portfolio_instrument_names_fix(EdwardApp)
 install_orders_page_v03(EdwardApp)
+install_orders_ticker_fix(TInvestAdapterClient)
 
 
 if __name__ == "__main__":
