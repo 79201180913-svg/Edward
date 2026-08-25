@@ -38,6 +38,7 @@ from edward.ui.portfolio_instrument_names_v03_fix import install as install_port
 from edward.ui.orders_page_v03 import install as install_orders_page_v03
 from edward.ui.orders_page_v03_ticker_fix import install as install_orders_ticker_fix
 from edward.ui.settings_page_v04 import install_settings_page
+from edward.ui.analysis_ui_v04 import install_analysis_ui
 from edward.config.settings import Environment
 
 
@@ -55,18 +56,11 @@ def _contract_adapter_start(token: str, environment: Environment):
     env["EDWARD_TINVEST_PORT"] = "8765"
     print(f"[ADAPTER] Starting contract wrapper: {adapter_script}", flush=True)
     print(f"[ADAPTER] Environment: {environment.value.upper()}", flush=True)
-    return subprocess.Popen(
-        [str(python_exe), str(adapter_script)],
-        env=env,
-        stdin=subprocess.DEVNULL,
-        stdout=None,
-        stderr=None,
-    )
+    return subprocess.Popen([str(python_exe), str(adapter_script)], env=env, stdin=subprocess.DEVNULL, stdout=None, stderr=None)
 
 
 app_module._start_adapter = _contract_adapter_start
 install_stop_order_json_fix(TInvestAdapterClient)
-
 install_sandbox_data_routing()
 install_error_reporting(EdwardApp)
 install_trading_ui_guard(EdwardApp)
@@ -96,6 +90,7 @@ install_portfolio_instrument_names_fix(EdwardApp)
 install_orders_page_v03(EdwardApp)
 install_orders_ticker_fix(TInvestAdapterClient)
 install_settings_page(EdwardApp)
+install_analysis_ui(EdwardApp, TInvestAdapterClient)
 
 
 if __name__ == "__main__":
