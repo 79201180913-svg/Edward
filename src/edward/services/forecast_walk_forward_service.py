@@ -101,8 +101,6 @@ class ForecastWalkForwardService:
     def _select_model_for_training(cls, train: Sequence[Candle], horizon: int, models: Sequence[str]) -> str:
         """Select a model using only the current WF training prefix."""
         if len(train) < cls.INNER_MIN_TRAIN_SIZE + cls.INNER_HOLDOUT_SIZE:
-            # Earliest WF window has exactly 60 observations. There is not enough
-            # history for a nested holdout, so use a deterministic in-sample score.
             candidates: list[tuple[str, float]] = []
             for model in models:
                 predicted = ForecastModelSelectionService._forecast_price(train, model, horizon)
@@ -153,8 +151,8 @@ class ForecastWalkForwardService:
             raise ValueError("Недостаточно истории для Forecast Walk Forward")
         if horizon <= 0:
             raise ValueError("Горизонт прогноза должен быть положительным")
-        if horizon > cls.TEST_SIZE:
-            raise ValueError("Горизонт прогноза не должен превышать размер validation окна")
+        if horizon >= cls.TEST_SIZE:
+            raise ValueError("Горизонт прогноза должен быть меньше размера validation окна")
 
         windows = cls._windows(ordered)
         selected_windows: list[ForecastWindowMetrics] = []
