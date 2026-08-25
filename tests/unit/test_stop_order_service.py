@@ -48,6 +48,7 @@ def test_stop_loss_request_builds_market_child_order():
     assert payload["expiration_type"] == "STOP_ORDER_EXPIRATION_TYPE_GOOD_TILL_CANCEL"
     assert payload["direction"] == "STOP_ORDER_DIRECTION_SELL"
     assert payload["stop_price"] == Decimal("290")
+    assert payload["price"] is None
 
 
 def test_take_profit_request_uses_regular_take_profit_type():
@@ -67,6 +68,41 @@ def test_take_profit_request_uses_regular_take_profit_type():
     payload = gateway.created[0]
     assert payload["stop_order_type"] == "STOP_ORDER_TYPE_TAKE_PROFIT"
     assert payload["take_profit_type"] == "TAKE_PROFIT_TYPE_REGULAR"
+    assert payload["exchange_order_type"] == "EXCHANGE_ORDER_TYPE_MARKET"
+
+
+def test_stop_limit_request_builds_limit_child_order():
+    gateway = FakeGateway()
+    service = StopOrderService(gateway)
+    service.create_protection(
+        StopOrderRequest(
+            account_id="acc",
+            instrument_uid="uid",
+            side=StopOrderSide.SELL,
+            kind=StopOrderKind.STOP_LIMIT,
+            quantity=10,
+            stop_price=Decimal("290"),
+            price=Decimal("289"),
+        )
+    )
+
+    payload = gateway.created[0]
+    assert payload["stop_order_type"] == "STOP_ORDER_TYPE_STOP_LIMIT"
+    assert payload["exchange_order_type"] == "EXCHANGE_ORDER_TYPE_LIMIT"
+    assert payload["stop_price"] == Decimal("290")
+    assert payload["price"] == Decimal("289")
+
+
+def test_stop_limit_requires_limit_price():
+    with pytest.raises(ValueError, match="Цена лимитной заявки обязательна"):
+        StopOrderRequest(
+            "acc",
+            "uid",
+            StopOrderSide.SELL,
+            StopOrderKind.STOP_LIMIT,
+            1,
+            Decimal("290"),
+        )
 
 
 def test_stop_order_request_rejects_non_positive_quantity():
