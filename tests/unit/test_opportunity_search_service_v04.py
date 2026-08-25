@@ -36,6 +36,17 @@ def _analysis(strategies: list[StrategyResult]) -> AnalysisResult:
     )
 
 
+def _buyable_instrument(uid: str, ticker: str, price: str) -> dict[str, object]:
+    return {
+        "uid": uid,
+        "ticker": ticker,
+        "name": ticker,
+        "last_price": price,
+        "buy_available": True,
+        "trading_available": True,
+    }
+
+
 def test_best_strategy_prefers_quality_gate_then_score():
     strategies = [_strategy("A", 95.0, False), _strategy("B", 70.0, True), _strategy("C", 80.0, True)]
     selected = OpportunitySearchService._best_strategy(strategies)
@@ -58,9 +69,9 @@ def test_scan_ranks_buy_before_wait_before_pass(monkeypatch):
     class FakeCatalog:
         def list(self, *_args, **_kwargs):
             return [
-                {"uid": "1", "ticker": "A", "name": "A", "last_price": "1"},
-                {"uid": "2", "ticker": "B", "name": "B", "last_price": "2"},
-                {"uid": "3", "ticker": "C", "name": "C", "last_price": "3"},
+                _buyable_instrument("1", "A", "1"),
+                _buyable_instrument("2", "B", "2"),
+                _buyable_instrument("3", "C", "3"),
             ]
 
     service.catalog = FakeCatalog()
@@ -120,7 +131,7 @@ def test_scan_reports_staged_progress():
 
     class FakeCatalog:
         def list(self, *_args, **_kwargs):
-            return [{"uid": "1", "ticker": "A", "name": "A", "last_price": "1"}]
+            return [_buyable_instrument("1", "A", "1")]
 
     service.catalog = FakeCatalog()
     service._evaluate_instrument = lambda **_kwargs: OpportunitySearchResult(
