@@ -30,6 +30,7 @@ from edward.ui.instrument_screen_ux_v03 import install_instrument_screen_ux
 from edward.ui.stop_order_ui_v03_fixed import install_stop_order_ui
 from edward.ui.order_ticket_v03 import install_order_ticket
 from edward.ui.stop_limit_ui_v03 import install_stop_limit_ui
+from edward.ui.instrument_scroll_v03 import install_instrument_scroll
 from edward.config.settings import Environment
 
 
@@ -80,6 +81,7 @@ install_instrument_screen_ux(EdwardApp)
 install_stop_order_ui(EdwardApp)
 install_order_ticket(EdwardApp)
 install_stop_limit_ui(EdwardApp)
+install_instrument_scroll(EdwardApp)
 
 
 if __name__ == "__main__":
