@@ -7,7 +7,9 @@ from decimal import Decimal
 import pytest
 
 from tests.e2e.test_sandbox_end_to_end import (
+    _align_price,
     _get_account_id,
+    _get_price_step,
     _get_tradable_instrument,
     _request,
     _wait_terminal,
@@ -101,9 +103,10 @@ def test_sandbox_order_modify_then_cancel_end_to_end(sandbox_adapter):
     account_id = _get_account_id()
     instrument_uid, market_price = _get_tradable_instrument()
     assert market_price > 0
+    price_step = _get_price_step(instrument_uid)
 
-    initial_price = (market_price * Decimal("0.50")).quantize(Decimal("0.0001"))
-    replacement_price = (market_price * Decimal("0.49")).quantize(Decimal("0.0001"))
+    initial_price = _align_price(market_price * Decimal("0.50"), price_step)
+    replacement_price = _align_price(market_price * Decimal("0.49"), price_step)
     assert initial_price > 0
     assert replacement_price > 0
     assert replacement_price < initial_price < market_price
