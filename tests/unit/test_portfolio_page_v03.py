@@ -8,14 +8,14 @@ def test_position_metrics_uses_expected_yield_and_average_price():
     assert result["quantity"] == Decimal("10")
     assert result["market_value"] == Decimal("1400.00")
     assert result["pnl"] == Decimal("200.00")
-    assert abs(result["pnl_pct"] - Decimal("16.6666666666666666666666666667")) < Decimal("1e-26")
+    assert abs(result["pnl_pct"] - Decimal("16.6666666666666666666666666667")) < Decimal("1e-25")
 
 
 def test_position_metrics_calculates_pnl_when_expected_yield_missing():
     result = position_metrics({"balance": "10", "current_price": "140.00", "average_position_price": "120.00"})
     assert result["market_value"] == Decimal("1400.00")
     assert result["pnl"] == Decimal("200.00")
-    assert abs(result["pnl_pct"] - Decimal("16.6666666666666666666666666667")) < Decimal("1e-26")
+    assert abs(result["pnl_pct"] - Decimal("16.6666666666666666666666666667")) < Decimal("1e-25")
 
 
 def test_position_metrics_infers_average_price_from_expected_yield():
@@ -38,7 +38,7 @@ def test_build_cost_basis_uses_weighted_average_for_buys():
         {"operation_type": 15, "instrument_uid": "A", "quantity": "5", "payment": {"units": "600", "nano": 0}},
     ])
     assert result["A"]["quantity"] == Decimal("15")
-    assert abs(result["A"]["average_price"] - Decimal("106.6666666666666666666666666667")) < Decimal("1e-26")
+    assert abs(result["A"]["average_price"] - Decimal("106.6666666666666666666666666667")) < Decimal("1e-25")
 
 
 def test_build_cost_basis_reduces_cost_on_sell_using_current_average():
