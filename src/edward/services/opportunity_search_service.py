@@ -105,11 +105,10 @@ class OpportunitySearchService:
         return self._market_universe(instrument_kind, positions) if scope == MARKET_SCOPE else self._portfolio_universe(instrument_kind, positions)
 
     def _market_universe(self, instrument_kind: str, positions: Any = None) -> list[Any]:
-        kinds = self._kinds(instrument_kind)
         held_uids = {_uid(item) for item in _held_positions(positions) if _uid(item)}
         result: list[Any] = []
         seen: set[str] = set()
-        for kind in kinds:
+        for kind in self._kinds(instrument_kind):
             for instrument in self.catalog.list(kind, trade_available_only=True):
                 uid = _uid(instrument)
                 if not uid or uid in seen or uid in held_uids:
@@ -176,30 +175,11 @@ class OpportunitySearchService:
                 estimated_trade_value = None
                 if not position_data.is_open and portfolio_data.available_cash is not None and price is not None:
                     estimated_trade_value = max(0.0, portfolio_data.available_cash * 0.10)
-                opportunity = OpportunityEngine.evaluate(
-                    analysis,
-                    candles,
-                    selected,
-                    position_weight_pct=position_data.portfolio_weight_pct or portfolio_data.current_weight_pct,
-                    target_weight_pct=position_data.target_weight_pct or portfolio_data.target_weight_pct,
-                    max_position_weight_pct=portfolio_data.max_position_weight_pct,
-                    portfolio_available=portfolio_data.available,
-                    available_cash=portfolio_data.available_cash,
-                    estimated_trade_value=estimated_trade_value,
-                )
+                opportunity = OpportunityEngine.evaluate(analysis, candles, selected, position_weight_pct=position_data.portfolio_weight_pct or portfolio_data.current_weight_pct, target_weight_pct=position_data.target_weight_pct or portfolio_data.target_weight_pct, max_position_weight_pct=portfolio_data.max_position_weight_pct, portfolio_available=portfolio_data.available, available_cash=portfolio_data.available_cash, estimated_trade_value=estimated_trade_value)
                 opportunity_context = opportunity.context
-                risk_score = opportunity.risk.score if opportunity.risk is not None else 0.0
-                strategy_context = StrategyContextData(
-                    strategy_name=selected.strategy,
-                    strategy_score=selected.score,
-                    walk_forward_score=selected.test_score,
-                    stability_score=selected.stability,
-                    confidence=analysis.confidence,
-                    quality_gate=selected.quality_gate,
-                    entry_signal=bool(selected.quality_gate and opportunity_context.entry_ok),
-                    quality_degraded=not selected.quality_gate,
-                    available=True,
-                )
+                risk = getattr(opportunity, "risk", None)
+                risk_score = float(getattr(risk, "score", 0.0) or 0.0)
+                strategy_context = StrategyContextData(strategy_name=selected.strategy, strategy_score=selected.score, walk_forward_score=selected.test_score, stability_score=selected.stability, confidence=analysis.confidence, quality_gate=selected.quality_gate, entry_signal=bool(selected.quality_gate and opportunity_context.entry_ok), quality_degraded=not selected.quality_gate, available=True)
             risk_context = RiskContextData(risk_gate=opportunity_context.risk_ok, critical_risk=opportunity_context.critical_risk, risk_score=risk_score, max_drawdown_pct=selected.max_drawdown_pct if selected else None, available=True)
             self._notify(progress_callback, f"Decision Engine: {ticker}", progress_base + progress_span * 0.82, current, total)
             request = DecisionRequest(
