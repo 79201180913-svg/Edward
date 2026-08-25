@@ -3,7 +3,6 @@ from __future__ import annotations
 import threading
 import tkinter as tk
 from datetime import datetime
-from decimal import Decimal
 from tkinter import messagebox, ttk
 from typing import Any
 
@@ -137,8 +136,9 @@ def _open_analysis(app: Any) -> None:
             )
             run_id = service.save(result)
             AnalysisSnapshotRepository(store).save(result, run_id)
-            app.after(0, lambda: (progress.stop(), status_var.set("Анализ завершён и сохранён"), set_result(result)))
+            app.after(0, lambda result=result: (progress.stop(), status_var.set("Анализ завершён и сохранён"), set_result(result)))
         except Exception as exc:
-            app.after(0, lambda: (progress.stop(), status_var.set("Ошибка анализа"), messagebox.showerror("Анализ акции", str(exc), parent=window)))
+            error_text = str(exc)
+            app.after(0, lambda error_text=error_text: (progress.stop(), status_var.set("Ошибка анализа"), messagebox.showerror("Анализ акции", error_text, parent=window)))
 
     ttk.Button(window, text="Запустить анализ", command=lambda: threading.Thread(target=run, daemon=True).start()).pack(pady=(0, 12))
