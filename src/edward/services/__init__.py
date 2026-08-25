@@ -3,6 +3,7 @@ from .balance_service import BalanceService
 from .instrument_service import InstrumentService
 from .market_service import MarketService
 from .portfolio_service import PortfolioService
+from .execution_confirmation_service import ControlledExecutionService, PreTradeValidationResult, PreTradeValidator
 
 __all__ = [
     "AccountService",
@@ -10,6 +11,9 @@ __all__ = [
     "InstrumentService",
     "MarketService",
     "PortfolioService",
+    "ControlledExecutionService",
+    "PreTradeValidationResult",
+    "PreTradeValidator",
 ]
 
 # Keep the existing AnalysisService API intact while reusing persisted WF results
