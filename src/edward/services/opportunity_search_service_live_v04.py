@@ -38,8 +38,6 @@ class LiveOpportunitySearchService(OpportunitySearchService):
         result_callback: ResultCallback | None = None,
         force_recompute: bool = False,
     ) -> list[OpportunitySearchResult]:
-        if force_recompute and isinstance(self.analysis, CachedAnalysisService):
-            self.analysis.force_recompute = True
         scope = str(scope or MARKET_SCOPE).upper()
         if scope not in {"MARKET", "PORTFOLIO"}:
             raise ValueError(f"Unsupported opportunity scope: {scope}")
@@ -62,6 +60,8 @@ class LiveOpportunitySearchService(OpportunitySearchService):
             if not uid:
                 continue
             valid_index += 1
+            if force_recompute and isinstance(self.analysis, CachedAnalysisService):
+                self.analysis.force_recompute = True
             progress_base = 15.0 + ((valid_index - 1) / max(1, total)) * 80.0
             progress_span = 80.0 / max(1, total)
             ticker = str(self._field(instrument, "ticker", ""))
