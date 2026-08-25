@@ -17,6 +17,8 @@ def result(*, decision="REDUCE", reason="STRATEGY_QUALITY_FAIL", execution_ready
 def test_reduce_with_failed_strategy_and_negative_rr_is_not_execution_ready():
     checked = LiveOpportunitySearchService._enforce_execution_readiness(result())
     assert checked.execution_ready is False
+    assert "Контроль качества прогноза: НЕ ПРОВЕРЕН" in checked.reason
+    assert "Исполнение: НЕТ" in checked.reason
 
 
 def test_sell_with_zero_reduction_quantity_is_not_execution_ready():
@@ -24,10 +26,15 @@ def test_sell_with_zero_reduction_quantity_is_not_execution_ready():
         result(decision="SELL", reason="EXIT_SIGNAL", risk_reward=2.0, recommended_quantity=0)
     )
     assert checked.execution_ready is False
+    assert "Исполнение: НЕТ" in checked.reason
 
 
 def test_positive_actionable_plan_can_remain_execution_ready():
     checked = LiveOpportunitySearchService._enforce_execution_readiness(
-        result(decision="REDUCE", reason="EXIT_SIGNAL", risk_reward=1.5, recommended_quantity=100)
+        result(decision="REDUCE", reason="EXIT_SIGNAL", risk_reward=1.5, recommended_quantity=100),
+        forecast_quality_pass=True,
+        forecast_quality_label="PASS",
     )
     assert checked.execution_ready is True
+    assert "Контроль качества прогноза: PASS" in checked.reason
+    assert "Исполнение: ДА" in checked.reason
