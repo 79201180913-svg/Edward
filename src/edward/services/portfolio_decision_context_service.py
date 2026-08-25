@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
+from edward.services.balance_service import BalanceService
 from edward.services.decision_engine import PortfolioContextData, PositionContextData
 
 
@@ -24,6 +25,15 @@ class PortfolioDecisionContextService:
         portfolio_value = _decimal(_field(portfolio, "total_amount_portfolio", None))
         if portfolio_value == Decimal("0"):
             portfolio_value = _decimal(_field(portfolio, "total_amount_currencies", None))
+        if portfolio_value == Decimal("0"):
+            # Sandbox and adapter payloads can expose the authoritative total
+            # through the balance normalization layer rather than directly on
+            # the PortfolioResponse object.
+            try:
+                summary = BalanceService.build_summary(positions, portfolio)
+                portfolio_value = summary.portfolio_value
+            except Exception:
+                portfolio_value = Decimal("0")
 
         available_cash = Decimal("0")
         blocked_cash = Decimal("0")
