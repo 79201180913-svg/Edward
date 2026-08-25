@@ -127,12 +127,7 @@ class DecisionEngine:
     @classmethod
     def _evaluate(cls, request: DecisionRequest) -> DecisionResult:
         if request.profile not in cls.BUY_THRESHOLD:
-            return cls._technical_result(
-                request,
-                DecisionStatus.ANALYSIS_UNAVAILABLE,
-                "UNSUPPORTED_PROFILE",
-                f"Unsupported trading profile: {request.profile}",
-            )
+            return cls._technical_result(request, DecisionStatus.ANALYSIS_UNAVAILABLE, "UNSUPPORTED_PROFILE", f"Unsupported trading profile: {request.profile}")
 
         unavailable = []
         if not request.instrument_available:
@@ -288,6 +283,17 @@ class DecisionEngine:
                 opportunity_score=opportunity.opportunity_score,
             )
 
+        if not request.strategy_quality or not opportunity.strategy_ok:
+            return DecisionResult(
+                decision=Decision.REDUCE,
+                status=DecisionStatus.VALID,
+                reason_codes=("STRATEGY_QUALITY_FAIL",),
+                explanation="Качество стратегии стало неприемлемым; позицию следует сократить.",
+                strategy_name=request.strategy_name,
+                strategy_score=request.strategy_score,
+                opportunity_score=opportunity.opportunity_score,
+            )
+
         if request.strategy_quality_degraded or request.signal_degraded:
             reasons = []
             if request.strategy_quality_degraded:
@@ -328,13 +334,9 @@ class DecisionEngine:
 
         add_threshold = cls.ADD_THRESHOLD[request.profile]
         if (
-            request.strategy_quality
-            and opportunity.strategy_ok
-            and opportunity.risk_ok
-            and opportunity.market_regime_compatible
-            and opportunity.entry_ok
-            and opportunity.opportunity_score >= add_threshold
+            opportunity.opportunity_score >= add_threshold
             and request.portfolio_allows_add
+            and opportunity.entry_ok
             and (position.target_weight_pct <= 0 or position.portfolio_weight_pct < position.target_weight_pct)
         ):
             return DecisionResult(
