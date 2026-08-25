@@ -1,6 +1,12 @@
 from types import SimpleNamespace
 
-from edward.ui.opportunity_search_ui_v04 import _forecast_probability, _forecast_value, _trade_plan_text
+from edward.ui.opportunity_search_ui_v04 import (
+    _display_reason,
+    _execution_ready_text,
+    _forecast_probability,
+    _forecast_value,
+    _trade_plan_text,
+)
 
 
 def test_forecast_value_formats_selected_horizon():
@@ -13,6 +19,15 @@ def test_forecast_probability_formats_selected_horizon():
     points = ((1, 51.234), (5, 67.89))
     assert _forecast_probability(points, 5) == "67.9%"
     assert _forecast_probability(points, 20) == "—"
+
+
+def test_execution_ready_text_is_localized():
+    assert _execution_ready_text(SimpleNamespace(execution_ready=True)) == "Готово"
+    assert _execution_ready_text(SimpleNamespace(execution_ready=False)) == "Заблокировано"
+
+
+def test_display_reason_removes_execution_diagnostics_suffix():
+    assert _display_reason("STRATEGY_QUALITY_FAIL | Контроль качества прогноза: FAIL | Исполнение: НЕТ") == "Стратегия не прошла контроль качества"
 
 
 def test_trade_plan_text_contains_execution_fields():
@@ -41,7 +56,7 @@ def test_trade_plan_text_contains_execution_fields():
     assert "Стоп: 96.0000" in text
     assert "Risk/Reward: 3.75" in text
     assert "Рекомендуемый размер: 50 шт. / 6.50%" in text
-    assert "Execution Ready: ДА" in text
+    assert "Исполнение: ДА" in text
 
 
 def test_trade_plan_text_shows_reduce_quantity_and_remaining_position():
@@ -66,4 +81,9 @@ def test_trade_plan_text_shows_reduce_quantity_and_remaining_position():
     )
     text = _trade_plan_text(item)
     assert "Объём сокращения: 1000 шт. / останется: 1000 шт." in text
-    assert "Execution Ready: НЕТ" in text
+    assert "Исполнение: НЕТ" in text
+
+
+def test_trade_plan_text_for_pass_does_not_offer_trade():
+    item = SimpleNamespace(decision="PASS", trade_plan=None, execution_ready=False)
+    assert _trade_plan_text(item) == "Торговый план: не применяется для решения «Пропустить»."
