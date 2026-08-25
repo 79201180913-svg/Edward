@@ -42,15 +42,21 @@ class AdapterTradingDataProvider:
         api_trade_available = bool(self._field(status, "api_trade_available_flag", False))
         limit_available = bool(self._field(status, "limit_order_available_flag", False))
         market_available = bool(self._field(status, "market_order_available_flag", False))
+        bestprice_available = bool(self._field(status, "bestprice_order_available_flag", False))
         buy_available = bool(self._field(instrument, "buy_available_flag", False)) if instrument is not None else False
         sell_available = bool(self._field(instrument, "sell_available_flag", False)) if instrument is not None else False
         direction_available = buy_available if request.side == OrderSide.BUY else sell_available
-        type_available = {OrderType.LIMIT: limit_available, OrderType.MARKET: market_available}.get(request.order_type, False)
+        type_available = {
+            OrderType.LIMIT: limit_available,
+            OrderType.MARKET: market_available,
+            OrderType.BESTPRICE: bestprice_available,
+        }.get(request.order_type, False)
         available = api_trade_available and type_available and direction_available
         trading_diagnostic = (
             f"api_trade_available_flag={self._field(status, 'api_trade_available_flag', None)!r}; "
             f"market_order_available_flag={self._field(status, 'market_order_available_flag', None)!r}; "
             f"limit_order_available_flag={self._field(status, 'limit_order_available_flag', None)!r}; "
+            f"bestprice_order_available_flag={self._field(status, 'bestprice_order_available_flag', None)!r}; "
             f"buy_available_flag={self._field(instrument, 'buy_available_flag', None)!r}; "
             f"sell_available_flag={self._field(instrument, 'sell_available_flag', None)!r}; "
             f"trading_status={self._field(status, 'trading_status', self._field(status, 'status', None))!r}"
