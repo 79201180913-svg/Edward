@@ -104,6 +104,26 @@ def test_market_universe_contains_only_buyable_tradeable_instruments():
     assert [item["ticker"] for item in result] == ["BUY"]
 
 
+def test_market_universe_excludes_already_held_positions():
+    service = OpportunitySearchService.__new__(OpportunitySearchService)
+
+    class FakeCatalog:
+        def list(self, *_args, **_kwargs):
+            return [
+                {"uid": "held", "ticker": "HELD", "buy_available": True, "trading_available": True},
+                {"uid": "new", "ticker": "NEW", "buy_available": True, "trading_available": True},
+            ]
+
+    service.catalog = FakeCatalog()
+    positions = {
+        "securities": [
+            {"instrument_uid": "held", "ticker": "HELD", "balance": 10},
+        ]
+    }
+    result = service._market_universe("SHARE", positions)
+    assert [item["ticker"] for item in result] == ["NEW"]
+
+
 def test_portfolio_universe_contains_only_held_positions():
     service = OpportunitySearchService.__new__(OpportunitySearchService)
 
