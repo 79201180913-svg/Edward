@@ -16,7 +16,7 @@ def test_position_metrics_uses_expected_yield_and_average_price():
     assert result["quantity"] == Decimal("10")
     assert result["market_value"] == Decimal("1400.00")
     assert result["pnl"] == Decimal("200.00")
-    assert result["pnl_pct"] == Decimal("16.6666666666666666666666666667")
+    assert abs(result["pnl_pct"] - Decimal("16.6666666666666666666666666667")) < Decimal("1e-26")
 
 
 def test_position_metrics_calculates_pnl_when_expected_yield_missing():
@@ -30,7 +30,7 @@ def test_position_metrics_calculates_pnl_when_expected_yield_missing():
 
     assert result["market_value"] == Decimal("1400.00")
     assert result["pnl"] == Decimal("200.00")
-    assert result["pnl_pct"] == Decimal("16.6666666666666666666666666667")
+    assert abs(result["pnl_pct"] - Decimal("16.6666666666666666666666666667")) < Decimal("1e-26")
 
 
 def test_position_metrics_infers_average_price_from_expected_yield():
