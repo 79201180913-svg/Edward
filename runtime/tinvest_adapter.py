@@ -72,6 +72,14 @@ def _configure_windows_ca_bundle() -> None:
         return
     certs: list[bytes] = []
     seen: set[bytes] = set()
+    try:
+        context = ssl.create_default_context()
+        for cert_der in context.get_ca_certs(binary_form=True):
+            if cert_der not in seen:
+                seen.add(cert_der)
+                certs.append(cert_der)
+    except Exception:
+        pass
     for store_name in ("ROOT", "CA"):
         try:
             entries = ssl.enum_certificates(store_name)
@@ -187,15 +195,17 @@ class AdapterState:
                 return _camel_to_snake(json.loads(response.read().decode("utf-8")))
         except HTTPError as exc:
             try:
-                body = json.loads(exc.read().decode("utf-8"))
+                body_text = exc.read().decode("utf-8", errors="replace")
             except Exception:
-                body = {"error": "http_error", "message": str(exc)}
-            raise RuntimeError(body.get("message", body.get("error", str(exc)))) from exc
+                body_text = ""
+            raise RuntimeError(f"T-Invest REST HTTP {exc.code}: {body_text or str(exc)}") from exc
         except URLError as exc:
             raise RuntimeError(f"T-Invest REST API is unavailable: {exc.reason}") from exc
 
     def accounts(self):
-        return self._service("users").get_accounts()
+        if ENVIRONMENT == "sandbox":
+            return self._rest_request("SandboxService/GetSandboxAccounts", {})
+        return message_to_dict(self._service("users").get_accounts())
 
     def open_sandbox_account(self, name=None):
         return self._service("sandbox").open_sandbox_account(**({"name": name} if name else {}))
@@ -214,20 +224,15 @@ class AdapterState:
         money = MoneyValue(currency="rub", units=int(whole), nano=nano)
         result = self._service("sandbox").sandbox_pay_in(account_id=str(account_id), amount=money)
         result_dict = message_to_dict(result)
-        positions = self._service("sandbox").get_sandbox_positions(account_id=str(account_id))
-        result_dict["verification_positions"] = message_to_dict(positions)
+        result_dict["verification_positions"] = message_to_dict(self._service("sandbox").get_sandbox_positions(account_id=str(account_id)))
         result_dict["verification_account_id"] = str(account_id)
         return result_dict
 
     def sandbox_positions(self, account_id):
-        result = self._rest_request("SandboxService/GetSandboxPositions", {"accountId": str(account_id)})
-        logger.info("[SANDBOX POSITIONS REST] account_id=%s securities=%s money=%s", account_id, len(result.get("securities", []) or []), len(result.get("money", []) or []))
-        return result
+        return self._rest_request("SandboxService/GetSandboxPositions", {"accountId": str(account_id)})
 
     def sandbox_portfolio(self, account_id):
-        result = self._rest_request("SandboxService/GetSandboxPortfolio", {"accountId": str(account_id), "currency": "RUB"})
-        logger.info("[SANDBOX PORTFOLIO REST] account_id=%s positions=%s total=%s", account_id, len(result.get("positions", []) or []), result.get("total_amount_portfolio"))
-        return result
+        return self._rest_request("SandboxService/GetSandboxPortfolio", {"accountId": str(account_id), "currency": "RUB"})
 
     def positions(self, account_id):
         return self.sandbox_positions(account_id) if ENVIRONMENT == "sandbox" else message_to_dict(self._service("operations").get_positions(account_id=account_id))
@@ -237,22 +242,18 @@ class AdapterState:
 
     def list_instruments(self, kind="SHARE", trade=True):
         methods = {"SHARE": "get_shares", "BOND": "get_bonds", "ETF": "get_etfs", "CURRENCY": "get_currencies", "FUTURES": "get_futures"}
-        key = str(kind).upper()
-        method_name = methods.get(key)
+        method_name = methods.get(str(kind).upper())
         if not method_name:
             raise ValueError(f"Unsupported instrument kind: {kind}")
         service = self._service("instruments")
         method = getattr(service, method_name, None)
         if method is None:
             raise RuntimeError(f"T-Invest SDK instruments service does not provide {method_name}()")
-        kwargs = {"instrument_status": "INSTRUMENT_STATUS_BASE" if trade else "INSTRUMENT_STATUS_ALL", "instrument_exchange": "INSTRUMENT_EXCHANGE_UNSPECIFIED"}
         try:
-            result = method(**kwargs)
+            result = method(instrument_status="INSTRUMENT_STATUS_BASE" if trade else "INSTRUMENT_STATUS_ALL", instrument_exchange="INSTRUMENT_EXCHANGE_UNSPECIFIED")
         except TypeError:
             result = method()
-        data = message_to_dict(result)
-        logger.info("[INSTRUMENTS SDK] kind=%s method=%s count=%s", key, method_name, len(data.get("instruments", []) or []))
-        return data
+        return message_to_dict(result)
 
     def last_prices(self, ids):
         return message_to_dict(self._service("market_data").get_last_prices(instrument_id=ids))
@@ -263,27 +264,15 @@ class AdapterState:
     def trading_statuses(self, ids):
         return message_to_dict(self._service("market_data").get_trading_statuses(instrument_ids=ids))
 
+    def close_prices(self, ids):
+        return self._rest_request("MarketDataService/GetClosePrices", {"instruments": [{"instrumentId": str(value)} for value in ids], "instrumentStatus": "INSTRUMENT_STATUS_BASE"})
+
     def orders(self, account_id):
         return message_to_dict(self._service("sandbox").get_sandbox_orders(account_id=account_id)) if ENVIRONMENT == "sandbox" else message_to_dict(self._service("orders").get_orders(account_id=account_id))
 
     def order_state(self, account_id, order_id):
         if ENVIRONMENT == "sandbox":
-            state = message_to_dict(self._service("sandbox").get_sandbox_order_state(account_id=account_id, order_id=order_id))
-            orders = message_to_dict(self._service("sandbox").get_sandbox_orders(account_id=account_id))
-            order_items = orders.get("orders", []) if isinstance(orders, dict) else []
-            for item in order_items:
-                item_id = str(item.get("order_id", "")) if isinstance(item, dict) else ""
-                if item_id == str(order_id):
-                    state["execution_report_status"] = item.get("execution_report_status", item.get("status", ""))
-                    break
-            lots_done = int(str(state.get("lots_executed", 0) or 0))
-            lots_requested = int(str(state.get("lots_requested", 0) or 0))
-            if not state.get("execution_report_status"):
-                if lots_requested > 0 and lots_done >= lots_requested:
-                    state["execution_report_status"] = "EXECUTION_REPORT_STATUS_FILL"
-                else:
-                    state["execution_report_status"] = "EXECUTION_REPORT_STATUS_NEW"
-            return state
+            return message_to_dict(self._service("sandbox").get_sandbox_order_state(account_id=account_id, order_id=order_id))
         return message_to_dict(self._service("orders").get_order_state(account_id=account_id, order_id=order_id))
 
     def order_price(self, payload):
@@ -296,7 +285,6 @@ class AdapterState:
             raise ValueError(f"Unsupported order direction: {payload['direction']!r}")
         request = {"accountId": str(payload["account_id"]), "instrumentId": str(payload["instrument_id"]), "price": _quotation_payload(payload.get("price")), "direction": direction, "quantity": str(int(payload["quantity"]))}
         method = "SandboxService/GetSandboxOrderPrice" if ENVIRONMENT == "sandbox" else "OrdersService/GetOrderPrice"
-        logger.info("[ORDER PRICE] method=%s payload=%s", method, request)
         return self._rest_request(method, request)
 
     def operations(self, account_id, limit=1000):
@@ -309,9 +297,7 @@ class AdapterState:
         kwargs = {"quantity": int(payload["quantity"]), "direction": direction, "account_id": str(payload["account_id"]), "order_type": order_type, "instrument_id": str(payload["instrument_uid"]), "order_id": str(payload["request_id"])}
         if payload.get("price") is not None:
             kwargs["price"] = _sdk_quotation(payload["price"])
-        logger.info("[ORDER PAYLOAD] account_id=%s instrument_id=%s direction=%s order_type=%s quantity_lots=%s price=%r", payload["account_id"], payload["instrument_uid"], direction, order_type, payload["quantity"], payload.get("price"))
         if ENVIRONMENT == "sandbox":
-            logger.info("[SANDBOX ORDER] PostSandboxOrder account_id=%s instrument_id=%s direction=%s quantity_lots=%s order_type=%s price=%r", payload["account_id"], payload["instrument_uid"], direction, payload["quantity"], order_type, payload.get("price"))
             return message_to_dict(self._service("sandbox").post_sandbox_order(**kwargs))
         return message_to_dict(self._service("orders").post_order(**kwargs))
 
@@ -327,6 +313,11 @@ class AdapterState:
         if ENVIRONMENT == "sandbox":
             return message_to_dict(self._service("sandbox").replace_sandbox_order(**kwargs))
         return message_to_dict(self._service("orders").replace_order(**kwargs))
+
+    def cancel_all_orders(self, account_id):
+        if ENVIRONMENT == "sandbox":
+            return message_to_dict(self._service("sandbox").cancel_sandbox_orders(account_id=account_id))
+        return message_to_dict(self._service("orders").cancel_all_orders(account_id=account_id))
 
 
 STATE = AdapterState()
@@ -359,7 +350,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
             p = self._read_json()
-            if self.path == "/accounts": self._send(200, message_to_dict(STATE.accounts())); return
+            if self.path == "/accounts": self._send(200, STATE.accounts()); return
             if self.path == "/accounts/create": self._send(200, message_to_dict(STATE.open_sandbox_account(p.get("name")))); return
             if self.path == "/accounts/close": self._send(200, message_to_dict(STATE.close_sandbox_account(str(p.get("account_id", ""))))); return
             if self.path == "/accounts/pay-in": self._send(200, STATE.sandbox_pay_in(str(p["account_id"]), p["amount"])); return
