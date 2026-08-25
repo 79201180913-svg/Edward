@@ -136,17 +136,18 @@ class OpportunitySearchService:
 
     def _build_universe(self, *, scope: str, instrument_kind: str, positions: Any) -> list[Any]:
         if scope == MARKET_SCOPE:
-            return self._market_universe(instrument_kind)
+            return self._market_universe(instrument_kind, positions)
         return self._portfolio_universe(instrument_kind, positions)
 
-    def _market_universe(self, instrument_kind: str) -> list[Any]:
+    def _market_universe(self, instrument_kind: str, positions: Any = None) -> list[Any]:
         kinds = self._kinds(instrument_kind)
+        held_uids = {_uid(item) for item in _held_positions(positions) if _uid(item)}
         result: list[Any] = []
         seen: set[str] = set()
         for kind in kinds:
             for instrument in self.catalog.list(kind, trade_available_only=True):
                 uid = _uid(instrument)
-                if not uid or uid in seen:
+                if not uid or uid in seen or uid in held_uids:
                     continue
                 if not _bool_field(instrument, "buy_available", False):
                     continue
