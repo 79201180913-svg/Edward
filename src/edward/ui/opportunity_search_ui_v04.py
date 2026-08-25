@@ -233,7 +233,7 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
                     )
                     self.after(0, lambda: finish(results))
                 except Exception as exc:
-                    self.after(0, lambda: fail(exc))
+                    self.after(0, lambda error=exc: fail(error))
 
             threading.Thread(target=worker, daemon=True).start()
 
