@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable
 
+from edward.services.account_service import AccountService
 from edward.services.analysis_service import AnalysisService, Candle, StrategyResult
 from edward.services.decision_engine import (
     DecisionEngine,
@@ -147,8 +148,6 @@ class OpportunitySearchService:
                 uid = _uid(instrument)
                 if not uid or uid in seen:
                     continue
-                # Opportunity Search is about new positions, therefore the
-                # instrument must be currently buyable, not merely API-visible.
                 if not _bool_field(instrument, "buy_available", False):
                     continue
                 if not _bool_field(instrument, "trading_available", False):
@@ -350,7 +349,7 @@ class OpportunitySearchService:
         try:
             accounts = self.client.get_accounts()
             items = accounts if isinstance(accounts, list) else _field(accounts, "accounts", []) or []
-            active = next((item for item in items if str(_field(item, "status", "")).upper().endswith("OPEN")), None)
+            active = next((item for item in items if AccountService.is_open(item)), None)
             return str(_field(active, "id", "")) if active else None
         except Exception:
             return None
