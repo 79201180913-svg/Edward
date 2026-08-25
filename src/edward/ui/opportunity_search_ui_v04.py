@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import threading
 import tkinter as tk
-from tkinter import ttk
+from tkinter import messagebox, ttk
 from typing import Any
 
+from edward.config.application_settings import ApplicationSettingsStore
 from edward.services.opportunity_search_service import INSTRUMENT_KIND_ALL, MARKET_SCOPE, PORTFOLIO_SCOPE
 from edward.services.opportunity_search_service_live_v04 import LiveOpportunitySearchService
+from edward.services.strategy_optimization_cache import StrategyOptimizationCache
 
 SCOPE_VALUES = ((MARKET_SCOPE, "Торгуемые инструменты"), (PORTFOLIO_SCOPE, "Мой портфель"))
 SCOPE_BY_LABEL = {label: code for code, label in SCOPE_VALUES}
@@ -55,12 +57,16 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
         frame.pack(fill="both", expand=True)
         title_var = tk.StringVar(value="Возможности рынка")
         status_var = tk.StringVar(value="Готово")
+        cache_status_var = tk.StringVar(value="Кэш WF: 0")
         progress_var = tk.DoubleVar(value=0.0)
         progress_text_var = tk.StringVar(value="Готово")
         scope_var = tk.StringVar(value="Торгуемые инструменты")
         profile_var = tk.StringVar(value="Среднесрочная")
         kind_var = tk.StringVar(value="Акции")
         decision_var = tk.StringVar(value="Все")
+
+        settings = ApplicationSettingsStore().load()
+        cache = StrategyOptimizationCache(settings.storage_path)
 
         top = ttk.Frame(frame); top.pack(fill="x", pady=(0, 10))
         ttk.Label(top, textvariable=title_var, style="Title.TLabel").pack(side="left")
@@ -70,7 +76,10 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
         profile_combo = ttk.Combobox(top, textvariable=profile_var, state="readonly", values=[x[1] for x in PROFILE_VALUES], width=16); profile_combo.pack(side="left")
         ttk.Label(top, text="Тип инструмента:").pack(side="left", padx=(15, 5))
         kind_combo = ttk.Combobox(top, textvariable=kind_var, state="readonly", values=["Все"] + list(KIND_LABELS.values()), width=16); kind_combo.pack(side="left")
-        ttk.Label(top, textvariable=status_var, width=11).pack(side="left", padx=12)
+        ttk.Label(top, textvariable=status_var, width=11).pack(side="left", padx=8)
+        ttk.Label(top, textvariable=cache_status_var, width=14).pack(side="left", padx=4)
+        clear_cache_button = ttk.Button(top, text="Очистить кэш", width=13); clear_cache_button.pack(side="right", padx=(4, 0))
+        recompute_button = ttk.Button(top, text="Пересчитать WF", width=15); recompute_button.pack(side="right", padx=(4, 0))
         scan_button = ttk.Button(top, text="Сканировать", width=13); scan_button.pack(side="right")
 
         progress_frame = ttk.Frame(frame); progress_frame.pack(fill="x", pady=(0, 10))
@@ -90,6 +99,10 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
         ttk.Label(frame, textvariable=summary_var).pack(anchor="w", pady=(8, 0))
         state: dict[str, Any] = {"results": []}
 
+        def refresh_cache_status() -> None:
+            try: cache_status_var.set(f"Кэш WF: {cache.count()}")
+            except Exception: cache_status_var.set("Кэш WF: ошибка")
+
         def page_alive() -> bool:
             try: return bool(frame.winfo_exists())
             except tk.TclError: return False
@@ -102,6 +115,8 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
         def set_controls(enabled: bool) -> None:
             combo_state = "readonly" if enabled else "disabled"
             _safe_configure(scan_button, state="normal" if enabled else "disabled")
+            _safe_configure(recompute_button, state="normal" if enabled else "disabled")
+            _safe_configure(clear_cache_button, state="normal" if enabled else "disabled")
             for widget in (scope_combo, profile_combo, kind_combo, filter_combo): _safe_configure(widget, state=combo_state)
 
         def row_values(item: Any) -> tuple[str, ...]:
@@ -113,8 +128,7 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
             counts = {value: 0 for value in FILTER_VALUES if value != "ALL"}
             for item in state["results"]: counts[item.decision or "PASS"] = counts.get(item.decision or "PASS", 0) + 1
             unavailable = sum(1 for item in state["results"] if item.status == "ANALYSIS_UNAVAILABLE")
-            selected = decision_code()
-            visible = sum(1 for item in state["results"] if selected == "ALL" or (item.decision or "PASS") == selected)
+            selected = decision_code(); visible = sum(1 for item in state["results"] if selected == "ALL" or (item.decision or "PASS") == selected)
             summary_var.set("   ".join((f"Покупка: {counts.get('BUY', 0)}", f"Ждать: {counts.get('WAIT', 0)}", f"Удерживать: {counts.get('HOLD', 0)}", f"Увеличить: {counts.get('ADD', 0)}", f"Сократить: {counts.get('REDUCE', 0)}", f"Продать: {counts.get('SELL', 0)}", f"Пропустить: {counts.get('PASS', 0)}", f"Недоступны: {unavailable}", f"Показано: {visible}")))
 
         def render() -> None:
@@ -130,8 +144,7 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
             if not page_alive(): return
             state["results"].append(item)
             selected = decision_code()
-            if selected == "ALL" or (item.decision or "PASS") == selected:
-                tree.insert("", "end", values=row_values(item))
+            if selected == "ALL" or (item.decision or "PASS") == selected: tree.insert("", "end", values=row_values(item))
             update_summary()
 
         def update_scope_ui(*_args: Any) -> None:
@@ -156,16 +169,18 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
             try: self.after(0, lambda result=item: append_result(result))
             except tk.TclError: pass
 
-        def scan() -> None:
+        def scan(force_recompute: bool = False) -> None:
             if not page_alive(): return
             set_controls(False); state["results"] = []
             for row in tree.get_children(): tree.delete(row)
             update_summary(); progress_var.set(0.0); progress_text_var.set("Подготовка сканирования — 0%"); status_var.set("Запуск")
+            if force_recompute: status_var.set("Принудительный пересчёт Walk Forward")
             scope, kind, profile = scope_code(), kind_code(), profile_code()
 
             def worker() -> None:
                 try:
-                    results = LiveOpportunitySearchService(self.client).scan(profile=profile, instrument_kind=kind, scope=scope, progress_callback=progress_from_worker, result_callback=result_from_worker)
+                    service = LiveOpportunitySearchService(self.client, force_recompute=force_recompute)
+                    results = service.scan(profile=profile, instrument_kind=kind, scope=scope, progress_callback=progress_from_worker, result_callback=result_from_worker, force_recompute=force_recompute)
                     try: self.after(0, lambda final_results=results: finish(final_results))
                     except tk.TclError: pass
                 except Exception as exc:
@@ -175,13 +190,24 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
 
         def finish(results: list[Any]) -> None:
             if not page_alive(): return
-            state["results"] = results; progress_var.set(100.0); label = "позиций" if scope_code() == PORTFOLIO_SCOPE else "инструментов"; progress_text_var.set(f"Анализ завершён — 100% ({len(results)} {label})"); status_var.set("Готово"); set_controls(True); render()
+            state["results"] = results; progress_var.set(100.0); label = "позиций" if scope_code() == PORTFOLIO_SCOPE else "инструментов"; progress_text_var.set(f"Анализ завершён — 100% ({len(results)} {label})"); status_var.set("Готово"); set_controls(True); render(); refresh_cache_status()
 
         def fail(_exc: Exception) -> None:
             if not page_alive(): return
-            progress_text_var.set(f"Анализ завершён с ошибкой на {progress_var.get():.0f}%"); status_var.set("Ошибка"); set_controls(True)
+            progress_text_var.set(f"Анализ завершён с ошибкой на {progress_var.get():.0f}%"); status_var.set("Ошибка"); set_controls(True); refresh_cache_status()
 
-        scope_combo.bind("<<ComboboxSelected>>", update_scope_ui); scan_button.configure(command=scan); filter_combo.bind("<<ComboboxSelected>>", lambda _event: render()); render()
+        def clear_cache() -> None:
+            if not page_alive(): return
+            if not messagebox.askyesno("Очистка кэша", "Удалить все сохранённые результаты Walk Forward для версии 0.4?\n\nСледующий анализ выполнит полный пересчёт."):
+                return
+            deleted = cache.clear_all(); refresh_cache_status(); status_var.set(f"Кэш очищен: удалено {deleted} результатов")
+
+        scope_combo.bind("<<ComboboxSelected>>", update_scope_ui)
+        scan_button.configure(command=lambda: scan(False))
+        recompute_button.configure(command=lambda: scan(True))
+        clear_cache_button.configure(command=clear_cache)
+        filter_combo.bind("<<ComboboxSelected>>", lambda _event: render())
+        render(); refresh_cache_status()
 
     app_class._shell = shell
     app_class._page_opportunities = page_opportunities
