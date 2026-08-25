@@ -170,22 +170,21 @@ def _money_to_number(value) -> float:
 
 
 def _sandbox_portfolio(self, account_id):
+    # t-tech-investments 0.3.3 does not accept a currency keyword here.
     result = self._service("sandbox").get_sandbox_portfolio(
         account_id=str(account_id),
     )
     result = _adapter.message_to_dict(result)
 
-    # SDK 0.3.3 returns positions/account_id but omits total_amount_portfolio.
-    # Preserve Edward's response contract without changing the upstream SDK.
     total = 0.0
     for position in result.get("positions", []) or []:
         if not isinstance(position, dict):
             continue
-        # Some SDK versions expose a direct value-like field. Only use a field
-        # when it is actually money-shaped; do not invent market prices.
-        for key in ("market_value", "current_price"):
+        for key in ("current_price", "market_value", "quantity_lots", "quantity"):
+            if key not in position:
+                continue
             candidate = position.get(key)
-            if isinstance(candidate, dict) and ("units" in candidate or "nano" in candidate):
+            if isinstance(candidate, dict) and "units" in candidate:
                 total += _money_to_number(candidate)
                 break
 
@@ -207,21 +206,16 @@ def _sandbox_operations(self, account_id, limit=1000):
     if method is None:
         raise RuntimeError("T-Invest SDK sandbox service does not provide operations methods")
 
-    now = datetime.now(timezone.utc)
-    start = now - timedelta(days=3650)
-    kwargs = {
-        "account_id": str(account_id),
-        "from_": start,
-        "to": now,
-        "limit": max(1, min(int(limit), 1000)),
-        "without_commissions": False,
-        "without_trades": False,
-    }
     try:
-        result = method(**kwargs)
+        result = method(account_id=str(account_id))
     except TypeError:
-        result = method(account_id=str(account_id), limit=max(1, min(int(limit), 1000)))
-    return _adapter.message_to_dict(result)
+        result = method(str(account_id))
+
+    result = _adapter.message_to_dict(result)
+    items = result.get("items")
+    if isinstance(items, list):
+        result["items"] = items[: max(0, int(limit))]
+    return result
 
 
 def _list_instruments(self, kind="SHARE", trade=True):
