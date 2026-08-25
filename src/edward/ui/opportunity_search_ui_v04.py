@@ -18,8 +18,7 @@ SCOPE_VALUES = (
     (MARKET_SCOPE, "Торгуемые инструменты"),
     (PORTFOLIO_SCOPE, "Мой портфель"),
 )
-
-
+SCOPE_BY_LABEL = {label: code for code, label in SCOPE_VALUES}
 FILTER_VALUES = ("ALL", "BUY", "WAIT", "HOLD", "ADD", "REDUCE", "SELL", "PASS")
 
 
@@ -52,7 +51,7 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
         title_var = tk.StringVar(value="Возможности рынка")
         ttk.Label(top, textvariable=title_var, style="Title.TLabel").pack(side="left")
 
-        scope_var = tk.StringVar(value=MARKET_SCOPE)
+        scope_var = tk.StringVar(value="Торгуемые инструменты")
         profile_var = tk.StringVar(value="medium_term")
         kind_var = tk.StringVar(value="Shares")
         status_var = tk.StringVar(value="Готово")
@@ -138,8 +137,8 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
 
         state: dict[str, Any] = {"results": []}
 
-        def _scope_label() -> str:
-            return dict(SCOPE_VALUES).get(scope_var.get(), "Торгуемые инструменты")
+        def _scope_code() -> str:
+            return SCOPE_BY_LABEL.get(scope_var.get(), MARKET_SCOPE)
 
         def _kind_code() -> str:
             if kind_var.get() == "Все":
@@ -193,10 +192,9 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
             )
 
         def update_scope_ui(*_args: Any) -> None:
-            is_portfolio = scope_var.get() == PORTFOLIO_SCOPE
+            is_portfolio = _scope_code() == PORTFOLIO_SCOPE
             title_var.set("Анализ портфеля" if is_portfolio else "Возможности рынка")
-            if is_portfolio:
-                decision_var.set("ALL")
+            decision_var.set("ALL")
             state["results"] = []
             progress_var.set(0.0)
             progress_text_var.set("Готово")
@@ -221,7 +219,7 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
             progress_var.set(0.0)
             progress_text_var.set("Подготовка сканирования — 0%")
             status_var.set("Запуск сканирования")
-            scope = scope_var.get()
+            scope = _scope_code()
             kind = _kind_code()
             profile = profile_var.get()
 
@@ -242,7 +240,7 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
         def finish(results: list[Any]) -> None:
             state["results"] = results
             progress_var.set(100.0)
-            label = "позиций" if scope_var.get() == PORTFOLIO_SCOPE else "инструментов"
+            label = "позиций" if _scope_code() == PORTFOLIO_SCOPE else "инструментов"
             progress_text_var.set(f"Анализ завершён — 100% ({len(results)} {label})")
             status_var.set(f"Анализ завершён: {len(results)} {label}")
             scan_button.configure(state="normal")
