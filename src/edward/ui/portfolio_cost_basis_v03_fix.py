@@ -55,6 +55,7 @@ def _aliases(operation: Any) -> list[str]:
         operation,
         field(operation, "instrument", None),
         field(operation, "instrument_info", None),
+        field(operation, "instrumentInfo", None),
         field(operation, "position", None),
     ]
     names = (
@@ -137,20 +138,67 @@ def _sort_key(operation: Any) -> str:
     return str(field(operation, "date", field(operation, "timestamp", field(operation, "execution_time", field(operation, "executionTime", "")))) or "")
 
 
+def _safe_keys(value: Any) -> list[str]:
+    if isinstance(value, dict):
+        return sorted(str(k) for k in value.keys())
+    keys: list[str] = []
+    try:
+        for name in ("type", "operation_type", "quantity", "quantity_done", "payment", "instrument_uid", "figi", "ticker", "trades_info", "trades"):
+            if hasattr(value, name):
+                keys.append(name)
+    except Exception:
+        pass
+    return sorted(keys)
+
+
 def robust_build_cost_basis(operations: list[Any]) -> dict[str, dict[str, Decimal]]:
     state: dict[str, dict[str, Decimal]] = {}
     aliases: dict[str, str] = {}
+    stats = {
+        "total": len(operations),
+        "buy": 0,
+        "sell": 0,
+        "other": 0,
+        "with_aliases": 0,
+        "with_quantity": 0,
+        "with_payment": 0,
+        "with_trades": 0,
+        "accepted": 0,
+    }
 
-    for operation in sorted(operations, key=_sort_key):
+    for index, operation in enumerate(sorted(operations, key=_sort_key)):
         kind = _operation_kind(operation)
-        if kind not in {"BUY", "SELL"}:
-            continue
+        if kind == "BUY":
+            stats["buy"] += 1
+        elif kind == "SELL":
+            stats["sell"] += 1
+        else:
+            stats["other"] += 1
         names = _aliases(operation)
         quantity = _quantity(operation)
         payment = _payment(operation)
-        if not names or quantity <= 0 or payment <= 0:
+        trades = _trades(operation)
+        if names:
+            stats["with_aliases"] += 1
+        if quantity > 0:
+            stats["with_quantity"] += 1
+        if payment > 0:
+            stats["with_payment"] += 1
+        if trades:
+            stats["with_trades"] += 1
+
+        if index < 3:
+            print(
+                f"[PORTFOLIO COST BASIS DIAG] op={index + 1} kind={kind} "
+                f"keys={_safe_keys(operation)} aliases={bool(names)} "
+                f"quantity={quantity > 0} payment={payment > 0} trades={len(trades)}",
+                flush=True,
+            )
+
+        if kind not in {"BUY", "SELL"} or not names or quantity <= 0 or payment <= 0:
             continue
 
+        stats["accepted"] += 1
         canonical = aliases.get(names[0], names[0])
         for alias in names:
             aliases.setdefault(alias, canonical)
@@ -164,6 +212,8 @@ def robust_build_cost_basis(operations: list[Any]) -> dict[str, dict[str, Decima
             sold = min(quantity, entry["quantity"])
             entry["quantity"] -= sold
             entry["cost"] -= average * sold
+
+    print(f"[PORTFOLIO COST BASIS DIAG] stats={stats}", flush=True)
 
     result: dict[str, dict[str, Decimal]] = {}
     for canonical, value in state.items():
@@ -184,5 +234,4 @@ def robust_build_cost_basis(operations: list[Any]) -> dict[str, dict[str, Decima
 
 def install() -> None:
     from edward.ui import portfolio_page_v03
-
     portfolio_page_v03.build_cost_basis = robust_build_cost_basis
