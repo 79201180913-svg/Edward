@@ -6,12 +6,7 @@ from statistics import mean, pstdev
 from typing import Iterable, Sequence
 
 from edward.services.analysis_service import Candle
-from edward.services.forecast_service import (
-    SUPPORTED_HORIZONS,
-    ForecastPoint,
-    ForecastResult,
-    ForecastService,
-)
+from edward.services.forecast_service import SUPPORTED_HORIZONS, ForecastPoint, ForecastResult, ForecastService
 
 
 MODEL_SELECTION_VERSION = "0.5.0"
@@ -48,22 +43,12 @@ class AdaptiveForecastResult:
 
 
 class ForecastModelSelectionService:
-    """Select a forecast model separately for each horizon.
-
-    The selector evaluates transparent statistical candidates on a trailing
-    holdout. No future candles are used by the candidate evaluation: the
-    training prefix ends before the validation suffix.
-    """
+    """Select a forecast model separately for each horizon."""
 
     MIN_CANDLES = 90
     HOLDOUT_SIZE = 20
     MIN_TRAIN_SIZE = 60
-    MODELS = (
-        "HistoricalDrift",
-        "RecentDrift",
-        "MomentumDrift",
-        "MeanReversion",
-    )
+    MODELS = ("HistoricalDrift", "RecentDrift", "MomentumDrift", "MeanReversion")
 
     @staticmethod
     def _returns(candles: Sequence[Candle]) -> list[float]:
@@ -75,8 +60,14 @@ class ForecastModelSelectionService:
         return values
 
     @staticmethod
-    def _predict_return(candles: Sequence[Candle], model: str, horizon: int) -> float:
-        returns = ForecastModelSelectionService._returns(candles)
+    def _slice_to_origin(candles: Sequence[Candle], origin_timestamp) -> list[Candle]:
+        if origin_timestamp is None:
+            return list(candles)
+        return [item for item in candles if item.timestamp <= origin_timestamp]
+
+    @classmethod
+    def _predict_return(cls, candles: Sequence[Candle], model: str, horizon: int) -> float:
+        returns = cls._returns(candles)
         if not returns:
             return 0.0
         if model == "HistoricalDrift":
@@ -97,17 +88,10 @@ class ForecastModelSelectionService:
 
     @classmethod
     def _forecast_price(cls, candles: Sequence[Candle], model: str, horizon: int) -> float:
-        current = candles[-1].close
-        return current * exp(cls._predict_return(candles, model, horizon))
+        return candles[-1].close * exp(cls._predict_return(candles, model, horizon))
 
     @classmethod
-    def _candidate_metrics(
-        cls,
-        train: Sequence[Candle],
-        validation: Sequence[Candle],
-        model: str,
-        horizon: int,
-    ) -> ForecastModelCandidate:
+    def _candidate_metrics(cls, train: Sequence[Candle], validation: Sequence[Candle], model: str, horizon: int) -> ForecastModelCandidate:
         if not validation:
             raise ValueError("Validation candles are required")
         errors: list[float] = []
@@ -118,28 +102,18 @@ class ForecastModelSelectionService:
         for offset in range(max_start):
             prefix = list(train) + list(validation[:offset + 1])
             origin = prefix[-1].close
-            target_index = min(offset + horizon, len(validation) - 1)
-            actual = validation[target_index].close
+            actual = validation[min(offset + horizon, len(validation) - 1)].close
             predicted = cls._forecast_price(prefix, model, horizon)
             if actual:
                 errors.append(abs(predicted - actual) / actual * 100.0)
-            predicted_direction = predicted >= origin
-            actual_direction = actual >= origin
-            directions.append(1.0 if predicted_direction == actual_direction else 0.0)
+            directions.append(1.0 if (predicted >= origin) == (actual >= origin) else 0.0)
         anchor_price = validation[0].close
         expected_price = cls._forecast_price(list(train) + [validation[0]], model, horizon)
         expected_return_pct = (expected_price / anchor_price - 1.0) * 100.0 if anchor_price else 0.0
         mae = mean(errors) if errors else 100.0
         direction_accuracy = mean(directions) * 100.0 if directions else 0.0
         score = cls._score(mae, direction_accuracy)
-        return ForecastModelCandidate(
-            name=model,
-            expected_price=expected_price,
-            expected_return_pct=expected_return_pct,
-            absolute_error_pct=mae,
-            directional_accuracy_pct=direction_accuracy,
-            score=score,
-        )
+        return ForecastModelCandidate(model, expected_price, expected_return_pct, mae, direction_accuracy, score)
 
     @staticmethod
     def _score(mae_pct: float, directional_accuracy_pct: float) -> float:
@@ -148,31 +122,18 @@ class ForecastModelSelectionService:
         return round(error_score * 0.60 + direction_score * 0.40, 4)
 
     @classmethod
-    def _select(
-        cls,
-        candles: Sequence[Candle],
-        horizon: int,
-    ) -> ForecastModelSelectionPoint:
+    def _select(cls, candles: Sequence[Candle], horizon: int) -> ForecastModelSelectionPoint:
         split = len(candles) - cls.HOLDOUT_SIZE
         if split < cls.MIN_TRAIN_SIZE:
             raise ValueError("Недостаточно истории для выбора прогнозной модели")
         train = list(candles[:split])
         validation = list(candles[split:])
-        candidates = tuple(
-            cls._candidate_metrics(train, validation, model, horizon)
-            for model in cls.MODELS
-        )
+        candidates = tuple(cls._candidate_metrics(train, validation, model, horizon) for model in cls.MODELS)
         selected = max(candidates, key=lambda item: (item.score, item.directional_accuracy_pct, -item.absolute_error_pct))
         return ForecastModelSelectionPoint(horizon, selected.name, selected.score, candidates)
 
     @classmethod
-    def _build_selected_point(
-        cls,
-        candles: Sequence[Candle],
-        horizon: int,
-        selected_model: str,
-        confidence: str,
-    ) -> ForecastPoint:
+    def _build_selected_point(cls, candles: Sequence[Candle], horizon: int, selected_model: str, confidence: str) -> ForecastPoint:
         current_price = candles[-1].close
         returns = cls._returns(candles)
         mu = cls._predict_return(candles, selected_model, horizon) / horizon
@@ -187,8 +148,10 @@ class ForecastModelSelectionService:
         ticker: str,
         candles: Iterable[Candle],
         horizons: Sequence[int] = SUPPORTED_HORIZONS,
+        origin_timestamp=None,
     ) -> AdaptiveForecastResult:
         ordered = sorted(list(candles), key=lambda item: item.timestamp)
+        ordered = cls._slice_to_origin(ordered, origin_timestamp)
         if len(ordered) < cls.MIN_CANDLES:
             raise ValueError(f"Для выбора модели требуется не менее {cls.MIN_CANDLES} свечей")
         selections = tuple(cls._select(ordered, horizon) for horizon in sorted(set(horizons)))
@@ -197,14 +160,10 @@ class ForecastModelSelectionService:
             ticker=ticker,
             candles=ordered,
             horizons=horizons,
+            origin_timestamp=origin_timestamp,
         )
         points = tuple(
-            cls._build_selected_point(
-                ordered,
-                selection.horizon_days,
-                selection.selected_model,
-                base.point(selection.horizon_days).confidence,
-            )
+            cls._build_selected_point(ordered, selection.horizon_days, selection.selected_model, base.point(selection.horizon_days).confidence)
             for selection in selections
         )
         forecast = ForecastResult(
