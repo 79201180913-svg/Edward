@@ -54,6 +54,15 @@ def _orders_for_instrument(orders: list[Any], uid: str) -> list[Any]:
     return [order for order in orders if _instrument_uid(order) == str(uid)]
 
 
+def _kind_label(order: Any) -> str:
+    raw = str(_field(order, "order_type", _field(order, "stop_order_type", ""))).upper()
+    if "STOP_LIMIT" in raw:
+        return "Стоп-лимит"
+    if "STOP_LOSS" in raw:
+        return "Стоп-лосс"
+    return "Тейк-профит"
+
+
 def install_stop_order_ui(app_class: type[Any]) -> None:
     if getattr(app_class, "_stop_order_ui_v03_fixed_installed", False):
         return
@@ -86,7 +95,6 @@ def install_stop_order_ui(app_class: type[Any]) -> None:
         ttk.Label(protection, text="Активные защитные заявки", style="Subtitle.TLabel").pack(anchor="w", pady=(12, 4))
         try:
             response = StopOrderService(app.client).get_active(app.context.require_account_id())
-            # StopOrders API is account-scoped; this screen must only show the currently opened instrument.
             orders = _orders_for_instrument(_items(response, "stop_orders"), uid)
         except Exception as exc:
             ttk.Label(protection, text=f"Не удалось получить список: {exc}").pack(anchor="w")
@@ -104,7 +112,7 @@ def install_stop_order_ui(app_class: type[Any]) -> None:
         tree.pack(fill="x")
         for order in orders:
             tree.insert("", "end", values=(
-                "Стоп-лосс" if "STOP_LOSS" in str(_field(order, "order_type", "")) else "Тейк-профит",
+                _kind_label(order),
                 "BUY" if "BUY" in str(_field(order, "direction", "")) else "SELL",
                 _field(order, "lots_requested", ""),
                 _decimal(_field(order, "stop_price", 0)),
