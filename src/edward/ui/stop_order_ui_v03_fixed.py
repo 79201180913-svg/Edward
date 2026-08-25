@@ -118,4 +118,9 @@ def install_stop_order_ui(app_class: type[Any]) -> None:
         except Exception as exc: messagebox.showerror(f"Ошибка {label}", str(exc))
 
     app_class._page_instrument = page_instrument
+    try:
+        from edward.ui.stop_orders_page_v03 import install_stop_orders_page
+        install_stop_orders_page(app_class)
+    except Exception:
+        pass
     app_class._stop_order_ui_v03_fixed_installed = True
