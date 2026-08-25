@@ -63,15 +63,31 @@ def _operation_kind(operation: Any) -> str:
     return "OTHER"
 
 
-def _operation_uid(operation: Any) -> str:
-    return str(
-        field(
-            operation,
-            "instrument_uid",
-            field(operation, "instrumentUid", field(operation, "instrument_id", field(operation, "instrumentId", field(operation, "uid", field(operation, "figi", field(operation, "ticker", "")))))),
-        )
-        or ""
+def _operation_aliases(operation: Any) -> list[str]:
+    names = (
+        "instrument_uid",
+        "instrumentUid",
+        "instrument_id",
+        "instrumentId",
+        "uid",
+        "position_uid",
+        "positionUid",
+        "figi",
+        "ticker",
     )
+    result: list[str] = []
+    for name in names:
+        value = field(operation, name, None)
+        if value not in (None, ""):
+            text = str(value)
+            if text and text not in result:
+                result.append(text)
+    return result
+
+
+def _operation_uid(operation: Any) -> str:
+    aliases = _operation_aliases(operation)
+    return aliases[0] if aliases else ""
 
 
 def _operation_trades(operation: Any) -> list[Any]:
@@ -122,16 +138,22 @@ def _operation_sort_key(operation: Any) -> str:
 
 def build_cost_basis(operations: list[Any]) -> dict[str, dict[str, Decimal]]:
     state: dict[str, dict[str, Decimal]] = {}
+    aliases: dict[str, str] = {}
     for operation in sorted(operations, key=_operation_sort_key):
         kind = _operation_kind(operation)
         if kind not in {"BUY", "SELL"}:
             continue
-        uid = _operation_uid(operation)
+        operation_aliases = _operation_aliases(operation)
+        if not operation_aliases:
+            continue
+        canonical = aliases.get(operation_aliases[0], operation_aliases[0])
+        for alias in operation_aliases:
+            aliases.setdefault(alias, canonical)
         quantity = _operation_quantity(operation)
         payment = _operation_payment(operation)
-        if not uid or quantity <= 0 or payment <= 0:
+        if quantity <= 0 or payment <= 0:
             continue
-        entry = state.setdefault(uid, {"quantity": Decimal("0"), "cost": Decimal("0")})
+        entry = state.setdefault(canonical, {"quantity": Decimal("0"), "cost": Decimal("0")})
         if kind == "BUY":
             entry["quantity"] += quantity
             entry["cost"] += payment
@@ -142,11 +164,20 @@ def build_cost_basis(operations: list[Any]) -> dict[str, dict[str, Decimal]]:
         sold = min(quantity, entry["quantity"])
         entry["quantity"] -= sold
         entry["cost"] -= average * sold
-    return {
-        uid: {"quantity": value["quantity"], "average_price": value["cost"] / value["quantity"], "cost": value["cost"]}
-        for uid, value in state.items()
-        if value["quantity"] > 0
-    }
+    result: dict[str, dict[str, Decimal]] = {}
+    for canonical, value in state.items():
+        if value["quantity"] <= 0:
+            continue
+        computed = {
+            "quantity": value["quantity"],
+            "average_price": value["cost"] / value["quantity"],
+            "cost": value["cost"],
+        }
+        result[canonical] = computed
+    for alias, canonical in aliases.items():
+        if canonical in result:
+            result[alias] = result[canonical]
+    return result
 
 
 def format_money(value: Decimal | None, currency: str) -> str:
