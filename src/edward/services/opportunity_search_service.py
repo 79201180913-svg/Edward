@@ -208,14 +208,18 @@ class OpportunitySearchService:
             selected = self._best_strategy(analysis.strategies)
             market = self.market_context.build(last_price=_field(instrument, "last_price", None), candles=candles, market_regime=analysis.market_regime)
 
+            forecast = None
+            forecast_prices = forecast_up = forecast_down = forecast_low = forecast_high = ()
             self._notify(progress_callback, f"Прогноз цены: {ticker}", progress_base + progress_span * 0.44, current, total)
-            selected_forecast = ForecastModelSelectionService.select_and_forecast(
-                instrument_uid=uid,
-                ticker=ticker,
-                candles=candles,
-            )
-            forecast = selected_forecast.forecast
-            forecast_prices, forecast_up, forecast_down, forecast_low, forecast_high = self._forecast_maps(selected_forecast)
+            if candles and all(isinstance(item, Candle) for item in candles):
+                try:
+                    selected_forecast = ForecastModelSelectionService.select_and_forecast(instrument_uid=uid, ticker=ticker, candles=candles)
+                    forecast = selected_forecast.forecast
+                    forecast_prices, forecast_up, forecast_down, forecast_low, forecast_high = self._forecast_maps(selected_forecast)
+                except Exception:
+                    logger.exception("[OPPORTUNITY FORECAST] uid=%s ticker=%s", uid, ticker)
+            else:
+                logger.debug("[OPPORTUNITY FORECAST] skipped incompatible candle objects uid=%s ticker=%s", uid, ticker)
 
             self._notify(progress_callback, f"Risk / Opportunity: {ticker}", progress_base + progress_span * 0.60, current, total)
             if selected is None:
@@ -226,7 +230,7 @@ class OpportunitySearchService:
                 estimated_trade_value = None
                 if not position_data.is_open and portfolio_data.available_cash is not None and price is not None:
                     estimated_trade_value = max(0.0, portfolio_data.available_cash * 0.10)
-                opportunity = OpportunityEngine.evaluate(analysis, candles, selected, position_weight_pct=position_data.portfolio_weight_pct or portfolio_data.current_weight_pct, target_weight_pct=position_data.target_weight_pct or portfolio_data.target_weight_pct, max_position_weight_pct=portfolio_data.max_position_weight_pct, portfolio_available=portfolio_data.available, available_cash=portfolio_data.available_cash, estimated_trade_value=estimated_trade_value)
+                opportunity = OpportunityEngine.evaluate(analysis, candles, selected, position_weight_pct=position_data.portfolio_weight_pct or position_data.current_weight_pct, target_weight_pct=position_data.target_weight_pct or position_data.target_weight_pct, max_position_weight_pct=portfolio_data.max_position_weight_pct, portfolio_available=portfolio_data.available, available_cash=portfolio_data.available_cash, estimated_trade_value=estimated_trade_value)
                 opportunity_context = opportunity.context
                 risk = getattr(opportunity, "risk", None)
                 risk_score = float(getattr(risk, "score", 0.0) or 0.0)
@@ -260,21 +264,22 @@ class OpportunitySearchService:
             recommended_weight_pct = 0.0
             execution_ready = False
             horizon = self._forecast_horizon(profile)
-            try:
-                plan_action = decision_value if decision_value in {"BUY", "ADD", "HOLD", "REDUCE", "SELL"} else "HOLD"
-                fp = forecast.point(horizon)
-                trade_plan = TradePlanService.build(TradePlanInput(action=plan_action, forecast=fp, confidence=fp.confidence, holding_horizon_days=horizon, entry_price=market.current_price or price, position_weight_pct=position_data.portfolio_weight_pct, target_weight_pct=position_data.target_weight_pct, max_position_weight_pct=portfolio_data.max_position_weight_pct or 10.0))
-                if portfolio_data.portfolio_value and (market.current_price or price) and trade_plan.stop_price:
-                    sizing = PositionSizingService.calculate(PositionSizingInput(action=plan_action, portfolio_value=float(portfolio_data.portfolio_value), current_price=float(market.current_price or price), stop_price=float(trade_plan.stop_price), risk_per_trade_pct=1.0, max_position_weight_pct=float(portfolio_data.max_position_weight_pct or 10.0), available_cash=float(portfolio_data.available_cash or 0.0), current_quantity=int(position_data.quantity or 0), current_weight_pct=float(position_data.portfolio_weight_pct or 0.0), lot_size=1))
-                    recommended_quantity = sizing.recommended_quantity
-                    recommended_value = sizing.recommended_value
-                    recommended_weight_pct = sizing.recommended_weight_pct
-                execution_ready = bool(decision_value in {"BUY", "ADD", "HOLD", "REDUCE", "SELL"} and trade_plan is not None and (decision.status.value == "VALID" if hasattr(decision.status, "value") else True))
-            except Exception:
-                logger.exception("[OPPORTUNITY TRADE PLAN] uid=%s ticker=%s", uid, ticker)
+            if forecast is not None:
+                try:
+                    plan_action = decision_value if decision_value in {"BUY", "ADD", "HOLD", "REDUCE", "SELL"} else "HOLD"
+                    fp = forecast.point(horizon)
+                    trade_plan = TradePlanService.build(TradePlanInput(action=plan_action, forecast=fp, confidence=fp.confidence, holding_horizon_days=horizon, entry_price=market.current_price or price, position_weight_pct=position_data.portfolio_weight_pct, target_weight_pct=position_data.target_weight_pct, max_position_weight_pct=portfolio_data.max_position_weight_pct or 10.0))
+                    if portfolio_data.portfolio_value and (market.current_price or price) and trade_plan.stop_price:
+                        sizing = PositionSizingService.calculate(PositionSizingInput(action=plan_action, portfolio_value=float(portfolio_data.portfolio_value), current_price=float(market.current_price or price), stop_price=float(trade_plan.stop_price), risk_per_trade_pct=1.0, max_position_weight_pct=float(portfolio_data.max_position_weight_pct or 10.0), available_cash=float(portfolio_data.available_cash or 0.0), current_quantity=int(position_data.quantity or 0), current_weight_pct=float(position_data.portfolio_weight_pct or 0.0), lot_size=1))
+                        recommended_quantity = sizing.recommended_quantity
+                        recommended_value = sizing.recommended_value
+                        recommended_weight_pct = sizing.recommended_weight_pct
+                    execution_ready = bool(decision_value in {"BUY", "ADD", "HOLD", "REDUCE", "SELL"} and trade_plan is not None and (decision.status.value == "VALID" if hasattr(decision.status, "value") else True))
+                except Exception:
+                    logger.exception("[OPPORTUNITY TRADE PLAN] uid=%s ticker=%s", uid, ticker)
 
             reason = decision.reason_codes[0] if decision.reason_codes else ""
-            return OpportunitySearchResult(uid, ticker, name, market.current_price if market.current_price is not None else price, analysis.market_regime, decision.strategy_name, decision.strategy_score, decision.opportunity_score, decision_value, decision.status.value, reason, decision.explanation, position_data.quantity, risk_score, forecast.model, forecast.confidence, forecast_prices, forecast_up, forecast_down, forecast_low, forecast_high, trade_plan, recommended_quantity, recommended_value, recommended_weight_pct, execution_ready)
+            return OpportunitySearchResult(uid, ticker, name, market.current_price if market.current_price is not None else price, analysis.market_regime, decision.strategy_name, decision.strategy_score, decision.opportunity_score, decision_value, decision.status.value, reason, decision.explanation, position_data.quantity, risk_score, forecast.model if forecast is not None else None, forecast.confidence if forecast is not None else None, forecast_prices, forecast_up, forecast_down, forecast_low, forecast_high, trade_plan, recommended_quantity, recommended_value, recommended_weight_pct, execution_ready)
         except Exception as exc:
             logger.exception("[OPPORTUNITY ANALYSIS ERROR] uid=%s ticker=%s", uid, ticker)
             return self._unavailable(instrument, price, position_data.quantity, f"Ошибка анализа: {exc}")
@@ -287,7 +292,6 @@ class OpportunitySearchService:
         return max(passing or strategies, key=lambda item: item.score)
 
     def _get_candles(self, instrument_uid: str) -> list[Candle]:
-        """Load enough daily candles for WF/strategy analysis from the T-Invest client."""
         payload: Any = None
         try:
             payload = self.client.get_candles(instrument_uid, interval="CANDLE_INTERVAL_DAY", limit=2400)
