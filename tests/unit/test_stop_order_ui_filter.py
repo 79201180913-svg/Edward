@@ -1,4 +1,4 @@
-from edward.ui.stop_order_ui_v03 import _orders_for_instrument
+from edward.ui.stop_order_ui_v03_fixed import _orders_for_instrument
 
 
 def test_active_stop_orders_are_filtered_by_instrument_uid():
