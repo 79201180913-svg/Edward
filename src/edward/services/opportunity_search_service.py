@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 from edward.services.analysis_service import AnalysisService, Candle, StrategyResult
 from edward.services.decision_engine import (
@@ -22,6 +22,8 @@ from edward.services.instrument_decision_context_service import InstrumentDecisi
 from edward.services.market_decision_context_service import MarketDecisionContextService
 from edward.services.opportunity_engine import OpportunityEngine
 from edward.services.portfolio_decision_context_service import PortfolioDecisionContextService
+
+ProgressCallback = Callable[[str, float, int, int], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,27 +54,68 @@ class OpportunitySearchService:
         self.market_context = MarketDecisionContextService()
         self.portfolio_context = PortfolioDecisionContextService()
 
-    def scan(self, *, profile: str = "medium_term", instrument_kind: str = "SHARE") -> list[OpportunitySearchResult]:
+    @staticmethod
+    def _notify(progress_callback: ProgressCallback | None, stage: str, percent: float, current: int, total: int) -> None:
+        if progress_callback is None:
+            return
+        try:
+            progress_callback(stage, round(max(0.0, min(100.0, percent)), 1), current, total)
+        except Exception:
+            # Progress reporting must never break the trading analysis pipeline.
+            pass
+
+    def scan(
+        self,
+        *,
+        profile: str = "medium_term",
+        instrument_kind: str = "SHARE",
+        progress_callback: ProgressCallback | None = None,
+    ) -> list[OpportunitySearchResult]:
+        self._notify(progress_callback, "Загрузка списка инструментов", 2.0, 0, 0)
         instruments = self.catalog.list(instrument_kind, trade_available_only=True)
+        total = len(instruments)
+        self._notify(progress_callback, f"Инструменты загружены: {total}", 8.0, 0, total)
+
+        self._notify(progress_callback, "Загрузка Portfolio Context", 11.0, 0, total)
         account_id = self._active_account()
         positions = self.client.get_positions(account_id) if account_id else None
         portfolio = self.client.get_portfolio(account_id) if account_id else None
+        self._notify(progress_callback, "Portfolio Context загружен", 14.0, 0, total)
 
         results: list[OpportunitySearchResult] = []
+        valid_index = 0
         for instrument in instruments:
             uid = str(_field(instrument, "uid", _field(instrument, "instrument_uid", "")))
             if not uid:
                 continue
-            results.append(
-                self._evaluate_instrument(
-                    instrument=instrument,
-                    profile=profile,
-                    positions=positions,
-                    portfolio=portfolio,
-                )
+            valid_index += 1
+            progress_base = 15.0 + ((valid_index - 1) / max(1, total)) * 80.0
+            progress_span = 80.0 / max(1, total)
+            ticker = str(_field(instrument, "ticker", ""))
+
+            self._notify(progress_callback, f"Market Data: {ticker}", progress_base, valid_index, total)
+            result = self._evaluate_instrument(
+                instrument=instrument,
+                profile=profile,
+                positions=positions,
+                portfolio=portfolio,
+                progress_callback=progress_callback,
+                progress_base=progress_base,
+                progress_span=progress_span,
+                current=valid_index,
+                total=total,
+            )
+            results.append(result)
+            self._notify(
+                progress_callback,
+                f"Обработано: {ticker}",
+                progress_base + progress_span,
+                valid_index,
+                total,
             )
 
-        return sorted(
+        self._notify(progress_callback, "Ранжирование возможностей", 97.0, valid_index, total)
+        results = sorted(
             results,
             key=lambda item: (
                 item.decision not in {"BUY", "WAIT"},
@@ -80,6 +123,8 @@ class OpportunitySearchService:
                 -item.opportunity_score,
             ),
         )
+        self._notify(progress_callback, "Сканирование завершено", 100.0, valid_index, total)
+        return results
 
     def _evaluate_instrument(
         self,
@@ -88,27 +133,41 @@ class OpportunitySearchService:
         profile: str,
         positions: Any,
         portfolio: Any,
+        progress_callback: ProgressCallback | None = None,
+        progress_base: float = 15.0,
+        progress_span: float = 80.0,
+        current: int = 0,
+        total: int = 0,
     ) -> OpportunitySearchResult:
         uid = str(_field(instrument, "uid", _field(instrument, "instrument_uid", "")))
         ticker = str(_field(instrument, "ticker", ""))
         name = str(_field(instrument, "name", ""))
         raw_price = _field(instrument, "last_price", None)
         price = _float_or_none(raw_price)
-        position_context = self.portfolio_context.build(
-            positions=positions,
-            portfolio=portfolio,
-            instrument_uid=uid,
-        ) if positions is not None else _empty_portfolio()
+        position_context = (
+            self.portfolio_context.build(
+                positions=positions,
+                portfolio=portfolio,
+                instrument_uid=uid,
+            )
+            if positions is not None
+            else _empty_portfolio()
+        )
 
         try:
             trading_status = _field(instrument, "trading_status", None)
             instrument_data = self.instrument_context.build(instrument, trading_status)
+            self._notify(progress_callback, f"Market Data: candles {ticker}", progress_base + progress_span * 0.08, current, total)
             candles = self._get_candles(uid)
             if len(candles) < 150:
                 return self._unavailable(
-                    instrument, price, position_context.position.quantity, "Недостаточно исторических данных для анализа."
+                    instrument,
+                    price,
+                    position_context.position.quantity,
+                    "Недостаточно исторических данных для анализа.",
                 )
 
+            self._notify(progress_callback, f"Анализ стратегий: {ticker}", progress_base + progress_span * 0.28, current, total)
             analysis = self.analysis.analyze(
                 instrument_uid=uid,
                 ticker=ticker,
@@ -122,6 +181,7 @@ class OpportunitySearchService:
                 market_regime=analysis.market_regime,
             )
 
+            self._notify(progress_callback, f"Risk / Opportunity: {ticker}", progress_base + progress_span * 0.58, current, total)
             if selected is None:
                 opportunity_context = OpportunityContext(
                     opportunity_score=0.0,
@@ -174,6 +234,7 @@ class OpportunitySearchService:
                 available=portfolio_data.available if account_id_or_none(positions, portfolio) else True,
             )
 
+            self._notify(progress_callback, f"Decision Engine: {ticker}", progress_base + progress_span * 0.82, current, total)
             request = DecisionRequest(
                 scenario=Scenario.OPPORTUNITY_SEARCH,
                 instrument=instrument_data,
@@ -210,7 +271,12 @@ class OpportunitySearchService:
                 quantity=position_data.quantity,
             )
         except Exception as exc:
-            return self._unavailable(instrument, price, position_context.position.quantity, f"Ошибка анализа: {exc}")
+            return self._unavailable(
+                instrument,
+                price,
+                position_context.position.quantity,
+                f"Ошибка анализа: {exc}",
+            )
 
     @staticmethod
     def _best_strategy(strategies: list[StrategyResult]) -> StrategyResult | None:
