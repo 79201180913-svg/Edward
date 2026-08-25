@@ -39,6 +39,7 @@ from edward.ui.orders_page_v03 import install as install_orders_page_v03
 from edward.ui.orders_page_v03_ticker_fix import install as install_orders_ticker_fix
 from edward.ui.settings_page_v04 import install_settings_page
 from edward.ui.analysis_ui_v04 import install_analysis_ui
+from edward.ui.decision_context_ui_v04 import install_decision_context_ui
 from edward.config.settings import Environment
 
 
@@ -91,6 +92,7 @@ install_orders_page_v03(EdwardApp)
 install_orders_ticker_fix(TInvestAdapterClient)
 install_settings_page(EdwardApp)
 install_analysis_ui(EdwardApp, TInvestAdapterClient)
+install_decision_context_ui(EdwardApp)
 
 
 if __name__ == "__main__":
