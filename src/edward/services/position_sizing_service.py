@@ -65,12 +65,27 @@ class PositionSizingService:
         risk_amount = data.portfolio_value * data.risk_per_trade_pct / 100.0
 
         if action in {"REDUCE", "SELL"}:
-            target_quantity = 0 if action == "SELL" else int(data.current_quantity // data.lot_size) * data.lot_size // 2
-            reduction_quantity = int(max(0, target_quantity))
+            available_quantity = max(0, int(data.current_quantity))
+            if action == "SELL":
+                target_quantity = (available_quantity // data.lot_size) * data.lot_size
+            else:
+                target_quantity = ((available_quantity // data.lot_size) * data.lot_size) // 2
+                target_quantity = (target_quantity // data.lot_size) * data.lot_size
+
+            reduction_quantity = max(0, target_quantity)
             value = reduction_quantity * data.current_price
             weight = value / data.portfolio_value * 100.0
             risk_pct = value / data.portfolio_value * 100.0
-            return PositionSizingResult(reduction_quantity, value, weight, risk_amount, risk_pct, False, False, reduction_quantity)
+            return PositionSizingResult(
+                recommended_quantity=reduction_quantity,
+                recommended_value=round(value, 8),
+                recommended_weight_pct=round(weight, 8),
+                risk_amount=round(risk_amount, 8),
+                risk_pct=round(risk_pct, 8),
+                capped_by_cash=False,
+                capped_by_max_position=False,
+                reduction_quantity=reduction_quantity,
+            )
 
         if stop_distance <= 0 or data.risk_per_trade_pct <= 0:
             risk_quantity = 0
