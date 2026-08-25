@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
 from enum import StrEnum
-from typing import Mapping, Optional
+from typing import Mapping, Optional, Protocol
 
 
 class ExecutionDecision(StrEnum):
@@ -98,7 +98,13 @@ class ExecutionRequest:
             raise ValueError("ticker is required")
         if self.quantity <= 0:
             raise ValueError("quantity must be positive")
-        if self.decision not in {ExecutionDecision.BUY, ExecutionDecision.ADD, ExecutionDecision.HOLD, ExecutionDecision.REDUCE, ExecutionDecision.SELL}:
+        if self.decision not in {
+            ExecutionDecision.BUY,
+            ExecutionDecision.ADD,
+            ExecutionDecision.HOLD,
+            ExecutionDecision.REDUCE,
+            ExecutionDecision.SELL,
+        }:
             raise ValueError("decision is not executable")
 
 
@@ -147,3 +153,16 @@ class ExecutionJournalEntry:
     updated_at: datetime = field(default_factory=_utc_now)
     error_code: Optional[str] = None
     error_message: Optional[str] = None
+
+
+class ExecutionJournal(Protocol):
+    """Persistence boundary for execution attempts; implementations may use SQLite or another store."""
+
+    def append(self, entry: ExecutionJournalEntry) -> None:
+        ...
+
+    def update(self, entry: ExecutionJournalEntry) -> None:
+        ...
+
+    def get(self, execution_id: str) -> Optional[ExecutionJournalEntry]:
+        ...
