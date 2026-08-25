@@ -22,7 +22,7 @@ FILTER_LABELS = ("Все", "Купить", "Ждать", "Удерживать",
 FILTER_CODE_BY_LABEL = dict(zip(FILTER_LABELS, FILTER_VALUES))
 REGIME_LABELS = {"TREND": "Тренд", "Trend": "Тренд", "MOMENTUM": "Импульс", "Momentum": "Импульс", "BREAKOUT": "Пробой", "Breakout": "Пробой", "MEAN_REVERSION": "Возврат к среднему", "Mean Reversion": "Возврат к среднему", "UNCLEAR": "Неясный", "UNCLEAR_REGIME": "Неясный"}
 STRATEGY_LABELS = {"Trend Following": "Следование за трендом", "Momentum": "Импульсная стратегия", "Breakout": "Пробой", "Mean Reversion": "Возврат к среднему"}
-REASON_LABELS = {"STRATEGY_QUALITY_FAIL": "Стратегия не прошла контроль качества", "RISK_FAIL": "Не пройдены риск-ограничения", "MARKET_REGIME_UNFAVORABLE": "Рыночный режим неблагоприятен", "PORTFOLIO_CONSTRAINT": "Ограничение портфеля", "INSTRUMENT_BUY_UNAVAILABLE": "Покупка инструмента недоступна", "ENTRY_NOT_READY": "Условия входа ещё не готовы", "BUY_CONDITIONS_MET": "Условия покупки выполнены", "OPPORTUNITY_BELOW_BUY_THRESHOLD": "Привлекательность ниже порога покупки", "OPPORTUNITY_TOO_LOW": "Торговая возможность недостаточно привлекательна", "RISK_DETERIORATION": "Риск позиции ухудшился", "CRITICAL_RISK": "Критический риск", "EXIT_SIGNAL": "Получен сигнал на выход", "POSITION_ABOVE_TARGET": "Доля позиции выше целевой", "POSITION_BELOW_TARGET": "Доля позиции ниже целевой", "STRATEGY_QUALITY_DEGRADED": "Качество стратегии ухудшилось", "SIGNAL_DEGRADED": "Торговый сигнал ухудшился", "ANALYSIS_UNAVAILABLE": "Недостаточно данных для принятия решения", "NO_ACCEPTABLE_STRATEGY": "Нет приемлемой стратегии"}
+REASON_LABELS = {"STRATEGY_QUALITY_FAIL": "Стратегия не прошла контроль качества", "RISK_FAIL": "Не пройдены риск-ограничения", "RISK_DETERIORATION": "Риск позиции ухудшился", "CRITICAL_RISK": "Критический риск", "MARKET_REGIME_UNFAVORABLE": "Рыночный режим неблагоприятен", "PORTFOLIO_CONSTRAINT": "Ограничение портфеля", "INSTRUMENT_BUY_UNAVAILABLE": "Покупка инструмента недоступна", "ENTRY_NOT_READY": "Условия входа ещё не готовы", "BUY_CONDITIONS_MET": "Условия покупки выполнены", "OPPORTUNITY_BELOW_BUY_THRESHOLD": "Привлекательность ниже порога покупки", "OPPORTUNITY_TOO_LOW": "Торговая возможность недостаточно привлекательна", "EXIT_SIGNAL": "Получен сигнал на выход", "POSITION_ABOVE_TARGET": "Доля позиции выше целевой", "POSITION_BELOW_TARGET": "Доля позиции ниже целевой", "STRATEGY_QUALITY_DEGRADED": "Качество стратегии ухудшилось", "SIGNAL_DEGRADED": "Торговый сигнал ухудшился", "ANALYSIS_UNAVAILABLE": "Недостаточно данных для принятия решения", "NO_ACCEPTABLE_STRATEGY": "Нет приемлемой стратегии"}
 
 
 def _label(mapping: dict[str, str], value: str | None, default: str = "—") -> str:
@@ -90,9 +90,9 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
         ttk.Label(filter_frame, text="Фильтр решения:").pack(side="left")
         filter_combo = ttk.Combobox(filter_frame, textvariable=decision_var, state="readonly", values=FILTER_LABELS, width=15); filter_combo.pack(side="left", padx=(6, 12))
 
-        columns = ("ticker", "price", "regime", "strategy", "strategy_score", "opportunity_score", "decision", "reason")
+        columns = ("ticker", "price", "regime", "strategy", "strategy_score", "risk_score", "opportunity_score", "decision", "reason")
         tree = ttk.Treeview(frame, columns=columns, show="headings", height=20)
-        for key, label, width in (("ticker", "Инструмент", 110), ("price", "Цена", 90), ("regime", "Рыночный режим", 120), ("strategy", "Стратегия", 190), ("strategy_score", "Балл стратегии", 115), ("opportunity_score", "Балл возможности", 125), ("decision", "Решение", 105), ("reason", "Причина", 300)):
+        for key, label, width in (("ticker", "Инструмент", 105), ("price", "Цена", 85), ("regime", "Рыночный режим", 115), ("strategy", "Стратегия", 180), ("strategy_score", "Балл стратегии", 105), ("risk_score", "Риск", 75), ("opportunity_score", "Балл возможности", 120), ("decision", "Решение", 100), ("reason", "Причина", 300)):
             tree.heading(key, text=label); tree.column(key, width=width, anchor="center" if key not in {"ticker", "strategy", "reason"} else "w")
         tree.pack(fill="both", expand=True)
         summary_var = tk.StringVar(value="Покупка: 0   Ждать: 0   Удерживать: 0   Увеличить: 0   Сократить: 0   Продать: 0   Пропустить: 0   Недоступны: 0   Показано: 0")
@@ -121,7 +121,7 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
 
         def row_values(item: Any) -> tuple[str, ...]:
             decision = item.decision or "PASS"
-            return (item.ticker, f"{item.price:.4f}" if item.price is not None else "—", _label(REGIME_LABELS, item.market_regime), _label(STRATEGY_LABELS, item.strategy_name), f"{item.strategy_score:.1f}", f"{item.opportunity_score:.1f}", _label(DECISION_LABELS, decision), _label(REASON_LABELS, item.reason))
+            return (item.ticker, f"{item.price:.4f}" if item.price is not None else "—", _label(REGIME_LABELS, item.market_regime), _label(STRATEGY_LABELS, item.strategy_name), f"{item.strategy_score:.1f}", f"{getattr(item, 'risk_score', 0.0):.1f}", f"{item.opportunity_score:.1f}", _label(DECISION_LABELS, decision), _label(REASON_LABELS, item.reason))
 
         def update_summary() -> None:
             if not page_alive(): return
