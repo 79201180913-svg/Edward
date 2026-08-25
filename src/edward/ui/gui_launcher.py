@@ -39,7 +39,7 @@ from edward.config.settings import Environment
 def _contract_adapter_start(token: str, environment: Environment):
     root = Path(__file__).resolve().parents[3]
     python_exe = root / ".venv-tinvest" / "Scripts" / "python.exe"
-    adapter_script = root / "runtime" / "tinvest_adapter_fixed.py"
+    adapter_script = root / "runtime" / "tinvest_adapter_operations_fixed.py"
     if not python_exe.exists():
         raise RuntimeError(f"T-Invest Python runtime not found: {python_exe}")
     if not adapter_script.exists():
