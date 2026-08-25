@@ -22,12 +22,14 @@ def _candles(self, payload: dict[str, Any]) -> dict[str, Any]:
     end = str(payload.get("to") or "")
     interval = str(payload.get("interval") or "CANDLE_INTERVAL_DAY")
     limit = max(1, min(int(payload.get("limit", 2400)), 2400))
+
+    # T-Invest API error 30220: candleSourceType cannot be used together
+    # with limit. When limit is present, omit candleSourceType completely.
     request = {
         "from": start,
         "to": end,
         "interval": interval,
         "instrumentId": instrument_id,
-        "candleSourceType": str(payload.get("candle_source_type") or "CANDLE_SOURCE_EXCHANGE"),
         "limit": limit,
     }
     return self._rest_request("MarketDataService/GetCandles", request)
