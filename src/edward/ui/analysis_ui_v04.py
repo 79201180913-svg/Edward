@@ -12,10 +12,17 @@ from edward.services.analysis_service import AnalysisService, Candle
 from edward.services.decision_engine import (
     DecisionEngine,
     DecisionRequest,
+    InstrumentContextData,
+    MarketContextData,
     OpportunityContext,
+    PortfolioContextData,
     PositionContextData,
+    RiskContextData,
     Scenario,
+    StrategyContextData,
 )
+from edward.services.instrument_decision_context_service import InstrumentDecisionContextService
+from edward.services.market_decision_context_service import MarketDecisionContextService
 from edward.services.opportunity_engine import OpportunityEngine
 from edward.services.quality_gate_diagnostics import quality_gate_reasons
 from edward.storage.analysis_repository import AnalysisSnapshotRepository
@@ -85,6 +92,66 @@ def _position_context(app: Any, instrument_uid: str) -> PositionContextData:
     except Exception:
         return PositionContextData()
     return PositionContextData()
+
+
+def _build_decision_request(app: Any, detail: dict[str, Any], result: Any, opportunity: Any, strategy_result: Any | None, position: PositionContextData, profile: str) -> DecisionRequest:
+    instrument_uid = str(detail.get("instrument_uid") or detail.get("uid") or "")
+    trading_status = None
+    try:
+        trading_status = app.client.get_trading_status(instrument_uid)
+    except Exception:
+        pass
+    instrument_context = InstrumentDecisionContextService().build(detail, trading_status)
+
+    last_price = None
+    try:
+        prices = app.client.get_last_prices([instrument_uid])
+        items = prices if isinstance(prices, list) else _field(prices, "last_prices", []) or []
+        price_item = next((item for item in items if str(_field(item, "instrument_uid", _field(item, "uid", ""))) == instrument_uid), None)
+        last_price = _field(price_item, "price") if price_item is not None else None
+    except Exception:
+        pass
+
+    market_context = MarketDecisionContextService().build(
+        last_price=last_price,
+        candles=[],
+        market_regime=getattr(result, "market_regime", None),
+        regime_compatible=opportunity.context.market_regime_compatible,
+        entry_ok=opportunity.context.entry_ok,
+    )
+
+    strategy_context = StrategyContextData(
+        strategy_name=strategy_result.strategy if strategy_result else None,
+        strategy_score=strategy_result.score if strategy_result else 0.0,
+        stability_score=strategy_result.stability if strategy_result else None,
+        quality_gate=bool(strategy_result and strategy_result.quality_gate),
+        entry_signal=bool(strategy_result and strategy_result.quality_gate and opportunity.context.entry_ok),
+        exit_signal=False,
+    )
+    risk_context = RiskContextData(
+        risk_gate=opportunity.context.risk_ok,
+        critical_risk=opportunity.context.critical_risk,
+        risk_reward=None,
+    )
+    portfolio_context = PortfolioContextData(
+        current_weight_pct=position.portfolio_weight_pct,
+        target_weight_pct=position.target_weight_pct,
+        allows_buy=True,
+        allows_add=False,
+    )
+    return DecisionRequest(
+        scenario=Scenario.SINGLE_INSTRUMENT,
+        instrument=instrument_context,
+        market=market_context,
+        strategy=strategy_context,
+        risk=risk_context,
+        position=position,
+        portfolio=portfolio_context,
+        opportunity=opportunity.context,
+        portfolio_allows_buy=True,
+        portfolio_allows_add=False,
+        profile=profile,
+    )
 
 
 def install_analysis_ui(app_class: type[Any], client_class: type[Any]) -> None:
@@ -190,20 +257,9 @@ def _open_analysis(app: Any) -> None:
             return
         opportunity = OpportunityEngine.evaluate(result, candles, strategy_result)
         position = state.get("position") or PositionContextData()
-        decision = DecisionEngine.evaluate(
-            DecisionRequest(
-                scenario=Scenario.SINGLE_INSTRUMENT,
-                position=position,
-                opportunity=opportunity.context,
-                strategy_score=strategy_result.score if strategy_result else 0.0,
-                strategy_name=strategy_result.strategy if strategy_result else None,
-                strategy_quality=bool(strategy_result and strategy_result.quality_gate),
-                portfolio_allows_add=False,
-                exit_signal=False,
-                profile=profile_var.get(),
-            )
-        )
-        decision_var.set(f"Решение: {decision.decision.value}")
+        request = _build_decision_request(app, detail, result, opportunity, strategy_result, position, profile_var.get())
+        decision = DecisionEngine.evaluate(request)
+        decision_var.set(f"Решение: {decision.decision.value if decision.decision else '—'}")
         decision_scores.set(
             f"Strategy Score: {decision.strategy_score:.1f}    "
             f"Opportunity Score: {decision.opportunity_score:.1f}    "
@@ -254,7 +310,8 @@ def _open_analysis(app: Any) -> None:
             position = _position_context(app, str(detail["instrument_uid"]))
             winner = next((item for item in result.strategies if item.quality_gate), None)
             opportunity = OpportunityEngine.evaluate(result, candles, winner)
-            decision = DecisionEngine.evaluate(DecisionRequest(scenario=Scenario.SINGLE_INSTRUMENT, position=position, opportunity=opportunity.context, strategy_score=winner.score if winner else 0.0, strategy_name=winner.strategy if winner else None, strategy_quality=bool(winner), portfolio_allows_add=False, exit_signal=False, profile=profile_var.get()))
+            decision_request = _build_decision_request(app, detail, result, opportunity, winner, position, profile_var.get())
+            decision = DecisionEngine.evaluate(decision_request)
             run_id = service.save(result)
             AnalysisSnapshotRepository(store).save(result, run_id, decision)
             app.after(0, lambda result=result, candles=candles, position=position: (set_running(False), status_var.set("Анализ и Decision Engine завершены и сохранены"), set_result(result, candles, position)))
