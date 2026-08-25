@@ -230,7 +230,7 @@ class OpportunitySearchService:
                 estimated_trade_value = None
                 if not position_data.is_open and portfolio_data.available_cash is not None and price is not None:
                     estimated_trade_value = max(0.0, portfolio_data.available_cash * 0.10)
-                opportunity = OpportunityEngine.evaluate(analysis, candles, selected, position_weight_pct=position_data.portfolio_weight_pct or position_data.current_weight_pct, target_weight_pct=position_data.target_weight_pct or position_data.target_weight_pct, max_position_weight_pct=portfolio_data.max_position_weight_pct, portfolio_available=portfolio_data.available, available_cash=portfolio_data.available_cash, estimated_trade_value=estimated_trade_value)
+                opportunity = OpportunityEngine.evaluate(analysis, candles, selected, position_weight_pct=position_data.portfolio_weight_pct or portfolio_data.current_weight_pct, target_weight_pct=position_data.target_weight_pct or portfolio_data.target_weight_pct, max_position_weight_pct=portfolio_data.max_position_weight_pct, portfolio_available=portfolio_data.available, available_cash=portfolio_data.available_cash, estimated_trade_value=estimated_trade_value)
                 opportunity_context = opportunity.context
                 risk = getattr(opportunity, "risk", None)
                 risk_score = float(getattr(risk, "score", 0.0) or 0.0)
