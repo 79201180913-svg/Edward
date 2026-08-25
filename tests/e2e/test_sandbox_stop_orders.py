@@ -78,9 +78,10 @@ def _create_stop(
     stop_price: Decimal,
     price: Decimal | None = None,
 ) -> dict:
-    # Current PostSandboxStopOrder contract requires both price and stopPrice.
-    # For a market child order there is no user-visible limit price, so use the
-    # already step-aligned stop price as the required child-order price.
+    # PostSandboxStopOrder requires both `price` and `stopPrice`.
+    # For regular STOP_LOSS / TAKE_PROFIT market child orders, `price` is the
+    # required child-order price and must remain a valid current market price.
+    # The trigger itself is carried by `stopPrice`.
     effective_price = price if price is not None else stop_price
     payload = {
         "account_id": account_id,
@@ -124,9 +125,11 @@ def test_sandbox_protective_order_create_get_cancel(kind, stop_multiplier, side,
     uid, _balance, current = _position_in_account(account_id)
     step = _get_price_step(uid)
     stop_price = _align_price(current * stop_multiplier, step)
+    execution_price = _align_price(current, step)
     assert stop_price > 0
+    assert execution_price > 0
 
-    created = _create_stop(account_id, uid, side, kind, 1, stop_price)
+    created = _create_stop(account_id, uid, side, kind, 1, stop_price, price=execution_price)
     stop_id = str(created.get("stop_order_id") or "")
     assert stop_id, f"Sandbox did not return stop_order_id: {created}"
 
