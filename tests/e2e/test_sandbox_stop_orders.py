@@ -11,8 +11,8 @@ from urllib.request import Request, urlopen
 import pytest
 
 from tests.e2e.test_sandbox_end_to_end import (
-    ADAPTER_URL,
     _get_account_id,
+    _get_tradable_instrument,
     _items,
     _number,
     _request,
@@ -21,9 +21,13 @@ from tests.e2e.test_sandbox_end_to_end import (
 
 
 def _request_stop(path: str, payload: dict | None = None) -> dict:
+    # Reuse the adapter URL selected by the shared sandbox fixture. The fixture
+    # may allocate a free port instead of using the default 8765.
+    from tests.e2e import test_sandbox_end_to_end as e2e
+
     body = None if payload is None else json.dumps(payload).encode("utf-8")
     request = Request(
-        f"{ADAPTER_URL}{path}",
+        f"{e2e.ADAPTER_URL}{path}",
         data=body,
         method="POST",
         headers={"Content-Type": "application/json", "Accept": "application/json"},
@@ -41,14 +45,13 @@ def _position_in_account(account_id: str) -> tuple[str, int, Decimal]:
     for item in _items(positions, "securities"):
         balance = int(abs(_number(item.get("balance", 0))))
         uid = str(item.get("instrument_uid") or item.get("uid") or "")
-        if not uid or balance <= 0:
-            continue
-        prices = _request("POST", "/market/last-prices", {"instrument_ids": [uid]})
-        price_items = _items(prices, "last_prices")
-        if price_items:
-            price = _number(price_items[0].get("price", 0))
-            if price > 0:
-                return uid, balance, price
+        if uid and balance > 0:
+            prices = _request("POST", "/market/last-prices", {"instrument_ids": [uid]})
+            prices_items = _items(prices, "last_prices")
+            if prices_items:
+                price = _number(prices_items[0].get("price", 0))
+                if price > 0:
+                    return uid, balance, price
     pytest.skip("Sandbox account has no position suitable for protective-order E2E")
 
 
@@ -80,24 +83,22 @@ def _create_stop(
 
 
 def _list_stops(account_id: str) -> list[dict]:
-    return _items(_request_stop("/stop-orders", {"account_id": account_id}), "stop_orders")
+    response = _request_stop("/stop-orders", {"account_id": account_id})
+    return _items(response, "stop_orders")
 
 
 def _cancel_stop(account_id: str, stop_order_id: str) -> dict:
-    return _request_stop(
-        "/stop-orders/cancel",
-        {"account_id": account_id, "stop_order_id": stop_order_id},
-    )
+    return _request_stop("/stop-orders/cancel", {"account_id": account_id, "stop_order_id": stop_order_id})
 
 
 @pytest.mark.parametrize(
-    "kind, stop_multiplier",
+    "kind, stop_multiplier, side",
     [
-        ("STOP_ORDER_TYPE_STOP_LOSS", Decimal("0.50")),
-        ("STOP_ORDER_TYPE_TAKE_PROFIT", Decimal("1.50")),
+        ("STOP_ORDER_TYPE_STOP_LOSS", Decimal("0.50"), "STOP_ORDER_DIRECTION_SELL"),
+        ("STOP_ORDER_TYPE_TAKE_PROFIT", Decimal("1.50"), "STOP_ORDER_DIRECTION_SELL"),
     ],
 )
-def test_sandbox_protective_order_create_get_cancel(kind, stop_multiplier, sandbox_adapter):
+def test_sandbox_protective_order_create_get_cancel(kind, stop_multiplier, side, sandbox_adapter):
     if os.getenv("EDWARD_E2E_TRADING", "0") != "1":
         pytest.skip("Protective-order E2E requires EDWARD_E2E_TRADING=1")
 
@@ -106,20 +107,14 @@ def test_sandbox_protective_order_create_get_cancel(kind, stop_multiplier, sandb
     stop_price = (current * stop_multiplier).quantize(Decimal("0.0001"))
     assert stop_price > 0
 
-    created = _create_stop(
-        account_id,
-        uid,
-        "STOP_ORDER_DIRECTION_SELL",
-        kind,
-        1,
-        stop_price,
-    )
+    created = _create_stop(account_id, uid, side, kind, 1, stop_price)
     stop_id = str(created.get("stop_order_id") or "")
     assert stop_id, f"Sandbox did not return stop_order_id: {created}"
 
     try:
         active = _list_stops(account_id)
-        assert any(str(item.get("stop_order_id") or "") == stop_id for item in active), active
+        matching = [item for item in active if str(item.get("stop_order_id") or "") == stop_id]
+        assert matching, f"Created stop order is missing from GetSandboxStopOrders: {active}"
     finally:
         _cancel_stop(account_id, stop_id)
 
@@ -156,6 +151,7 @@ def test_sandbox_stop_limit_create_get_cancel(sandbox_adapter):
 
     try:
         active = _list_stops(account_id)
-        assert any(str(item.get("stop_order_id") or "") == stop_id for item in active), active
+        matching = [item for item in active if str(item.get("stop_order_id") or "") == stop_id]
+        assert matching, f"Created stop-limit is missing from GetSandboxStopOrders: {active}"
     finally:
         _cancel_stop(account_id, stop_id)
