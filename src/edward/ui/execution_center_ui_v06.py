@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from edward.domain.execution import ExecutionEventType, ExecutionStatus
+from edward.domain.execution import ExecutionEvent, ExecutionEventType, ExecutionStatus
 
 
 _STATUS_LABELS = {
     ExecutionStatus.CREATED: "Создано",
     ExecutionStatus.VALIDATING: "Проверка",
-    ExecutionStatus.READY: "Готово",
+    ExecutionStatus.READY: "Готово к исполнению",
     ExecutionStatus.WAITING_CONFIRMATION: "Ожидает подтверждения",
     ExecutionStatus.SUBMITTING: "Отправка заявки",
     ExecutionStatus.SUBMITTED: "Заявка отправлена",
@@ -52,12 +52,26 @@ def execution_status_label(status: Any) -> str:
     return _STATUS_LABELS.get(key, key.value)
 
 
-def execution_event_text(event_type: Any) -> str:
-    try:
-        key = event_type if isinstance(event_type, ExecutionEventType) else ExecutionEventType(str(getattr(event_type, "value", event_type)))
-    except (ValueError, TypeError):
-        return str(getattr(event_type, "value", event_type))
-    return _EVENT_LABELS.get(key, key.value)
+def execution_event_text(event: Any) -> str:
+    """Return a localized event line for an ExecutionEvent."""
+    if isinstance(event, ExecutionEvent):
+        event_label = _EVENT_LABELS.get(event.event_type, event.event_type.value)
+        return f"{event_label}: {event.message}"
+
+    if isinstance(event, ExecutionEventType):
+        return _EVENT_LABELS.get(event, event.value)
+
+    event_type = getattr(event, "event_type", None)
+    message = getattr(event, "message", None)
+    if event_type is not None:
+        try:
+            key = event_type if isinstance(event_type, ExecutionEventType) else ExecutionEventType(str(getattr(event_type, "value", event_type)))
+            event_label = _EVENT_LABELS.get(key, key.value)
+        except (ValueError, TypeError):
+            event_label = str(getattr(event_type, "value", event_type))
+        return f"{event_label}: {message}" if message else event_label
+
+    return str(getattr(event, "value", event))
 
 
 def build_execution_center_snapshot(
@@ -80,7 +94,7 @@ def build_execution_center_snapshot(
         "events": [
             {
                 "time": getattr(event, "created_at", None),
-                "text": execution_event_text(getattr(event, "event_type", event)),
+                "text": execution_event_text(event),
                 "status": execution_status_label(getattr(event, "status", "")),
                 "message": getattr(event, "message", ""),
             }
