@@ -78,6 +78,10 @@ def _create_stop(
     stop_price: Decimal,
     price: Decimal | None = None,
 ) -> dict:
+    # Current PostSandboxStopOrder contract requires both price and stopPrice.
+    # For a market child order there is no user-visible limit price, so use the
+    # already step-aligned stop price as the required child-order price.
+    effective_price = price if price is not None else stop_price
     payload = {
         "account_id": account_id,
         "instrument_uid": uid,
@@ -85,7 +89,7 @@ def _create_stop(
         "direction": side,
         "quantity": quantity,
         "stop_price": str(stop_price),
-        "price": str(price) if price is not None else None,
+        "price": str(effective_price),
         "stop_order_type": kind,
         "expiration_type": "STOP_ORDER_EXPIRATION_TYPE_GOOD_TILL_CANCEL",
         "exchange_order_type": "EXCHANGE_ORDER_TYPE_LIMIT" if kind.endswith("STOP_LIMIT") else "EXCHANGE_ORDER_TYPE_MARKET",
