@@ -47,7 +47,10 @@ class InstrumentCatalogService:
         logger.info("[PRICE DEBUG] First UIDs: %s", ids[:5])
 
         prices = self._batched_index(ids, self.client.get_last_prices, "last_prices", "last-prices")
-        statuses = self._batched_index(ids, self.client.get_trading_statuses, "trading_statuses", "trading-statuses")
+        status_fetcher = getattr(self.client, "get_trading_statuses", None)
+        statuses = self._batched_index(ids, status_fetcher, "trading_statuses", "trading-statuses") if callable(status_fetcher) else {}
+        if not callable(status_fetcher):
+            logger.info("[MARKET DATA] Bulk trading-status method unavailable; using instrument status fields when present")
 
         logger.info(
             "[PRICE DEBUG] MarketData merged response: prices=%d statuses=%d instruments=%d",
@@ -64,7 +67,7 @@ class InstrumentCatalogService:
             item = dict(instrument) if isinstance(instrument, dict) else instrument
             uid = _uid(instrument)
             price_item = prices.get(uid)
-            status = statuses.get(uid)
+            status = statuses.get(uid) or instrument
             raw_price = _field(price_item, "price", _field(price_item, "last_price", ""))
             normalized_price = _quotation_to_string(raw_price)
 
@@ -95,8 +98,8 @@ class InstrumentCatalogService:
             fields = {
                 "instrument_kind": kind,
                 "last_price": normalized_price,
-                "buy_available": _field(instrument, "buy_available_flag", False),
-                "sell_available": _field(instrument, "sell_available_flag", False),
+                "buy_available": _field(instrument, "buy_available_flag", _field(instrument, "buy_available", False)),
+                "sell_available": _field(instrument, "sell_available_flag", _field(instrument, "sell_available", False)),
                 "api_trade_available": api_available,
                 "trading_available": trade_available,
                 "trading_status": trading_status,
@@ -166,7 +169,7 @@ class InstrumentCatalogService:
         label: str,
     ) -> dict[str, Any]:
         merged: dict[str, Any] = {}
-        if not ids:
+        if not ids or not callable(fetcher):
             return merged
 
         for batch_number, batch in enumerate(_chunks(ids, self.MARKET_DATA_BATCH_SIZE), start=1):
