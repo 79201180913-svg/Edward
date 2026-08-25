@@ -5,8 +5,22 @@ import tkinter as tk
 from tkinter import ttk
 from typing import Any
 
-from edward.services.opportunity_search_service import OpportunitySearchService
+from edward.services.opportunity_search_service import (
+    INSTRUMENT_KIND_ALL,
+    MARKET_SCOPE,
+    PORTFOLIO_SCOPE,
+    OpportunitySearchService,
+)
 from edward.ui.instrument_catalog import INSTRUMENT_KINDS
+
+
+SCOPE_VALUES = (
+    (MARKET_SCOPE, "Торгуемые инструменты"),
+    (PORTFOLIO_SCOPE, "Мой портфель"),
+)
+
+
+FILTER_VALUES = ("ALL", "BUY", "WAIT", "HOLD", "ADD", "REDUCE", "SELL", "PASS")
 
 
 def install_opportunity_search_ui(app_class: type[Any]) -> None:
@@ -35,17 +49,45 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
 
         top = ttk.Frame(frame)
         top.pack(fill="x", pady=(0, 10))
-        ttk.Label(top, text="Возможности рынка", style="Title.TLabel").pack(side="left")
+        title_var = tk.StringVar(value="Возможности рынка")
+        ttk.Label(top, textvariable=title_var, style="Title.TLabel").pack(side="left")
 
+        scope_var = tk.StringVar(value=MARKET_SCOPE)
         profile_var = tk.StringVar(value="medium_term")
         kind_var = tk.StringVar(value="Shares")
         status_var = tk.StringVar(value="Готово")
         progress_var = tk.DoubleVar(value=0.0)
         progress_text_var = tk.StringVar(value="Готово")
-        ttk.Label(top, text="Профиль:").pack(side="left", padx=(25, 5))
-        ttk.Combobox(top, textvariable=profile_var, state="readonly", values=("long_term", "medium_term", "speculative"), width=14).pack(side="left")
+
+        ttk.Label(top, text="Область:").pack(side="left", padx=(25, 5))
+        scope_combo = ttk.Combobox(
+            top,
+            textvariable=scope_var,
+            state="readonly",
+            values=[label for _, label in SCOPE_VALUES],
+            width=20,
+        )
+        scope_combo.pack(side="left")
+
+        ttk.Label(top, text="Профиль:").pack(side="left", padx=(15, 5))
+        profile_combo = ttk.Combobox(
+            top,
+            textvariable=profile_var,
+            state="readonly",
+            values=("long_term", "medium_term", "speculative"),
+            width=14,
+        )
+        profile_combo.pack(side="left")
+
         ttk.Label(top, text="Тип:").pack(side="left", padx=(15, 5))
-        ttk.Combobox(top, textvariable=kind_var, state="readonly", values=[label for _, label in INSTRUMENT_KINDS], width=14).pack(side="left")
+        kind_combo = ttk.Combobox(
+            top,
+            textvariable=kind_var,
+            state="readonly",
+            values=["Все"] + [label for _, label in INSTRUMENT_KINDS],
+            width=14,
+        )
+        kind_combo.pack(side="left")
         ttk.Label(top, textvariable=status_var).pack(side="left", padx=18)
         scan_button = ttk.Button(top, text="Сканировать")
         scan_button.pack(side="right")
@@ -66,7 +108,13 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
         filter_frame.pack(fill="x", pady=(0, 8))
         decision_var = tk.StringVar(value="ALL")
         ttk.Label(filter_frame, text="Фильтр:").pack(side="left")
-        filter_combo = ttk.Combobox(filter_frame, textvariable=decision_var, state="readonly", values=("ALL", "BUY", "WAIT", "PASS"), width=10)
+        filter_combo = ttk.Combobox(
+            filter_frame,
+            textvariable=decision_var,
+            state="readonly",
+            values=FILTER_VALUES,
+            width=10,
+        )
         filter_combo.pack(side="left", padx=(6, 12))
 
         columns = ("ticker", "price", "regime", "strategy", "strategy_score", "opportunity_score", "decision", "reason")
@@ -79,16 +127,24 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
             ("strategy_score", "Strategy Score", 110),
             ("opportunity_score", "Opportunity Score", 125),
             ("decision", "Decision", 90),
-            ("reason", "Причина", 230),
+            ("reason", "Причина", 260),
         ):
             tree.heading(key, text=label)
             tree.column(key, width=width, anchor="center" if key not in {"ticker", "strategy", "reason"} else "w")
         tree.pack(fill="both", expand=True)
 
-        summary_var = tk.StringVar(value="BUY: 0   WAIT: 0   PASS: 0   Недоступны: 0")
+        summary_var = tk.StringVar(value="BUY: 0   WAIT: 0   HOLD: 0   ADD: 0   REDUCE: 0   SELL: 0   PASS: 0   Недоступны: 0")
         ttk.Label(frame, textvariable=summary_var).pack(anchor="w", pady=(8, 0))
 
         state: dict[str, Any] = {"results": []}
+
+        def _scope_label() -> str:
+            return dict(SCOPE_VALUES).get(scope_var.get(), "Торгуемые инструменты")
+
+        def _kind_code() -> str:
+            if kind_var.get() == "Все":
+                return INSTRUMENT_KIND_ALL
+            return next(kind_code for kind_code, label in INSTRUMENT_KINDS if label == kind_var.get())
 
         def render() -> None:
             selected = decision_var.get()
@@ -98,11 +154,7 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
             visible = []
             for item in results:
                 decision = item.decision or "PASS"
-                if selected == "BUY" and decision != "BUY":
-                    continue
-                if selected == "WAIT" and decision != "WAIT":
-                    continue
-                if selected == "PASS" and decision not in {"PASS", None}:
+                if selected != "ALL" and decision != selected:
                     continue
                 visible.append(item)
                 tree.insert(
@@ -119,11 +171,37 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
                         item.reason,
                     ),
                 )
-            buy = sum(1 for item in results if item.decision == "BUY")
-            wait = sum(1 for item in results if item.decision == "WAIT")
-            passed = sum(1 for item in results if item.decision == "PASS" or item.decision is None)
+            counts = {value: 0 for value in FILTER_VALUES if value != "ALL"}
+            for item in results:
+                decision = item.decision or "PASS"
+                counts[decision] = counts.get(decision, 0) + 1
             unavailable = sum(1 for item in results if item.status == "ANALYSIS_UNAVAILABLE")
-            summary_var.set(f"BUY: {buy}   WAIT: {wait}   PASS: {passed}   Недоступны: {unavailable}   Показано: {len(visible)}")
+            summary_var.set(
+                "   ".join(
+                    (
+                        f"BUY: {counts.get('BUY', 0)}",
+                        f"WAIT: {counts.get('WAIT', 0)}",
+                        f"HOLD: {counts.get('HOLD', 0)}",
+                        f"ADD: {counts.get('ADD', 0)}",
+                        f"REDUCE: {counts.get('REDUCE', 0)}",
+                        f"SELL: {counts.get('SELL', 0)}",
+                        f"PASS: {counts.get('PASS', 0)}",
+                        f"Недоступны: {unavailable}",
+                        f"Показано: {len(visible)}",
+                    )
+                )
+            )
+
+        def update_scope_ui(*_args: Any) -> None:
+            is_portfolio = scope_var.get() == PORTFOLIO_SCOPE
+            title_var.set("Анализ портфеля" if is_portfolio else "Возможности рынка")
+            if is_portfolio:
+                decision_var.set("ALL")
+            state["results"] = []
+            progress_var.set(0.0)
+            progress_text_var.set("Готово")
+            status_var.set("Готово")
+            render()
 
         def update_progress(stage: str, percent: float, current: int, total: int) -> None:
             progress_var.set(percent)
@@ -136,11 +214,15 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
 
         def scan() -> None:
             scan_button.configure(state="disabled")
+            scope_combo.configure(state="disabled")
+            profile_combo.configure(state="disabled")
+            kind_combo.configure(state="disabled")
             filter_combo.configure(state="disabled")
             progress_var.set(0.0)
             progress_text_var.set("Подготовка сканирования — 0%")
             status_var.set("Запуск сканирования")
-            kind = next(kind_code for kind_code, label in INSTRUMENT_KINDS if label == kind_var.get())
+            scope = scope_var.get()
+            kind = _kind_code()
             profile = profile_var.get()
 
             def worker() -> None:
@@ -148,6 +230,7 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
                     results = OpportunitySearchService(self.client).scan(
                         profile=profile,
                         instrument_kind=kind,
+                        scope=scope,
                         progress_callback=progress_from_worker,
                     )
                     self.after(0, lambda: finish(results))
@@ -159,18 +242,26 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
         def finish(results: list[Any]) -> None:
             state["results"] = results
             progress_var.set(100.0)
-            progress_text_var.set(f"Сканирование завершено — 100% ({len(results)} инструментов)")
-            status_var.set(f"Сканирование завершено: {len(results)} инструментов")
+            label = "позиций" if scope_var.get() == PORTFOLIO_SCOPE else "инструментов"
+            progress_text_var.set(f"Анализ завершён — 100% ({len(results)} {label})")
+            status_var.set(f"Анализ завершён: {len(results)} {label}")
             scan_button.configure(state="normal")
+            scope_combo.configure(state="readonly")
+            profile_combo.configure(state="readonly")
+            kind_combo.configure(state="readonly")
             filter_combo.configure(state="readonly")
             render()
 
         def fail(exc: Exception) -> None:
-            progress_text_var.set(f"Сканирование завершено с ошибкой на {progress_var.get():.0f}%")
+            progress_text_var.set(f"Анализ завершён с ошибкой на {progress_var.get():.0f}%")
             status_var.set(f"Ошибка: {exc}")
             scan_button.configure(state="normal")
+            scope_combo.configure(state="readonly")
+            profile_combo.configure(state="readonly")
+            kind_combo.configure(state="readonly")
             filter_combo.configure(state="readonly")
 
+        scope_combo.bind("<<ComboboxSelected>>", update_scope_ui)
         scan_button.configure(command=scan)
         filter_combo.bind("<<ComboboxSelected>>", lambda _event: render())
         render()
