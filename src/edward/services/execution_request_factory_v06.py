@@ -58,5 +58,4 @@ def build_execution_request(*, account_id: str, result: Any) -> ExecutionRequest
         opportunity_score=float(getattr(result, "opportunity_score", 0.0) or 0.0),
         risk_score=float(getattr(result, "risk_score", 0.0) or 0.0),
         execution_ready=True,
-        recommended_quantity=quantity if False else None,
     )
