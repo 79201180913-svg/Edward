@@ -24,6 +24,7 @@ def install_execution_runtime_bootstrap(app_class: type[Any]) -> None:
         controlled = ControlledExecutionService(engine, validator)
         bridge = ExecutionBridgeService(controlled)
         controller = ExecutionCenterController(controlled)
+        engine.event_callback = controller.accept_event
         action = ExecutionQueueActionController(
             bridge=bridge,
             account_id_provider=lambda: self.context.require_account_id(),
