@@ -25,6 +25,7 @@ from edward.ui.price_fallback_fix import install_price_fallback
 from edward.ui.version_ui_fix import install_version_ui_fix
 from edward.ui.instrument_screen import install_instrument_screen
 from edward.ui.instrument_screen_ux_v03 import install_instrument_screen_ux
+from edward.ui.stop_order_ui_v03 import install_stop_order_ui
 from edward.config.settings import Environment
 
 
@@ -71,6 +72,7 @@ install_final_contract_override(EdwardApp)
 install_version_ui_fix(EdwardApp)
 install_instrument_screen(EdwardApp)
 install_instrument_screen_ux(EdwardApp)
+install_stop_order_ui(EdwardApp)
 
 
 if __name__ == "__main__":
