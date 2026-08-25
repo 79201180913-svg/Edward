@@ -6,7 +6,12 @@ from statistics import mean, pstdev
 from typing import Iterable, Sequence
 
 from edward.services.analysis_service import Candle
-from edward.services.forecast_service import ForecastPoint, ForecastResult, ForecastService
+from edward.services.forecast_service import (
+    SUPPORTED_HORIZONS,
+    ForecastPoint,
+    ForecastResult,
+    ForecastService,
+)
 
 
 MODEL_SELECTION_VERSION = "0.5.0"
@@ -181,7 +186,7 @@ class ForecastModelSelectionService:
         instrument_uid: str,
         ticker: str,
         candles: Iterable[Candle],
-        horizons: Sequence[int] = ForecastService.SUPPORTED_HORIZONS,
+        horizons: Sequence[int] = SUPPORTED_HORIZONS,
     ) -> AdaptiveForecastResult:
         ordered = sorted(list(candles), key=lambda item: item.timestamp)
         if len(ordered) < cls.MIN_CANDLES:
