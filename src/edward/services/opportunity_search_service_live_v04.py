@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any, Callable
 
 from edward.config.application_settings import ApplicationSettingsStore
@@ -27,6 +28,32 @@ class LiveOpportunitySearchService(OpportunitySearchService):
     def cache_info(self) -> dict[str, int]:
         analysis = self.analysis
         return analysis.cache_info() if isinstance(analysis, CachedAnalysisService) else {"hits": 0, "misses": 0, "total": 0}
+
+    @staticmethod
+    def _enforce_execution_readiness(result: OpportunitySearchResult) -> OpportunitySearchResult:
+        decision = str(result.decision or "").upper()
+        if decision not in {"BUY", "ADD", "HOLD", "REDUCE", "SELL"}:
+            return result
+
+        ready = bool(result.execution_ready)
+        plan = getattr(result, "trade_plan", None)
+        risk_reward = getattr(plan, "risk_reward", None) if plan is not None else None
+
+        # A failed strategy quality gate or a non-positive trade plan cannot be sent
+        # to a future execution engine, even when the legacy v0.4 decision branch
+        # produced an actionable decision.
+        if str(result.reason or "") in {"STRATEGY_QUALITY_FAIL", "RISK_FAIL", "CRITICAL_RISK"}:
+            ready = False
+        if plan is None:
+            ready = False
+        if decision in {"BUY", "ADD", "REDUCE", "SELL"} and (risk_reward is None or risk_reward <= 0):
+            ready = False
+        if decision in {"REDUCE", "SELL"} and int(getattr(result, "recommended_quantity", 0) or 0) <= 0:
+            ready = False
+
+        if ready == result.execution_ready:
+            return result
+        return replace(result, execution_ready=ready)
 
     def scan(
         self,
@@ -77,6 +104,7 @@ class LiveOpportunitySearchService(OpportunitySearchService):
                 current=valid_index,
                 total=total,
             )
+            result = self._enforce_execution_readiness(result)
             results.append(result)
             if result_callback is not None:
                 try:
