@@ -22,15 +22,16 @@ def _new_position_request(**kwargs) -> DecisionRequest:
             market_regime_compatible=True,
         ),
     )
-    return DecisionRequest(
-        scenario=Scenario.SINGLE_INSTRUMENT,
-        strategy_name="Momentum",
-        strategy_score=86.0,
-        strategy_quality=True,
-        opportunity=opportunity,
-        portfolio_allows_buy=True,
-        **kwargs,
-    )
+    values = {
+        "scenario": Scenario.SINGLE_INSTRUMENT,
+        "strategy_name": "Momentum",
+        "strategy_score": 86.0,
+        "strategy_quality": True,
+        "opportunity": opportunity,
+        "portfolio_allows_buy": True,
+    }
+    values.update(kwargs)
+    return DecisionRequest(**values)
 
 
 def _open_position_request(**kwargs) -> DecisionRequest:
@@ -44,16 +45,17 @@ def _open_position_request(**kwargs) -> DecisionRequest:
             market_regime_compatible=True,
         ),
     )
-    return DecisionRequest(
-        strategy_name="Momentum",
-        strategy_score=86.0,
-        strategy_quality=True,
-        opportunity=opportunity,
-        portfolio_allows_buy=True,
-        portfolio_allows_add=True,
-        position=PositionContextData(quantity=100, portfolio_weight_pct=5.0, target_weight_pct=10.0),
-        **kwargs,
-    )
+    values = {
+        "strategy_name": "Momentum",
+        "strategy_score": 86.0,
+        "strategy_quality": True,
+        "opportunity": opportunity,
+        "portfolio_allows_buy": True,
+        "portfolio_allows_add": True,
+        "position": PositionContextData(quantity=100, portfolio_weight_pct=5.0, target_weight_pct=10.0),
+    }
+    values.update(kwargs)
+    return DecisionRequest(**values)
 
 
 def test_no_position_buy_requires_portfolio_gate():
