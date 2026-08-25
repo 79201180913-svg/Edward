@@ -204,12 +204,10 @@ def _sandbox_operations(self, account_id, limit=1000):
         method = getattr(service, "get_sandbox_operations", None)
     if method is None:
         raise RuntimeError("T-Invest SDK sandbox service does not provide operations methods")
-
     try:
         result = method(account_id=str(account_id))
     except TypeError:
         result = method(str(account_id))
-
     result = _adapter.message_to_dict(result)
     items = result.get("items")
     if isinstance(items, list):
@@ -236,26 +234,34 @@ def _sandbox_create_order(self, payload):
     else:
         raise ValueError(f"Unsupported sandbox order type: {payload['order_type']!r}")
 
+    request_id = str(payload.get("request_id") or payload.get("order_id") or "")
+    instrument_id = str(payload.get("instrument_uid") or payload.get("instrument_id") or "")
+    if not request_id:
+        raise ValueError("Sandbox order request_id/order_id is required")
+    if not instrument_id:
+        raise ValueError("Sandbox order instrument_uid/instrument_id is required")
+
     request = {
         "quantity": str(int(payload["quantity"])),
         "direction": direction,
         "accountId": str(payload["account_id"]),
         "orderType": order_type,
-        "orderId": str(payload.get("request_id") or payload.get("order_id") or ""),
-        "instrumentId": str(payload.get("instrument_uid") or payload.get("instrument_id") or ""),
+        "orderId": request_id,
+        "instrumentId": instrument_id,
     }
     if payload.get("price") is not None:
         request["price"] = _adapter._quotation_payload(payload["price"])
-
-    if not request["orderId"]:
-        raise ValueError("Sandbox order request_id/order_id is required")
-    if not request["instrumentId"]:
-        raise ValueError("Sandbox order instrument_uid/instrument_id is required")
+    if payload.get("time_in_force") is not None:
+        request["timeInForce"] = str(payload["time_in_force"])
+    if payload.get("price_type") is not None:
+        request["priceType"] = str(payload["price_type"])
+    if payload.get("confirm_margin_trade") is not None:
+        request["confirmMarginTrade"] = bool(payload["confirm_margin_trade"])
 
     result = self._rest_request("SandboxService/PostSandboxOrder", request)
     _adapter.logger.info(
         "[SANDBOX ORDER REST] request_id=%s order_id=%s status=%s",
-        request["orderId"],
+        request_id,
         result.get("order_id"),
         result.get("execution_report_status"),
     )
@@ -278,14 +284,7 @@ def _list_instruments(self, kind="SHARE", trade=True):
         "instrumentStatus": "INSTRUMENT_STATUS_BASE" if trade else "INSTRUMENT_STATUS_ALL",
         "instrumentExchange": "INSTRUMENT_EXCHANGE_UNSPECIFIED",
     }
-    data = self._rest_request(f"InstrumentsService/{method_name}", request)
-    _adapter.logger.info(
-        "[INSTRUMENTS REST] kind=%s method=%s count=%s",
-        key,
-        method_name,
-        len(data.get("instruments", []) or []),
-    )
-    return data
+    return self._rest_request(f"InstrumentsService/{method_name}", request)
 
 
 def _last_prices(self, ids):
