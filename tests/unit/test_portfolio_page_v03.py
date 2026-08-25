@@ -49,3 +49,12 @@ def test_build_cost_basis_reduces_cost_on_sell_using_current_average():
     assert result["A"]["quantity"] == Decimal("6")
     assert result["A"]["cost"] == Decimal("600")
     assert result["A"]["average_price"] == Decimal("100")
+
+
+def test_build_cost_basis_exposes_aliases_for_position_matching():
+    result = build_cost_basis([
+        {"operation_type": "OPERATION_TYPE_BUY", "instrument_uid": "UID-1", "figi": "FIGI-1", "ticker": "AAA", "quantity": "10", "payment": {"units": "1000", "nano": 0}},
+    ])
+    assert result["UID-1"]["average_price"] == Decimal("100")
+    assert result["FIGI-1"]["average_price"] == Decimal("100")
+    assert result["AAA"]["average_price"] == Decimal("100")
