@@ -32,6 +32,7 @@ from edward.ui.order_ticket_v03 import install_order_ticket
 from edward.ui.stop_limit_ui_v03 import install_stop_limit_ui
 from edward.ui.instrument_scroll_v03 import install_instrument_scroll
 from edward.ui.portfolio_pnl_v03 import install_portfolio_pnl
+from edward.ui.portfolio_pnl_v03_fix import install_portfolio_pnl_fix
 from edward.config.settings import Environment
 
 
@@ -84,6 +85,7 @@ install_order_ticket(EdwardApp)
 install_stop_limit_ui(EdwardApp)
 install_instrument_scroll(EdwardApp)
 install_portfolio_pnl(EdwardApp)
+install_portfolio_pnl_fix(EdwardApp)
 
 
 if __name__ == "__main__":
