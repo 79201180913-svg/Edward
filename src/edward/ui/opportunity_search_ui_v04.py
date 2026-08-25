@@ -40,6 +40,8 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
         profile_var = tk.StringVar(value="medium_term")
         kind_var = tk.StringVar(value="Shares")
         status_var = tk.StringVar(value="Готово")
+        progress_var = tk.DoubleVar(value=0.0)
+        progress_text_var = tk.StringVar(value="Готово")
         ttk.Label(top, text="Профиль:").pack(side="left", padx=(25, 5))
         ttk.Combobox(top, textvariable=profile_var, state="readonly", values=("long_term", "medium_term", "speculative"), width=14).pack(side="left")
         ttk.Label(top, text="Тип:").pack(side="left", padx=(15, 5))
@@ -47,6 +49,18 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
         ttk.Label(top, textvariable=status_var).pack(side="left", padx=18)
         scan_button = ttk.Button(top, text="Сканировать")
         scan_button.pack(side="right")
+
+        progress_frame = ttk.Frame(frame)
+        progress_frame.pack(fill="x", pady=(0, 10))
+        ttk.Label(progress_frame, textvariable=progress_text_var).pack(anchor="w", pady=(0, 4))
+        progress_bar = ttk.Progressbar(
+            progress_frame,
+            orient="horizontal",
+            mode="determinate",
+            maximum=100.0,
+            variable=progress_var,
+        )
+        progress_bar.pack(fill="x")
 
         filter_frame = ttk.Frame(frame)
         filter_frame.pack(fill="x", pady=(0, 8))
@@ -111,15 +125,31 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
             unavailable = sum(1 for item in results if item.status == "ANALYSIS_UNAVAILABLE")
             summary_var.set(f"BUY: {buy}   WAIT: {wait}   PASS: {passed}   Недоступны: {unavailable}   Показано: {len(visible)}")
 
+        def update_progress(stage: str, percent: float, current: int, total: int) -> None:
+            progress_var.set(percent)
+            suffix = f" ({current}/{total})" if total else ""
+            progress_text_var.set(f"{stage} — {percent:.0f}%{suffix}")
+            status_var.set(f"Выполняется: {stage}")
+
+        def progress_from_worker(stage: str, percent: float, current: int, total: int) -> None:
+            self.after(0, lambda: update_progress(stage, percent, current, total))
+
         def scan() -> None:
             scan_button.configure(state="disabled")
-            status_var.set("Сканирование рынка…")
+            filter_combo.configure(state="disabled")
+            progress_var.set(0.0)
+            progress_text_var.set("Подготовка сканирования — 0%")
+            status_var.set("Запуск сканирования")
             kind = next(kind_code for kind_code, label in INSTRUMENT_KINDS if label == kind_var.get())
             profile = profile_var.get()
 
             def worker() -> None:
                 try:
-                    results = OpportunitySearchService(self.client).scan(profile=profile, instrument_kind=kind)
+                    results = OpportunitySearchService(self.client).scan(
+                        profile=profile,
+                        instrument_kind=kind,
+                        progress_callback=progress_from_worker,
+                    )
                     self.after(0, lambda: finish(results))
                 except Exception as exc:
                     self.after(0, lambda: fail(exc))
@@ -128,13 +158,18 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
 
         def finish(results: list[Any]) -> None:
             state["results"] = results
+            progress_var.set(100.0)
+            progress_text_var.set(f"Сканирование завершено — 100% ({len(results)} инструментов)")
             status_var.set(f"Сканирование завершено: {len(results)} инструментов")
             scan_button.configure(state="normal")
+            filter_combo.configure(state="readonly")
             render()
 
         def fail(exc: Exception) -> None:
+            progress_text_var.set(f"Сканирование завершено с ошибкой на {progress_var.get():.0f}%")
             status_var.set(f"Ошибка: {exc}")
             scan_button.configure(state="normal")
+            filter_combo.configure(state="readonly")
 
         scan_button.configure(command=scan)
         filter_combo.bind("<<ComboboxSelected>>", lambda _event: render())
