@@ -28,6 +28,19 @@ def decimal(value: Any) -> Decimal:
         return Decimal("0")
 
 
+def format_price_increment(value: Any) -> str:
+    """Never display a missing/zero placeholder as a real price step."""
+    if value in (None, ""):
+        return "—"
+    try:
+        amount = decimal(value)
+        if amount <= Decimal("0"):
+            return "—"
+        return format(amount, "f")
+    except Exception:
+        return str(value)
+
+
 def items(response: Any, *names: str) -> list[Any]:
     if isinstance(response, list):
         return response
@@ -99,8 +112,6 @@ def install_instrument_screen(app_class: type[Any]) -> None:
 
         catalog = instrument_detail_from_catalog(self.instrument_detail)
         uid = catalog["instrument_uid"]
-        # Instrument identity/metadata comes from the already loaded catalog.
-        # Market data and trading status remain live API calls.
         fresh = catalog
         try:
             prices = items(self.client.get_last_prices([uid]), "last_prices")
@@ -129,7 +140,7 @@ def install_instrument_screen(app_class: type[Any]) -> None:
         change = last_price - close_price if close_price else Decimal("0")
         change_pct = (change / close_price * Decimal("100")) if close_price else Decimal("0")
         _card(self, summary, "Изменение", f"{change:,.4f} ({change_pct:,.2f}%)", 1)
-        _card(self, summary, "Шаг цены", str(field(fresh, "min_price_increment", catalog["min_price_increment"])), 2)
+        _card(self, summary, "Шаг цены", format_price_increment(field(fresh, "min_price_increment", catalog.get("min_price_increment"))), 2)
         trading_status = field(status, "trading_status", field(status, "status", ""))
         _card(self, summary, "Торговый статус", str(trading_status or "Неизвестно"), 3)
 
