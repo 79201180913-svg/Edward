@@ -36,7 +36,10 @@ class LiveOpportunitySearchService(OpportunitySearchService):
         scope: str = MARKET_SCOPE,
         progress_callback: ProgressCallback | None = None,
         result_callback: ResultCallback | None = None,
+        force_recompute: bool = False,
     ) -> list[OpportunitySearchResult]:
+        if force_recompute and isinstance(self.analysis, CachedAnalysisService):
+            self.analysis.force_recompute = True
         scope = str(scope or MARKET_SCOPE).upper()
         if scope not in {"MARKET", "PORTFOLIO"}:
             raise ValueError(f"Unsupported opportunity scope: {scope}")
@@ -45,7 +48,6 @@ class LiveOpportunitySearchService(OpportunitySearchService):
         account_id = self._active_account()
         positions = self.client.get_positions(account_id) if account_id else None
         portfolio = self.client.get_portfolio(account_id) if account_id else None
-
         instruments = self._build_universe(scope=scope, instrument_kind=instrument_kind, positions=positions)
         total = len(instruments)
         scope_title = "торговых инструментов" if scope == "MARKET" else "позиций портфеля"
