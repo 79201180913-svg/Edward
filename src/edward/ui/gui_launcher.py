@@ -33,6 +33,7 @@ from edward.ui.stop_limit_ui_v03 import install_stop_limit_ui
 from edward.ui.instrument_scroll_v03 import install_instrument_scroll
 from edward.ui.portfolio_cost_basis_v03_fix import install as install_portfolio_cost_basis_fix
 from edward.ui.portfolio_page_v03 import install_portfolio_page
+from edward.ui.portfolio_instrument_names_v03_fix import install as install_portfolio_instrument_names_fix
 from edward.config.settings import Environment
 
 
@@ -86,6 +87,7 @@ install_stop_limit_ui(EdwardApp)
 install_instrument_scroll(EdwardApp)
 install_portfolio_cost_basis_fix()
 install_portfolio_page(EdwardApp)
+install_portfolio_instrument_names_fix(EdwardApp)
 
 
 if __name__ == "__main__":
