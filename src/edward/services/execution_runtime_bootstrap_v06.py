@@ -8,6 +8,7 @@ from edward.services.execution_engine import ExecutionEngine
 from edward.services.execution_queue_action_v06 import ExecutionQueueActionController
 from edward.services.execution_center_controller_v06 import ExecutionCenterController
 from edward.services.live_pretrade_validator_v06 import LivePreTradeValidator
+from edward.services.tinvest_execution_adapter import TInvestExecutionAdapter
 
 
 def install_execution_runtime_bootstrap(app_class: type[Any]) -> None:
@@ -17,7 +18,8 @@ def install_execution_runtime_bootstrap(app_class: type[Any]) -> None:
 
     def wrapped_init(self: Any, *args: Any, **kwargs: Any) -> None:
         original_init(self, *args, **kwargs)
-        engine = ExecutionEngine(adapter=None)
+        adapter = TInvestExecutionAdapter(self.client)
+        engine = ExecutionEngine(adapter=adapter)
         validator = LivePreTradeValidator(self.client)
         controlled = ControlledExecutionService(engine, validator)
         bridge = ExecutionBridgeService(controlled)
@@ -27,6 +29,7 @@ def install_execution_runtime_bootstrap(app_class: type[Any]) -> None:
             account_id_provider=lambda: self.context.require_account_id(),
         )
         self._execution_engine = engine
+        self._execution_adapter = adapter
         self._execution_pretrade_validator = validator
         self._execution_confirmation_service = controlled
         self._execution_bridge = bridge
