@@ -35,6 +35,13 @@ class StrategyResult:
     score: float
     train_score: float = 0.0
     test_score: float = 0.0
+    wf_windows: int = 0
+    positive_return_windows: int = 0
+    risk_ok_windows: int = 0
+    positive_sharpe_windows: int = 0
+    return_consistency: float = 0.0
+    risk_consistency: float = 0.0
+    sharpe_consistency: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,9 +187,16 @@ class AnalysisService:
         return False
 
     @classmethod
-    def backtest(cls, candles: list[Candle], strategy: str, parameters: dict[str, Any]) -> StrategyResult:
+    def backtest(
+        cls,
+        candles: list[Candle],
+        strategy: str,
+        parameters: dict[str, Any],
+        profile: str = "medium_term",
+    ) -> StrategyResult:
         if len(candles) < 10:
             return StrategyResult(strategy, parameters, 0.0, 0.0, 0.0, 0, 0.0, False, 0.0)
+        cfg = cls._profile_params(profile)
         equity = [1.0]
         trade_returns: list[float] = []
         in_position = False
@@ -213,7 +227,15 @@ class AnalysisService:
         positive = sum(1 for value in trade_returns if value > 0)
         stability = positive / trades if trades else 0.0
         quality = total_return > 0 and dd <= 0.35 and trades >= 3 and stability >= 0.45
-        score = cls._score(total_return * 100.0, dd * 100.0, sharpe, trades, stability * 100.0)
+        score = cls._score(
+            total_return * 100.0,
+            dd * 100.0,
+            sharpe,
+            trades,
+            stability * 100.0,
+            return_target_pct=cfg["return_target_pct"],
+            drawdown_limit_pct=cfg["max_drawdown_pct"],
+        )
         return StrategyResult(strategy, dict(parameters), total_return * 100, dd * 100, sharpe, trades, stability * 100, quality, score)
 
     @staticmethod
@@ -270,9 +292,9 @@ class AnalysisService:
         while start + train_size + test_size <= len(candles):
             train = candles[start:start + train_size]
             test = candles[start + train_size:start + train_size + test_size]
-            candidates = [cls.backtest(train, strategy, params) for params in cls.parameter_grid(strategy, profile)]
+            candidates = [cls.backtest(train, strategy, params, profile) for params in cls.parameter_grid(strategy, profile)]
             best = max(candidates, key=lambda item: item.score)
-            tested = cls.backtest(test, strategy, best.parameters)
+            tested = cls.backtest(test, strategy, best.parameters, profile)
             windows.append(
                 StrategyResult(
                     strategy,
@@ -304,6 +326,13 @@ class AnalysisService:
                 0.0,
                 mean(item.train_score for item in windows) if windows else 0.0,
                 mean(item.test_score for item in windows) if windows else 0.0,
+                window_count,
+                sum(1 for item in windows if item.return_pct > 0),
+                sum(1 for item in windows if item.max_drawdown_pct <= max_drawdown_pct),
+                sum(1 for item in windows if item.sharpe > 0),
+                0.0,
+                0.0,
+                0.0,
             )
 
         positive_return_windows = sum(1 for item in windows if item.return_pct > 0)
@@ -323,14 +352,14 @@ class AnalysisService:
         avg_return = mean(item.return_pct for item in windows)
         avg_dd = mean(item.max_drawdown_pct for item in windows)
         avg_sharpe = mean(item.sharpe for item in windows)
-        avg_trades = sum(item.trades for item in windows)
+        total_trades = sum(item.trades for item in windows)
         avg_train_score = mean(item.train_score for item in windows)
         avg_test_score = mean(item.test_score for item in windows)
         score = cls._score(
             avg_return,
             avg_dd,
             avg_sharpe,
-            avg_trades,
+            total_trades,
             stability,
             return_target_pct=return_target_pct,
             drawdown_limit_pct=max_drawdown_pct,
@@ -352,12 +381,19 @@ class AnalysisService:
             avg_return,
             avg_dd,
             avg_sharpe,
-            avg_trades,
+            total_trades,
             stability,
             quality,
             score,
             avg_train_score,
             avg_test_score,
+            window_count,
+            positive_return_windows,
+            risk_ok_windows,
+            positive_sharpe_windows,
+            return_consistency,
+            risk_consistency,
+            sharpe_consistency,
         )
 
     def analyze(
@@ -427,6 +463,13 @@ class AnalysisService:
                     "score": item.score,
                     "train_score": item.train_score,
                     "test_score": item.test_score,
+                    "wf_windows": item.wf_windows,
+                    "positive_return_windows": item.positive_return_windows,
+                    "risk_ok_windows": item.risk_ok_windows,
+                    "positive_sharpe_windows": item.positive_sharpe_windows,
+                    "return_consistency": item.return_consistency,
+                    "risk_consistency": item.risk_consistency,
+                    "sharpe_consistency": item.sharpe_consistency,
                 },
                 data_from=result.created_at,
                 data_to=result.created_at,
