@@ -1,4 +1,4 @@
-from edward.ui.instrument_screen import instrument_detail_from_catalog
+from edward.ui.instrument_screen import format_price_increment, instrument_detail_from_catalog
 
 
 def test_instrument_detail_uses_catalog_without_api_lookup():
@@ -23,3 +23,13 @@ def test_instrument_detail_uses_catalog_without_api_lookup():
     assert result["instrument_uid"] == "uid-1"
     assert result["buy_available"] is True
     assert result["sell_available"] is True
+
+
+def test_zero_price_increment_is_not_displayed_as_real_value():
+    assert format_price_increment(0) == "—"
+    assert format_price_increment(None) == "—"
+    assert format_price_increment("") == "—"
+
+
+def test_positive_price_increment_is_formatted():
+    assert format_price_increment({"units": "0", "nano": 1000000}) == "0.001"
