@@ -31,6 +31,28 @@ def test_builds_portfolio_and_position_context():
     assert result.portfolio.portfolio_value == 60000.0
 
 
+def test_portfolio_value_falls_back_to_balance_summary():
+    result = PortfolioDecisionContextService().build(
+        positions={
+            "money": [
+                {"currency": "RUB", "available": {"units": "50000", "nano": 0}, "blocked": {"units": "1000", "nano": 0}}
+            ],
+            "securities": [
+                {
+                    "instrument_uid": "uid-1",
+                    "balance": 10,
+                    "current_price": {"units": "100", "nano": 0},
+                }
+            ],
+        },
+        portfolio={"positions": []},
+        instrument_uid="uid-1",
+    )
+
+    assert result.portfolio.portfolio_value == 52000.0
+    assert round(result.position.portfolio_weight_pct, 2) == round(1000 / 52000 * 100, 2)
+
+
 def test_no_matching_position_returns_empty_position():
     result = PortfolioDecisionContextService().build(
         positions={"money": [], "securities": []},
