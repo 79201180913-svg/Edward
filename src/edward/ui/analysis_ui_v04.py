@@ -9,6 +9,7 @@ from typing import Any
 from edward.api.candles_client_patch import install as install_candles_client
 from edward.config.application_settings import ApplicationSettingsStore
 from edward.services.analysis_service import AnalysisService, Candle
+from edward.services.quality_gate_diagnostics import quality_gate_reasons
 from edward.storage.analysis_repository import AnalysisSnapshotRepository
 from edward.storage.sqlite_store import SQLiteStore
 
@@ -80,7 +81,7 @@ def _open_analysis(app: Any) -> None:
         return
     window = tk.Toplevel(app)
     window.title(f"Анализ акции — {detail.get('ticker', '')}")
-    window.geometry("1050x700")
+    window.geometry("1200x820")
     window.transient(app)
 
     top = ttk.Frame(window, padding=16)
@@ -95,26 +96,98 @@ def _open_analysis(app: Any) -> None:
     progress = ttk.Progressbar(window, mode="indeterminate")
     progress.pack(fill="x", padx=16, pady=10)
 
-    table = ttk.Treeview(window, columns=("strategy", "score", "return", "dd", "sharpe", "stability", "gate"), show="headings", height=12)
-    headings = (("strategy", "Стратегия", 180), ("score", "Score", 80), ("return", "Return %", 90), ("dd", "Max DD %", 90), ("sharpe", "Sharpe", 80), ("stability", "Stability %", 100), ("gate", "Quality Gate", 120))
+    table = ttk.Treeview(
+        window,
+        columns=("strategy", "score", "return", "dd", "sharpe", "stability", "wf", "gate"),
+        show="headings",
+        height=12,
+    )
+    headings = (
+        ("strategy", "Стратегия", 175),
+        ("score", "Score", 75),
+        ("return", "Return %", 85),
+        ("dd", "Max DD %", 90),
+        ("sharpe", "Sharpe", 75),
+        ("stability", "Stability %", 95),
+        ("wf", "WF окон", 75),
+        ("gate", "Quality Gate", 115),
+    )
     for key, label, width in headings:
         table.heading(key, text=label)
         table.column(key, width=width, anchor="center")
     table.pack(fill="both", expand=True, padx=16, pady=10)
 
-    result_text = tk.Text(window, height=7, wrap="word")
+    detail_frame = ttk.LabelFrame(window, text="Диагностика Quality Gate", padding=10)
+    detail_frame.pack(fill="x", padx=16, pady=(0, 10))
+
+    diag_strategy = tk.StringVar(value="Выберите стратегию")
+    ttk.Label(detail_frame, textvariable=diag_strategy, font=("TkDefaultFont", 10, "bold")).pack(anchor="w")
+    diag_text = tk.Text(detail_frame, height=8, wrap="word")
+    diag_text.pack(fill="x", pady=(6, 0))
+    diag_text.configure(state="disabled")
+
+    result_text = tk.Text(window, height=6, wrap="word")
     result_text.pack(fill="x", padx=16, pady=(0, 16))
     result_text.configure(state="disabled")
+
+    result_by_strategy: dict[str, Any] = {}
+
+    def show_diagnostics(strategy_name: str) -> None:
+        item = result_by_strategy.get(strategy_name)
+        if item is None:
+            return
+        profile_params = AnalysisService._profile_params(profile_var.get())
+        checks = quality_gate_reasons(item, profile_params)
+        diag_strategy.set(f"{strategy_name} — {'PASS' if item.quality_gate else 'FAIL'}")
+        diag_text.configure(state="normal")
+        diag_text.delete("1.0", "end")
+        for ok, message in checks:
+            diag_text.insert("end", f"{'✓' if ok else '✗'} {message}\n")
+        diag_text.configure(state="disabled")
 
     def set_result(result: Any) -> None:
         for item in table.get_children():
             table.delete(item)
+        result_by_strategy.clear()
         for item in result.strategies:
-            table.insert("", "end", values=(item.strategy, f"{item.score:.1f}", f"{item.return_pct:.2f}", f"{item.max_drawdown_pct:.2f}", f"{item.sharpe:.2f}", f"{item.stability:.0f}", "PASS" if item.quality_gate else "FAIL"))
+            result_by_strategy[item.strategy] = item
+            table.insert(
+                "",
+                "end",
+                iid=item.strategy,
+                values=(
+                    item.strategy,
+                    f"{item.score:.1f}",
+                    f"{item.return_pct:.2f}",
+                    f"{item.max_drawdown_pct:.2f}",
+                    f"{item.sharpe:.2f}",
+                    f"{item.stability:.0f}",
+                    item.wf_windows,
+                    "PASS" if item.quality_gate else "FAIL",
+                ),
+            )
+        if result.strategies:
+            table.selection_set(result.strategies[0].strategy)
+            show_diagnostics(result.strategies[0].strategy)
+
         result_text.configure(state="normal")
         result_text.delete("1.0", "end")
-        result_text.insert("1.0", f"Режим: {result.market_regime}\nРекомендация: {result.recommendation or 'нет'}\nConfidence: {result.confidence}\nScore: {result.score:.1f}\n\n{result.explanation}")
+        result_text.insert(
+            "1.0",
+            f"Режим: {result.market_regime}\n"
+            f"Рекомендация: {result.recommendation or 'нет'}\n"
+            f"Confidence: {result.confidence}\n"
+            f"Score: {result.score:.1f}\n\n"
+            f"{result.explanation}",
+        )
         result_text.configure(state="disabled")
+
+    def on_select(_event: Any) -> None:
+        selected = table.selection()
+        if selected:
+            show_diagnostics(selected[0])
+
+    table.bind("<<TreeviewSelect>>", on_select)
 
     def run() -> None:
         try:
