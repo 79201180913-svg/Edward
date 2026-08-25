@@ -23,3 +23,16 @@ class MarketDataApi:
         return self._client.market_data.get_trading_statuses(
             instrument_id=list(instrument_ids)
         )
+
+    def get_candles(
+        self,
+        instrument_id: str,
+        *,
+        interval: str = "CANDLE_INTERVAL_DAY",
+        days: int = 2400,
+    ) -> Any:
+        return self._client.get_candles(
+            instrument_uid=instrument_id,
+            interval=interval,
+            days=days,
+        )
