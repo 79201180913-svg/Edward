@@ -57,7 +57,11 @@ def test_scan_ranks_buy_before_wait_before_pass(monkeypatch):
 
     class FakeCatalog:
         def list(self, *_args, **_kwargs):
-            return [{"uid": "1", "ticker": "A", "name": "A", "last_price": "1"}, {"uid": "2", "ticker": "B", "name": "B", "last_price": "2"}, {"uid": "3", "ticker": "C", "name": "C", "last_price": "3"}]
+            return [
+                {"uid": "1", "ticker": "A", "name": "A", "last_price": "1"},
+                {"uid": "2", "ticker": "B", "name": "B", "last_price": "2"},
+                {"uid": "3", "ticker": "C", "name": "C", "last_price": "3"},
+            ]
 
     service.catalog = FakeCatalog()
     ordered = [
@@ -71,6 +75,38 @@ def test_scan_ranks_buy_before_wait_before_pass(monkeypatch):
     results = service.scan(profile="medium_term", instrument_kind="SHARE")
     assert [item.ticker for item in results] == ["B", "A", "C"]
     assert [item.decision for item in results] == ["BUY", "WAIT", "PASS"]
+
+
+def test_scan_reports_staged_progress():
+    service = OpportunitySearchService.__new__(OpportunitySearchService)
+    service._active_account = lambda: None
+
+    class FakeCatalog:
+        def list(self, *_args, **_kwargs):
+            return [{"uid": "1", "ticker": "A", "name": "A", "last_price": "1"}]
+
+    service.catalog = FakeCatalog()
+    service._evaluate_instrument = lambda **_kwargs: OpportunitySearchResult(
+        "1", "A", "A", 1.0, "Trend", "Momentum", 75.0, 82.0, "BUY", "VALID", "BUY_CONDITIONS_MET", "", 0
+    )
+    events: list[tuple[str, float, int, int]] = []
+
+    results = service.scan(
+        profile="medium_term",
+        instrument_kind="SHARE",
+        progress_callback=lambda stage, percent, current, total: events.append((stage, percent, current, total)),
+    )
+
+    stages = [stage for stage, *_ in events]
+    assert results[0].ticker == "A"
+    assert "Загрузка списка инструментов" in stages
+    assert any(stage.startswith("Инструменты загружены:") for stage in stages)
+    assert "Загрузка Portfolio Context" in stages
+    assert "Portfolio Context загружен" in stages
+    assert any(stage.startswith("Market Data:") for stage in stages) is False
+    assert "Ранжирование возможностей" in stages
+    assert stages[-1] == "Сканирование завершено"
+    assert events[-1][1] == 100.0
 
 
 def test_unavailable_result_keeps_instrument_identity():
