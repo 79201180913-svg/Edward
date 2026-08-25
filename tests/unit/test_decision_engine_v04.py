@@ -124,11 +124,29 @@ def test_analysis_unavailable_has_no_trading_decision():
     assert "MARKET_DATA_UNAVAILABLE" in result.reason_codes
 
 
+def test_risk_analysis_unavailable_has_no_trading_decision():
+    result = DecisionEngine.evaluate(_new_position_request(risk_analysis_available=False))
+    assert result.status == DecisionStatus.ANALYSIS_UNAVAILABLE
+    assert result.decision is None
+    assert "RISK_ANALYSIS_UNAVAILABLE" in result.reason_codes
+
+
 def test_invalid_profile_is_not_converted_to_trade_decision():
     result = DecisionEngine.evaluate(_new_position_request(profile="unknown"))
     assert result.status == DecisionStatus.ANALYSIS_UNAVAILABLE
     assert result.decision is None
     assert "UNSUPPORTED_PROFILE" in result.reason_codes
+
+
+def test_error_status_has_no_trading_decision(monkeypatch):
+    def fail(_request):
+        raise RuntimeError("forced failure")
+
+    monkeypatch.setattr(DecisionEngine, "_evaluate", classmethod(fail))
+    result = DecisionEngine.evaluate(_new_position_request())
+    assert result.status == DecisionStatus.ERROR
+    assert result.decision is None
+    assert "DECISION_ENGINE_ERROR" in result.reason_codes
 
 
 def test_open_position_sell_has_priority_over_add():
