@@ -10,8 +10,23 @@ class AnalysisSnapshotRepository:
     def __init__(self, store: SQLiteStore):
         self.store = store
 
-    def save(self, result: Any, walk_forward_run_id: int | None = None) -> int:
+    def save(
+        self,
+        result: Any,
+        walk_forward_run_id: int | None = None,
+        decision: Any | None = None,
+    ) -> int:
         confidence = {"High": 1.0, "Medium": 0.7, "Low": 0.4}.get(result.confidence, 0.0)
+        decision_value = getattr(getattr(decision, "decision", None), "value", None) or getattr(decision, "decision", None)
+        explanation = {
+            "text": result.explanation,
+            "analysis_version": result.analysis_version,
+            "decision_engine_version": getattr(decision, "decision_engine_version", None),
+            "decision_explanation": getattr(decision, "explanation", None),
+            "decision_reason_codes": list(getattr(decision, "reason_codes", ()) or ()),
+            "opportunity_score": getattr(decision, "opportunity_score", None),
+            "strategy_score": getattr(decision, "strategy_score", None),
+        }
         with self.store._connect() as connection:
             cursor = connection.execute(
                 """
@@ -31,14 +46,14 @@ class AnalysisSnapshotRepository:
                     result.horizon,
                     result.recommendation,
                     walk_forward_run_id,
-                    "RECOMMENDATION" if result.recommendation else "NO_RECOMMENDATION",
+                    decision_value or ("RECOMMENDATION" if result.recommendation else "NO_RECOMMENDATION"),
                     confidence,
                     None,
                     None,
                     None,
                     None,
                     result.market_regime,
-                    json.dumps({"text": result.explanation, "analysis_version": result.analysis_version}, ensure_ascii=False),
+                    json.dumps(explanation, ensure_ascii=False),
                     None,
                     json.dumps([], ensure_ascii=False),
                     result.created_at,
