@@ -45,6 +45,8 @@ class ForecastWalkForwardService:
     MIN_TRAIN_SIZE = 60
     TEST_SIZE = 20
     STEP_SIZE = 20
+    INNER_HOLDOUT_SIZE = 20
+    INNER_MIN_TRAIN_SIZE = 40
 
     @staticmethod
     def _returns(candles: Sequence[Candle]) -> list[float]:
@@ -96,6 +98,39 @@ class ForecastWalkForwardService:
         )
 
     @classmethod
+    def _select_model_for_training(cls, train: Sequence[Candle], horizon: int, models: Sequence[str]) -> str:
+        """Select a model using only the current WF training prefix."""
+        if len(train) < cls.INNER_MIN_TRAIN_SIZE + cls.INNER_HOLDOUT_SIZE:
+            # Earliest WF window has exactly 60 observations. There is not enough
+            # history for a nested holdout, so use a deterministic in-sample score.
+            candidates: list[tuple[str, float]] = []
+            for model in models:
+                predicted = ForecastModelSelectionService._forecast_price(train, model, horizon)
+                origin = train[-1].close
+                target = train[-1].close
+                error_pct = abs(predicted - target) / target * 100.0 if target else 100.0
+                direction = 100.0 if (predicted >= origin) == (target >= origin) else 0.0
+                score = ForecastModelSelectionService._score(error_pct, direction)
+                candidates.append((model, score))
+            return max(candidates, key=lambda item: (item[1], item[0]))[0]
+
+        inner_split = len(train) - cls.INNER_HOLDOUT_SIZE
+        inner_train = list(train[:inner_split])
+        inner_validation = list(train[inner_split:])
+        summaries: list[tuple[str, float, float, float]] = []
+        for model in models:
+            metrics = cls._evaluate_window(inner_train, inner_validation, model, horizon)
+            summaries.append(
+                (
+                    model,
+                    metrics.score,
+                    metrics.directional_accuracy_pct,
+                    -metrics.mae_pct,
+                )
+            )
+        return max(summaries, key=lambda item: (item[1], item[2], item[3], item[0]))[0]
+
+    @classmethod
     def _windows(cls, candles: Sequence[Candle]) -> list[tuple[list[Candle], list[Candle]]]:
         ordered = sorted(candles, key=lambda item: item.timestamp)
         result: list[tuple[list[Candle], list[Candle]]] = []
@@ -118,30 +153,31 @@ class ForecastWalkForwardService:
             raise ValueError("Недостаточно истории для Forecast Walk Forward")
         if horizon <= 0:
             raise ValueError("Горизонт прогноза должен быть положительным")
-        if horizon >= cls.TEST_SIZE:
-            raise ValueError("Горизонт прогноза должен быть меньше размера validation окна")
+        if horizon > cls.TEST_SIZE:
+            raise ValueError("Горизонт прогноза не должен превышать размер validation окна")
 
         windows = cls._windows(ordered)
-        by_model: dict[str, list[ForecastWindowMetrics]] = {}
-        for model in models:
-            by_model[model] = [
-                cls._evaluate_window(train, validation, model, horizon)
-                for train, validation in windows
-            ]
+        selected_windows: list[ForecastWindowMetrics] = []
+        for train, validation in windows:
+            selected_model = cls._select_model_for_training(train, horizon, models)
+            selected_windows.append(
+                cls._evaluate_window(train, validation, selected_model, horizon)
+            )
 
-        model_summaries: list[tuple[str, float, list[ForecastWindowMetrics]]] = []
-        for model, metrics in by_model.items():
-            average_score = mean(item.score for item in metrics) if metrics else 0.0
-            model_summaries.append((model, average_score, metrics))
+        model_stats: dict[str, list[ForecastWindowMetrics]] = {}
+        for metric in selected_windows:
+            model_stats.setdefault(metric.model, []).append(metric)
 
-        selected_model, _, selected_windows = max(
-            model_summaries,
-            key=lambda item: (
-                item[1],
-                mean(metric.directional_accuracy_pct for metric in item[2]) if item[2] else 0.0,
-                -(mean(metric.mae_pct for metric in item[2]) if item[2] else 100.0),
-            ),
-        )
+        def model_key(item: tuple[str, list[ForecastWindowMetrics]]) -> tuple[float, float, int, str]:
+            name, metrics = item
+            return (
+                mean(metric.score for metric in metrics),
+                mean(metric.directional_accuracy_pct for metric in metrics),
+                len(metrics),
+                name,
+            )
+
+        selected_model = max(model_stats.items(), key=model_key)[0] if model_stats else ""
 
         scores = [item.score for item in selected_windows]
         mean_score = mean(scores) if scores else 0.0
