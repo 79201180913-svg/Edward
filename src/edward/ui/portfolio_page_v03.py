@@ -91,7 +91,11 @@ def _operation_uid(operation: Any) -> str:
 
 
 def _operation_trades(operation: Any) -> list[Any]:
-    return items(operation, "trades", "trade_items", "tradeItems")
+    trades = items(operation, "trades", "trade_items", "tradeItems")
+    if trades:
+        return trades
+    trades_info = field(operation, "trades_info", field(operation, "tradesInfo", None))
+    return items(trades_info, "trades", "trade_items", "tradeItems")
 
 
 def _operation_quantity(operation: Any) -> Decimal:
