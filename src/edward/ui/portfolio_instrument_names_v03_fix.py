@@ -10,6 +10,16 @@ def _field(value: Any, name: str, default: Any = None) -> Any:
     return getattr(value, name, default)
 
 
+def _items(response: Any, *names: str) -> list[Any]:
+    if isinstance(response, list):
+        return response
+    for name in names:
+        value = _field(response, name, None)
+        if value is not None:
+            return list(value or [])
+    return []
+
+
 def _instrument_name(response: Any) -> str:
     """Extract a user-facing instrument name from adapter GetInstrument response."""
     candidates = [response]
@@ -52,7 +62,6 @@ def install(app_class: type[Any]) -> None:
         if "instrument_name" in columns:
             return
 
-        # Preserve the existing order and insert the human-readable name after ticker.
         new_columns = ("ticker", "instrument_name") + tuple(c for c in columns if c != "ticker")
         tree["columns"] = new_columns
         tree.heading("ticker", text="Тикер")
@@ -64,33 +73,38 @@ def install(app_class: type[Any]) -> None:
         if client is None:
             return
 
+        # Keep the same position order as the original portfolio page, which is
+        # also the order used when the Treeview rows were inserted.
+        positions: list[Any] = []
+        try:
+            account_id = self._require_account()
+            response = client.get_positions(account_id) if account_id else {}
+            positions = _items(response, "securities", "positions")
+        except Exception as exc:
+            print(f"[PORTFOLIO INSTRUMENT NAME] positions lookup failed: {type(exc).__name__}: {exc}", flush=True)
+
         cache: dict[str, str] = {}
         for iid in tree.get_children(""):
             values = list(tree.item(iid, "values"))
             if not values:
                 continue
             ticker = str(values[0] or "")
-            # Find position through the row index used by portfolio_page_v03.
-            position = None
+            uid = ""
             if iid.startswith("position-"):
                 try:
                     index = int(iid.split("-", 1)[1])
-                    positions = getattr(self, "_portfolio_tree_positions", None)
-                    if isinstance(positions, list) and 0 <= index < len(positions):
+                    if 0 <= index < len(positions):
                         position = positions[index]
+                        uid = str(_field(position, "instrument_uid", _field(position, "uid", "")) or "")
                 except (TypeError, ValueError):
-                    position = None
+                    uid = ""
 
-            uid = ""
-            if isinstance(position, dict):
-                uid = str(position.get("instrument_uid", position.get("uid", "")) or "")
-            if not uid:
-                name = ticker or "—"
-            else:
+            if uid:
                 if uid not in cache:
                     cache[uid] = _load_name(client, uid, ticker)
                 name = cache[uid]
-
+            else:
+                name = ticker or "—"
             tree.item(iid, values=[ticker, name, *values[1:]])
 
     page_portfolio._portfolio_names_v03_wrapped = True
