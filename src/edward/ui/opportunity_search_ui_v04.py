@@ -22,7 +22,26 @@ FILTER_LABELS = ("Все", "Купить", "Ждать", "Удерживать",
 FILTER_CODE_BY_LABEL = dict(zip(FILTER_LABELS, FILTER_VALUES))
 REGIME_LABELS = {"TREND": "Тренд", "Trend": "Тренд", "MOMENTUM": "Импульс", "Momentum": "Импульс", "BREAKOUT": "Пробой", "Breakout": "Пробой", "MEAN_REVERSION": "Возврат к среднему", "Mean Reversion": "Возврат к среднему", "UNCLEAR": "Неясный", "UNCLEAR_REGIME": "Неясный"}
 STRATEGY_LABELS = {"Trend Following": "Следование за трендом", "Momentum": "Импульсная стратегия", "Breakout": "Пробой", "Mean Reversion": "Возврат к среднему"}
-REASON_LABELS = {"STRATEGY_QUALITY_FAIL": "Стратегия не прошла контроль качества", "RISK_FAIL": "Не пройдены риск-ограничения", "RISK_DETERIORATION": "Риск позиции ухудшился", "CRITICAL_RISK": "Критический риск", "MARKET_REGIME_UNFAVORABLE": "Рыночный режим неблагоприятен", "PORTFOLIO_CONSTRAINT": "Ограничение портфеля", "INSTRUMENT_BUY_UNAVAILABLE": "Покупка инструмента недоступна", "ENTRY_NOT_READY": "Условия входа ещё не готовы", "BUY_CONDITIONS_MET": "Условия покупки выполнены", "OPPORTUNITY_BELOW_BUY_THRESHOLD": "Привлекательность ниже порога покупки", "OPPORTUNITY_TOO_LOW": "Торговая возможность недостаточно привлекательна", "EXIT_SIGNAL": "Получен сигнал на выход", "POSITION_ABOVE_TARGET": "Доля позиции выше целевой", "POSITION_BELOW_TARGET": "Доля позиции ниже целевой", "STRATEGY_QUALITY_DEGRADED": "Качество стратегии ухудшилось", "SIGNAL_DEGRADED": "Торговый сигнал ухудшился", "ANALYSIS_UNAVAILABLE": "Недостаточно данных для принятия решения", "NO_ACCEPTABLE_STRATEGY": "Нет приемлемой стратегии"}
+REASON_LABELS = {
+    "STRATEGY_QUALITY_FAIL": "Стратегия не прошла контроль качества",
+    "RISK_FAIL": "Не пройдены риск-ограничения",
+    "RISK_DETERIORATION": "Риск позиции ухудшился",
+    "CRITICAL_RISK": "Критический риск",
+    "MARKET_REGIME_UNFAVORABLE": "Рыночный режим неблагоприятен",
+    "PORTFOLIO_CONSTRAINT": "Ограничение портфеля",
+    "INSTRUMENT_BUY_UNAVAILABLE": "Покупка инструмента недоступна",
+    "ENTRY_NOT_READY": "Условия входа ещё не готовы",
+    "BUY_CONDITIONS_MET": "Условия покупки выполнены",
+    "OPPORTUNITY_BELOW_BUY_THRESHOLD": "Привлекательность ниже порога покупки",
+    "OPPORTUNITY_TOO_LOW": "Торговая возможность недостаточно привлекательна",
+    "EXIT_SIGNAL": "Получен сигнал на выход",
+    "POSITION_ABOVE_TARGET": "Доля позиции выше целевой",
+    "POSITION_BELOW_TARGET": "Доля позиции ниже целевой",
+    "STRATEGY_QUALITY_DEGRADED": "Качество стратегии ухудшилось",
+    "SIGNAL_DEGRADED": "Торговый сигнал ухудшился",
+    "ANALYSIS_UNAVAILABLE": "Недостаточно данных для принятия решения",
+    "NO_ACCEPTABLE_STRATEGY": "Нет приемлемой стратегии",
+}
 
 
 def _label(mapping: dict[str, str], value: str | None, default: str = "—") -> str:
@@ -58,6 +77,15 @@ def _trade_plan_text(item: Any) -> str:
     if plan is None:
         return "Торговый план: не сформирован"
     rr = "—" if plan.risk_reward is None else f"{plan.risk_reward:.2f}"
+    decision = str(getattr(item, "decision", "") or "")
+    current_quantity = int(getattr(item, "quantity", 0) or 0)
+    recommended_quantity = int(getattr(item, "recommended_quantity", 0) or 0)
+    if decision == "SELL":
+        size_label = f"Объём закрытия: {recommended_quantity} шт. / осталось: {max(0, current_quantity - recommended_quantity)} шт."
+    elif decision == "REDUCE":
+        size_label = f"Объём сокращения: {recommended_quantity} шт. / останется: {max(0, current_quantity - recommended_quantity)} шт."
+    else:
+        size_label = f"Рекомендуемый размер: {recommended_quantity} шт. / {getattr(item, 'recommended_weight_pct', 0.0):.2f}%"
     return "\n".join((
         f"Вход: {plan.entry_low:.4f} — {plan.entry_high:.4f}" if plan.entry_low is not None and plan.entry_high is not None else "Вход: —",
         f"Цель: {plan.target_price:.4f}" if plan.target_price is not None else "Цель: —",
@@ -67,7 +95,7 @@ def _trade_plan_text(item: Any) -> str:
         f"Risk/Reward: {rr}",
         f"Горизонт: {plan.holding_horizon_days} дн.",
         f"Уверенность: {plan.confidence}",
-        f"Рекомендуемый размер: {getattr(item, 'recommended_quantity', 0)} шт. / {getattr(item, 'recommended_weight_pct', 0.0):.2f}%",
+        size_label,
         f"Execution Ready: {'ДА' if getattr(item, 'execution_ready', False) else 'НЕТ'}",
     ))
 
@@ -182,9 +210,17 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
             if item is None:
                 detail_var.set("Выберите инструмент, чтобы увидеть прогноз и торговый план.")
                 return
-            forecast_line = " | ".join(f"{h}Д: {_forecast_value(getattr(item, 'forecast_prices', ()), h)} / {_forecast_probability(getattr(item, 'forecast_probability_up', ()), h)} рост" for h in (1, 5, 20, 60))
+            forecast_rows = [
+                f"{h}Д: цена {_forecast_value(getattr(item, 'forecast_prices', ()), h)} / рост {_forecast_probability(getattr(item, 'forecast_probability_up', ()), h)}"
+                for h in (1, 5, 20, 60)
+            ]
             plan = _trade_plan_text(item)
-            detail_var.set(f"{item.ticker} · {_label(DECISION_LABELS, item.decision)} · Модель: {getattr(item, 'forecast_model', None) or '—'} · Уверенность: {getattr(item, 'forecast_confidence', None) or '—'}\n{forecast_line}\n{plan}")
+            header = (
+                f"{item.ticker} · {_label(DECISION_LABELS, item.decision)} · "
+                f"Модель: {getattr(item, 'forecast_model', None) or '—'} · "
+                f"Уверенность: {getattr(item, 'forecast_confidence', None) or '—'}"
+            )
+            detail_var.set("\n".join((header, "Прогноз:", *forecast_rows, "Торговый план:", plan)))
 
         def update_summary() -> None:
             if not page_alive(): return
