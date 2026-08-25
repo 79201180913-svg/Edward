@@ -11,8 +11,9 @@ from urllib.request import Request, urlopen
 import pytest
 
 from tests.e2e.test_sandbox_end_to_end import (
+    _align_price,
     _get_account_id,
-    _get_tradable_instrument,
+    _get_price_step,
     _items,
     _number,
     _request,
@@ -21,8 +22,6 @@ from tests.e2e.test_sandbox_end_to_end import (
 
 
 def _request_stop(path: str, payload: dict | None = None) -> dict:
-    # Reuse the adapter URL selected by the shared sandbox fixture. The fixture
-    # may allocate a free port instead of using the default 8765.
     from tests.e2e import test_sandbox_end_to_end as e2e
 
     body = None if payload is None else json.dumps(payload).encode("utf-8")
@@ -104,7 +103,8 @@ def test_sandbox_protective_order_create_get_cancel(kind, stop_multiplier, side,
 
     account_id = _get_account_id()
     uid, _balance, current = _position_in_account(account_id)
-    stop_price = (current * stop_multiplier).quantize(Decimal("0.0001"))
+    step = _get_price_step(uid)
+    stop_price = _align_price(current * stop_multiplier, step)
     assert stop_price > 0
 
     created = _create_stop(account_id, uid, side, kind, 1, stop_price)
@@ -133,9 +133,11 @@ def test_sandbox_stop_limit_create_get_cancel(sandbox_adapter):
 
     account_id = _get_account_id()
     uid, _balance, current = _position_in_account(account_id)
-    stop_price = (current * Decimal("0.50")).quantize(Decimal("0.0001"))
-    limit_price = (current * Decimal("0.49")).quantize(Decimal("0.0001"))
+    step = _get_price_step(uid)
+    stop_price = _align_price(current * Decimal("0.50"), step)
+    limit_price = _align_price(current * Decimal("0.49"), step)
     assert stop_price > 0 and limit_price > 0
+    assert limit_price < stop_price
 
     created = _create_stop(
         account_id,
