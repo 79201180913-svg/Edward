@@ -42,11 +42,12 @@ def request():
 def test_submit_uses_existing_tinvest_request_contract():
     client = FakeClient()
     adapter = TInvestExecutionAdapter(client)
+    submitted_request = request()
 
-    broker_id = adapter.submit(request())
+    broker_id = adapter.submit(submitted_request)
 
     assert broker_id == "broker-1"
-    assert client.submitted == [request()]
+    assert client.submitted == [submitted_request]
 
 
 def test_status_maps_partial_fill_and_quotation():
