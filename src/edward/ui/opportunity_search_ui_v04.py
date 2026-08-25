@@ -19,7 +19,74 @@ SCOPE_VALUES = (
     (PORTFOLIO_SCOPE, "Мой портфель"),
 )
 SCOPE_BY_LABEL = {label: code for code, label in SCOPE_VALUES}
+PROFILE_VALUES = (
+    ("long_term", "Долгосрочная"),
+    ("medium_term", "Среднесрочная"),
+    ("speculative", "Спекулятивная"),
+)
+PROFILE_BY_LABEL = {label: code for code, label in PROFILE_VALUES}
+KIND_LABELS = {
+    "SHARE": "Акции",
+    "BOND": "Облигации",
+    "ETF": "Фонды ETF",
+    "CURRENCY": "Валюты",
+    "FUTURES": "Фьючерсы",
+    "OPTION": "Опционы",
+}
+KIND_BY_LABEL = {label: code for code, label in KIND_LABELS.items()}
+DECISION_LABELS = {
+    "BUY": "Купить",
+    "WAIT": "Ждать",
+    "HOLD": "Удерживать",
+    "ADD": "Увеличить",
+    "REDUCE": "Сократить",
+    "SELL": "Продать",
+    "PASS": "Пропустить",
+}
 FILTER_VALUES = ("ALL", "BUY", "WAIT", "HOLD", "ADD", "REDUCE", "SELL", "PASS")
+FILTER_LABELS = ("Все", "Купить", "Ждать", "Удерживать", "Увеличить", "Сократить", "Продать", "Пропустить")
+FILTER_CODE_BY_LABEL = dict(zip(FILTER_LABELS, FILTER_VALUES))
+REGIME_LABELS = {
+    "TREND": "Тренд",
+    "MOMENTUM": "Импульс",
+    "BREAKOUT": "Пробой",
+    "MEAN_REVERSION": "Возврат к среднему",
+    "UNCLEAR": "Неясный",
+    "UNCLEAR_REGIME": "Неясный",
+}
+STRATEGY_LABELS = {
+    "Trend Following": "Следование за трендом",
+    "Momentum": "Импульсная стратегия",
+    "Breakout": "Пробой",
+    "Mean Reversion": "Возврат к среднему",
+}
+REASON_LABELS = {
+    "STRATEGY_QUALITY_FAIL": "Стратегия не прошла контроль качества",
+    "RISK_FAIL": "Не пройдены риск-ограничения",
+    "MARKET_REGIME_UNFAVORABLE": "Рыночный режим неблагоприятен",
+    "PORTFOLIO_CONSTRAINT": "Ограничение портфеля",
+    "INSTRUMENT_BUY_UNAVAILABLE": "Покупка инструмента недоступна",
+    "ENTRY_NOT_READY": "Условия входа ещё не готовы",
+    "BUY_CONDITIONS_MET": "Условия покупки выполнены",
+    "OPPORTUNITY_BELOW_BUY_THRESHOLD": "Привлекательность ниже порога покупки",
+    "OPPORTUNITY_TOO_LOW": "Торговая возможность недостаточно привлекательна",
+    "RISK_DETERIORATION": "Риск позиции ухудшился",
+    "CRITICAL_RISK": "Критический риск",
+    "EXIT_SIGNAL": "Получен сигнал на выход",
+    "POSITION_ABOVE_TARGET": "Доля позиции выше целевой",
+    "POSITION_BELOW_TARGET": "Доля позиции ниже целевой",
+    "STRATEGY_QUALITY_DEGRADED": "Качество стратегии ухудшилось",
+    "SIGNAL_DEGRADED": "Торговый сигнал ухудшился",
+    "ANALYSIS_UNAVAILABLE": "Недостаточно данных для принятия решения",
+    "NO_ACCEPTABLE_STRATEGY": "Нет приемлемой стратегии",
+}
+
+
+def _label(mapping: dict[str, str], value: str | None, default: str = "—") -> str:
+    if value in (None, ""):
+        return default
+    text = str(value)
+    return mapping.get(text, text)
 
 
 def install_opportunity_search_ui(app_class: type[Any]) -> None:
@@ -52,8 +119,8 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
         ttk.Label(top, textvariable=title_var, style="Title.TLabel").pack(side="left")
 
         scope_var = tk.StringVar(value="Торгуемые инструменты")
-        profile_var = tk.StringVar(value="medium_term")
-        kind_var = tk.StringVar(value="Shares")
+        profile_var = tk.StringVar(value="Среднесрочная")
+        kind_var = tk.StringVar(value="Акции")
         status_var = tk.StringVar(value="Готово")
         progress_var = tk.DoubleVar(value=0.0)
         progress_text_var = tk.StringVar(value="Готово")
@@ -68,23 +135,23 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
         )
         scope_combo.pack(side="left")
 
-        ttk.Label(top, text="Профиль:").pack(side="left", padx=(15, 5))
+        ttk.Label(top, text="Профиль торговли:").pack(side="left", padx=(15, 5))
         profile_combo = ttk.Combobox(
             top,
             textvariable=profile_var,
             state="readonly",
-            values=("long_term", "medium_term", "speculative"),
-            width=14,
+            values=[label for _, label in PROFILE_VALUES],
+            width=16,
         )
         profile_combo.pack(side="left")
 
-        ttk.Label(top, text="Тип:").pack(side="left", padx=(15, 5))
+        ttk.Label(top, text="Тип инструмента:").pack(side="left", padx=(15, 5))
         kind_combo = ttk.Combobox(
             top,
             textvariable=kind_var,
             state="readonly",
-            values=["Все"] + [label for _, label in INSTRUMENT_KINDS],
-            width=14,
+            values=["Все"] + list(KIND_LABELS.values()),
+            width=16,
         )
         kind_combo.pack(side="left")
         ttk.Label(top, textvariable=status_var).pack(side="left", padx=18)
@@ -105,14 +172,14 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
 
         filter_frame = ttk.Frame(frame)
         filter_frame.pack(fill="x", pady=(0, 8))
-        decision_var = tk.StringVar(value="ALL")
-        ttk.Label(filter_frame, text="Фильтр:").pack(side="left")
+        decision_var = tk.StringVar(value="Все")
+        ttk.Label(filter_frame, text="Фильтр решения:").pack(side="left")
         filter_combo = ttk.Combobox(
             filter_frame,
             textvariable=decision_var,
             state="readonly",
-            values=FILTER_VALUES,
-            width=10,
+            values=FILTER_LABELS,
+            width=15,
         )
         filter_combo.pack(side="left", padx=(6, 12))
 
@@ -121,18 +188,18 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
         for key, label, width in (
             ("ticker", "Инструмент", 110),
             ("price", "Цена", 90),
-            ("regime", "Regime", 100),
-            ("strategy", "Стратегия", 150),
-            ("strategy_score", "Strategy Score", 110),
-            ("opportunity_score", "Opportunity Score", 125),
-            ("decision", "Decision", 90),
-            ("reason", "Причина", 260),
+            ("regime", "Рыночный режим", 120),
+            ("strategy", "Стратегия", 190),
+            ("strategy_score", "Балл стратегии", 115),
+            ("opportunity_score", "Балл возможности", 125),
+            ("decision", "Решение", 105),
+            ("reason", "Причина", 300),
         ):
             tree.heading(key, text=label)
             tree.column(key, width=width, anchor="center" if key not in {"ticker", "strategy", "reason"} else "w")
         tree.pack(fill="both", expand=True)
 
-        summary_var = tk.StringVar(value="BUY: 0   WAIT: 0   HOLD: 0   ADD: 0   REDUCE: 0   SELL: 0   PASS: 0   Недоступны: 0")
+        summary_var = tk.StringVar(value="Покупка: 0   Ждать: 0   Удерживать: 0   Увеличить: 0   Сократить: 0   Продать: 0   Пропустить: 0   Недоступны: 0")
         ttk.Label(frame, textvariable=summary_var).pack(anchor="w", pady=(8, 0))
 
         state: dict[str, Any] = {"results": []}
@@ -140,13 +207,19 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
         def _scope_code() -> str:
             return SCOPE_BY_LABEL.get(scope_var.get(), MARKET_SCOPE)
 
+        def _profile_code() -> str:
+            return PROFILE_BY_LABEL.get(profile_var.get(), "medium_term")
+
         def _kind_code() -> str:
             if kind_var.get() == "Все":
                 return INSTRUMENT_KIND_ALL
-            return next(kind_code for kind_code, label in INSTRUMENT_KINDS if label == kind_var.get())
+            return KIND_BY_LABEL.get(kind_var.get(), "SHARE")
+
+        def _decision_code() -> str:
+            return FILTER_CODE_BY_LABEL.get(decision_var.get(), "ALL")
 
         def render() -> None:
-            selected = decision_var.get()
+            selected = _decision_code()
             for item in tree.get_children():
                 tree.delete(item)
             results = state["results"]
@@ -162,12 +235,12 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
                     values=(
                         item.ticker,
                         f"{item.price:.4f}" if item.price is not None else "—",
-                        item.market_regime or "—",
-                        item.strategy_name or "—",
+                        _label(REGIME_LABELS, item.market_regime),
+                        _label(STRATEGY_LABELS, item.strategy_name),
                         f"{item.strategy_score:.1f}",
                         f"{item.opportunity_score:.1f}",
-                        decision,
-                        item.reason,
+                        _label(DECISION_LABELS, decision),
+                        _label(REASON_LABELS, item.reason),
                     ),
                 )
             counts = {value: 0 for value in FILTER_VALUES if value != "ALL"}
@@ -178,13 +251,13 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
             summary_var.set(
                 "   ".join(
                     (
-                        f"BUY: {counts.get('BUY', 0)}",
-                        f"WAIT: {counts.get('WAIT', 0)}",
-                        f"HOLD: {counts.get('HOLD', 0)}",
-                        f"ADD: {counts.get('ADD', 0)}",
-                        f"REDUCE: {counts.get('REDUCE', 0)}",
-                        f"SELL: {counts.get('SELL', 0)}",
-                        f"PASS: {counts.get('PASS', 0)}",
+                        f"Покупка: {counts.get('BUY', 0)}",
+                        f"Ждать: {counts.get('WAIT', 0)}",
+                        f"Удерживать: {counts.get('HOLD', 0)}",
+                        f"Увеличить: {counts.get('ADD', 0)}",
+                        f"Сократить: {counts.get('REDUCE', 0)}",
+                        f"Продать: {counts.get('SELL', 0)}",
+                        f"Пропустить: {counts.get('PASS', 0)}",
                         f"Недоступны: {unavailable}",
                         f"Показано: {len(visible)}",
                     )
@@ -194,14 +267,36 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
         def update_scope_ui(*_args: Any) -> None:
             is_portfolio = _scope_code() == PORTFOLIO_SCOPE
             title_var.set("Анализ портфеля" if is_portfolio else "Возможности рынка")
-            decision_var.set("ALL")
+            decision_var.set("Все")
             state["results"] = []
             progress_var.set(0.0)
             progress_text_var.set("Готово")
             status_var.set("Готово")
             render()
 
+        def _localize_stage(stage: str) -> str:
+            replacements = (
+                ("Market Data: candles ", "Рыночные данные: свечи "),
+                ("Market Data: ", "Рыночные данные: "),
+                ("Анализ стратегий: ", "Анализ стратегий: "),
+                ("Risk / Opportunity: ", "Риск и возможность: "),
+                ("Decision Engine: ", "Формирование решения: "),
+                ("Portfolio Context загружается", "Загрузка контекста портфеля"),
+                ("Portfolio Context загружен", "Контекст портфеля загружен"),
+                ("Ранжирование возможностей", "Ранжирование возможностей"),
+                ("Обработано: ", "Обработано: "),
+                ("Сканирование завершено", "Сканирование завершено"),
+                ("Вселенная анализа:", "Инструментов для анализа:"),
+            )
+            localized = stage
+            for source, target in replacements:
+                if localized.startswith(source) or localized == source:
+                    localized = target + localized[len(source):]
+                    break
+            return localized
+
         def update_progress(stage: str, percent: float, current: int, total: int) -> None:
+            stage = _localize_stage(stage)
             progress_var.set(percent)
             suffix = f" ({current}/{total})" if total else ""
             progress_text_var.set(f"{stage} — {percent:.0f}%{suffix}")
@@ -221,7 +316,7 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
             status_var.set("Запуск сканирования")
             scope = _scope_code()
             kind = _kind_code()
-            profile = profile_var.get()
+            profile = _profile_code()
 
             def worker() -> None:
                 try:
