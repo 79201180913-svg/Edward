@@ -82,6 +82,7 @@ def _open_analysis(app: Any) -> None:
     window = tk.Toplevel(app)
     window.title(f"Анализ акции — {detail.get('ticker', '')}")
     window.geometry("1200x820")
+    window.minsize(1050, 700)
     window.transient(app)
 
     top = ttk.Frame(window, padding=16)
@@ -90,11 +91,12 @@ def _open_analysis(app: Any) -> None:
     profile_var = tk.StringVar(value="medium_term")
     ttk.Label(top, text="Торговый профиль:").pack(side="left", padx=(30, 6))
     ttk.Combobox(top, textvariable=profile_var, state="readonly", values=("long_term", "medium_term", "speculative"), width=16).pack(side="left")
-
     status_var = tk.StringVar(value="Готов к запуску")
-    ttk.Label(window, textvariable=status_var, padding=(16, 0)).pack(anchor="w")
-    progress = ttk.Progressbar(window, mode="indeterminate")
-    progress.pack(fill="x", padx=16, pady=10)
+    ttk.Label(top, textvariable=status_var).pack(side="left", padx=(28, 0))
+    progress = ttk.Progressbar(top, mode="indeterminate", length=180)
+    progress.pack(side="left", padx=(12, 0))
+    start_button = ttk.Button(top, text="Запустить анализ")
+    start_button.pack(side="right")
 
     table = ttk.Treeview(
         window,
@@ -122,19 +124,30 @@ def _open_analysis(app: Any) -> None:
 
     diag_strategy = tk.StringVar(value="Выберите стратегию")
     ttk.Label(detail_frame, textvariable=diag_strategy, font=("TkDefaultFont", 10, "bold")).pack(anchor="w")
-    diag_text = tk.Text(detail_frame, height=8, wrap="word")
+    diag_text = tk.Text(detail_frame, height=6, wrap="word")
     diag_text.pack(fill="x", pady=(6, 0))
     diag_text.configure(state="disabled")
 
-    result_text = tk.Text(window, height=6, wrap="word")
+    result_text = tk.Text(window, height=5, wrap="word")
     result_text.pack(fill="x", padx=16, pady=(0, 16))
     result_text.configure(state="disabled")
 
     result_by_strategy: dict[str, Any] = {}
 
+    def set_running(running: bool) -> None:
+        start_button.configure(state="disabled" if running else "normal")
+        if running:
+            progress.start(12)
+        else:
+            progress.stop()
+
     def show_diagnostics(strategy_name: str) -> None:
         item = result_by_strategy.get(strategy_name)
         if item is None:
+            diag_strategy.set("Выберите стратегию")
+            diag_text.configure(state="normal")
+            diag_text.delete("1.0", "end")
+            diag_text.configure(state="disabled")
             return
         profile_params = AnalysisService._profile_params(profile_var.get())
         checks = quality_gate_reasons(item, profile_params)
@@ -190,9 +203,9 @@ def _open_analysis(app: Any) -> None:
     table.bind("<<TreeviewSelect>>", on_select)
 
     def run() -> None:
+        set_running(True)
         try:
             status_var.set("Получение исторических данных…")
-            progress.start(12)
             response = app.client.get_candles(str(detail["instrument_uid"]), interval="CANDLE_INTERVAL_DAY", days=2400)
             candles = _parse_candles(response)
             if len(candles) < 150:
@@ -209,9 +222,9 @@ def _open_analysis(app: Any) -> None:
             )
             run_id = service.save(result)
             AnalysisSnapshotRepository(store).save(result, run_id)
-            app.after(0, lambda result=result: (progress.stop(), status_var.set("Анализ завершён и сохранён"), set_result(result)))
+            app.after(0, lambda result=result: (set_running(False), status_var.set("Анализ завершён и сохранён"), set_result(result)))
         except Exception as exc:
             error_text = str(exc)
-            app.after(0, lambda error_text=error_text: (progress.stop(), status_var.set("Ошибка анализа"), messagebox.showerror("Анализ акции", error_text, parent=window)))
+            app.after(0, lambda error_text=error_text: (set_running(False), status_var.set("Ошибка анализа"), messagebox.showerror("Анализ акции", error_text, parent=window)))
 
-    ttk.Button(window, text="Запустить анализ", command=lambda: threading.Thread(target=run, daemon=True).start()).pack(pady=(0, 12))
+    start_button.configure(command=lambda: threading.Thread(target=run, daemon=True).start())
