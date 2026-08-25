@@ -65,6 +65,33 @@ class AnalysisService:
     STRATEGIES = ("Trend Following", "Momentum", "Breakout", "Mean Reversion")
     PROFILES = ("long_term", "medium_term", "speculative")
 
+    PROFILE_PARAMS = {
+        "long_term": {
+            "train": 360,
+            "test": 90,
+            "min_trades": 4,
+            "max_drawdown_pct": 30.0,
+            "min_stability_pct": 60.0,
+            "return_target_pct": 30.0,
+        },
+        "medium_term": {
+            "train": 240,
+            "test": 60,
+            "min_trades": 5,
+            "max_drawdown_pct": 25.0,
+            "min_stability_pct": 60.0,
+            "return_target_pct": 15.0,
+        },
+        "speculative": {
+            "train": 120,
+            "test": 30,
+            "min_trades": 8,
+            "max_drawdown_pct": 35.0,
+            "min_stability_pct": 55.0,
+            "return_target_pct": 8.0,
+        },
+    }
+
     def __init__(self, store: SQLiteStore | None = None):
         self.store = store
 
@@ -105,13 +132,11 @@ class AnalysisService:
             return mean(values) if values else 0.0
         return mean(values[-period:])
 
-    @staticmethod
-    def _profile_params(profile: str) -> dict[str, Any]:
-        if profile == "long_term":
-            return {"train": 360, "test": 90, "min_trades": 4}
-        if profile == "speculative":
-            return {"train": 120, "test": 30, "min_trades": 8}
-        return {"train": 240, "test": 60, "min_trades": 5}
+    @classmethod
+    def _profile_params(cls, profile: str) -> dict[str, Any]:
+        if profile not in cls.PROFILE_PARAMS:
+            raise ValueError(f"Unsupported profile: {profile}")
+        return dict(cls.PROFILE_PARAMS[profile])
 
     @classmethod
     def market_regime(cls, candles: list[Candle]) -> str:
@@ -188,19 +213,38 @@ class AnalysisService:
         positive = sum(1 for value in trade_returns if value > 0)
         stability = positive / trades if trades else 0.0
         quality = total_return > 0 and dd <= 0.35 and trades >= 3 and stability >= 0.45
-        score = cls._score(total_return, dd, sharpe, trades, stability)
+        score = cls._score(total_return * 100.0, dd * 100.0, sharpe, trades, stability * 100.0)
         return StrategyResult(strategy, dict(parameters), total_return * 100, dd * 100, sharpe, trades, stability * 100, quality, score)
 
     @staticmethod
-    def _score(return_pct: float, drawdown: float, sharpe: float, trades: int, stability: float) -> float:
-        raw = (
-            max(-1.0, min(1.0, return_pct)) * 35.0
-            + max(0.0, min(3.0, sharpe)) / 3.0 * 25.0
-            + max(0.0, min(1.0, 1.0 - drawdown)) * 20.0
-            + max(0.0, min(1.0, stability)) * 15.0
-            + min(5, trades) / 5.0 * 5.0
+    def _clamp(value: float, minimum: float = 0.0, maximum: float = 100.0) -> float:
+        return max(minimum, min(maximum, value))
+
+    @classmethod
+    def _score(
+        cls,
+        return_pct: float,
+        drawdown_pct: float,
+        sharpe: float,
+        trades: int,
+        stability_pct: float,
+        *,
+        return_target_pct: float = 15.0,
+        drawdown_limit_pct: float = 25.0,
+    ) -> float:
+        """Score a strategy using normalized return, risk, Sharpe and stability."""
+        return_score = cls._clamp(return_pct / return_target_pct * 100.0) if return_target_pct > 0 else 0.0
+        sharpe_score = cls._clamp(sharpe / 2.0 * 100.0)
+        drawdown_score = cls._clamp((1.0 - drawdown_pct / drawdown_limit_pct) * 100.0) if drawdown_limit_pct > 0 else 0.0
+        stability_score = cls._clamp(stability_pct)
+
+        return round(
+            return_score * 0.30
+            + sharpe_score * 0.25
+            + drawdown_score * 0.25
+            + stability_score * 0.20,
+            2,
         )
-        return max(0.0, min(100.0, raw))
 
     @classmethod
     def parameter_grid(cls, strategy: str, profile: str) -> list[dict[str, Any]]:
@@ -217,29 +261,115 @@ class AnalysisService:
         cfg = cls._profile_params(profile)
         train_size = cfg["train"]
         test_size = cfg["test"]
+        max_drawdown_pct = cfg["max_drawdown_pct"]
+        min_stability_pct = cfg["min_stability_pct"]
+        return_target_pct = cfg["return_target_pct"]
         windows: list[StrategyResult] = []
         start = 0
+
         while start + train_size + test_size <= len(candles):
             train = candles[start:start + train_size]
             test = candles[start + train_size:start + train_size + test_size]
             candidates = [cls.backtest(train, strategy, params) for params in cls.parameter_grid(strategy, profile)]
             best = max(candidates, key=lambda item: item.score)
             tested = cls.backtest(test, strategy, best.parameters)
-            windows.append(StrategyResult(strategy, best.parameters, tested.return_pct, tested.max_drawdown_pct, tested.sharpe, tested.trades, tested.stability, tested.quality_gate, tested.score, best.score, tested.score))
+            windows.append(
+                StrategyResult(
+                    strategy,
+                    best.parameters,
+                    tested.return_pct,
+                    tested.max_drawdown_pct,
+                    tested.sharpe,
+                    tested.trades,
+                    tested.stability,
+                    tested.quality_gate,
+                    tested.score,
+                    best.score,
+                    tested.score,
+                )
+            )
             start += test_size
-        if not windows:
-            return cls.backtest(candles, strategy, cls.parameter_grid(strategy, profile)[0])
-        accepted = sum(1 for item in windows if item.quality_gate)
-        stability = accepted / len(windows) * 100.0
-        representative = max(windows, key=lambda item: item.test_score)
+
+        window_count = len(windows)
+        if window_count < 5:
+            return StrategyResult(
+                strategy,
+                cls.parameter_grid(strategy, profile)[0],
+                mean(item.return_pct for item in windows) if windows else 0.0,
+                mean(item.max_drawdown_pct for item in windows) if windows else 0.0,
+                mean(item.sharpe for item in windows) if windows else 0.0,
+                sum(item.trades for item in windows),
+                0.0,
+                False,
+                0.0,
+                mean(item.train_score for item in windows) if windows else 0.0,
+                mean(item.test_score for item in windows) if windows else 0.0,
+            )
+
+        positive_return_windows = sum(1 for item in windows if item.return_pct > 0)
+        risk_ok_windows = sum(1 for item in windows if item.max_drawdown_pct <= max_drawdown_pct)
+        positive_sharpe_windows = sum(1 for item in windows if item.sharpe > 0)
+
+        return_consistency = positive_return_windows / window_count * 100.0
+        risk_consistency = risk_ok_windows / window_count * 100.0
+        sharpe_consistency = positive_sharpe_windows / window_count * 100.0
+        stability = round(
+            return_consistency * 0.50
+            + risk_consistency * 0.30
+            + sharpe_consistency * 0.20,
+            2,
+        )
+
         avg_return = mean(item.return_pct for item in windows)
         avg_dd = mean(item.max_drawdown_pct for item in windows)
         avg_sharpe = mean(item.sharpe for item in windows)
-        avg_score = mean(item.score for item in windows)
-        quality = accepted >= max(1, (len(windows) + 1) // 2) and avg_return > 0 and avg_dd <= 35.0
-        return StrategyResult(strategy, representative.parameters, avg_return, avg_dd, avg_sharpe, sum(item.trades for item in windows), stability, quality, avg_score, representative.train_score, representative.test_score)
+        avg_trades = sum(item.trades for item in windows)
+        avg_train_score = mean(item.train_score for item in windows)
+        avg_test_score = mean(item.test_score for item in windows)
+        score = cls._score(
+            avg_return,
+            avg_dd,
+            avg_sharpe,
+            avg_trades,
+            stability,
+            return_target_pct=return_target_pct,
+            drawdown_limit_pct=max_drawdown_pct,
+        )
 
-    def analyze(self, *, instrument_uid: str, ticker: str, candles: Iterable[Candle], profile: str = "medium_term", risk_profile: str = "balanced", horizon: str = "medium") -> AnalysisResult:
+        quality = (
+            window_count >= 5
+            and return_consistency >= 60.0
+            and stability >= min_stability_pct
+            and avg_return > 0.0
+            and avg_dd <= max_drawdown_pct
+            and avg_sharpe > 0.0
+        )
+
+        representative = max(windows, key=lambda item: item.test_score)
+        return StrategyResult(
+            strategy,
+            representative.parameters,
+            avg_return,
+            avg_dd,
+            avg_sharpe,
+            avg_trades,
+            stability,
+            quality,
+            score,
+            avg_train_score,
+            avg_test_score,
+        )
+
+    def analyze(
+        self,
+        *,
+        instrument_uid: str,
+        ticker: str,
+        candles: Iterable[Candle],
+        profile: str = "medium_term",
+        risk_profile: str = "balanced",
+        horizon: str = "medium",
+    ) -> AnalysisResult:
         if profile not in self.PROFILES:
             raise ValueError(f"Unsupported profile: {profile}")
         ordered = sorted(list(candles), key=lambda item: item.timestamp)
@@ -251,14 +381,27 @@ class AnalysisService:
         winner = max(passed, key=lambda item: item.score) if passed else None
         confidence = "Low"
         if winner:
-            confidence = "High" if winner.stability >= 80 and winner.score >= 75 else "Medium" if winner.stability >= 60 else "Low"
+            confidence = "High" if winner.stability >= 80 and winner.score >= 75 else "Medium" if winner.stability >= 65 and winner.score >= 60 else "Low"
         explanation = (
             f"Рекомендована {winner.strategy}: Score {winner.score:.1f}, "
             f"Walk Forward stability {winner.stability:.0f}%, режим {regime}."
             if winner else "Ни одна стратегия не прошла Quality Gate; рекомендация не сформирована."
         )
         created_at = datetime.now(timezone.utc).isoformat()
-        return AnalysisResult(instrument_uid, ticker, profile, risk_profile, horizon, regime, winner.strategy if winner else None, confidence, winner.score if winner else 0.0, results, explanation, created_at)
+        return AnalysisResult(
+            instrument_uid,
+            ticker,
+            profile,
+            risk_profile,
+            horizon,
+            regime,
+            winner.strategy if winner else None,
+            confidence,
+            winner.score if winner else 0.0,
+            results,
+            explanation,
+            created_at,
+        )
 
     def save(self, result: AnalysisResult) -> int | None:
         if self.store is None:
