@@ -96,13 +96,12 @@ class ForecastService:
         upside_price = current_price * exp(drift + diffusion)
         expected_return_pct = (expected_price / current_price - 1.0) * 100.0
         expected_volatility_pct = (exp(diffusion) - 1.0) * 100.0
-        # P(log-return > 0) under the fitted normal log-return model.
         probability_up = cls._normal_cdf(drift / diffusion) if diffusion > 0 else (1.0 if drift > 0 else 0.5)
         probability_down = 1.0 - probability_up
         expected_drawdown_pct = max(0.0, (current_price - downside_price) / current_price * 100.0)
         return ForecastPoint(
             horizon_days=horizon,
-            current_price=round(current_price, 8),
+            current_price=current_price,
             expected_price=round(expected_price, 8),
             expected_return_pct=round(expected_return_pct, 4),
             downside_price=round(downside_price, 8),
@@ -139,7 +138,6 @@ class ForecastService:
         if not returns:
             raise ValueError("Недостаточно корректных цен для прогноза")
 
-        # Robust enough for the first increment while staying deterministic and transparent.
         mu = mean(returns)
         sigma = pstdev(returns) if len(returns) > 1 else 0.0
         confidence = cls._confidence(returns, len(ordered))
