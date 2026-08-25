@@ -23,7 +23,12 @@ def test_analysis_context_pipeline_forwards_risk_portfolio_kwargs(monkeypatch):
 
     monkeypatch.setattr(OpportunityEngine, "evaluate", classmethod(lambda _cls, *args, **kwargs: fake_evaluate(*args, **kwargs)))
     monkeypatch.setattr(decision_context_ui_v04, "_field", original_builder)
-    monkeypatch.setattr(decision_context_ui_v04, "_decision_context_pipeline_v04_installed", False)
+    monkeypatch.setattr(
+        decision_context_ui_v04,
+        "_decision_context_pipeline_v04_installed",
+        False,
+        raising=False,
+    )
 
     try:
         decision_context_ui_v04._install_analysis_context_pipeline()
