@@ -2,9 +2,9 @@ name: Edward CI
 
 on:
   push:
-    branches: ["main", "version-0.2", "version-0.3"]
+    branches: ["main", "version-0.2", "version-0.3", "version-0.4"]
   pull_request:
-    branches: ["main", "version-0.2", "version-0.3"]
+    branches: ["main", "version-0.2", "version-0.3", "version-0.4"]
   workflow_dispatch:
 
 jobs:
