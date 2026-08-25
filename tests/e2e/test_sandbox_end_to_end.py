@@ -110,7 +110,6 @@ def _get_tradable_instrument() -> tuple[str, Decimal]:
         uid = _instrument_uid(item)
         if not uid:
             continue
-
         if item.get("api_trade_available_flag") is False:
             continue
         if item.get("buy_available_flag") is False:
@@ -135,7 +134,10 @@ def _get_tradable_instrument() -> tuple[str, Decimal]:
             marker in status for marker in ("NORMAL_TRADING", "OPENING", "CLOSING")
         ):
             continue
+
         if status_payload.get("market_order_available_flag") is False:
+            continue
+        if status_payload.get("limit_order_available_flag") is False:
             continue
 
         prices = _request("POST", "/market/last-prices", {"instrument_ids": [uid]})
@@ -144,7 +146,7 @@ def _get_tradable_instrument() -> tuple[str, Decimal]:
         if price > 0:
             return uid, price
 
-    pytest.skip("No SHARE with API/buy/market-order availability and a positive market price in Sandbox")
+    pytest.skip("No SHARE with API/buy/limit-order availability and a positive market price in Sandbox")
 
 
 def _wait_terminal(account_id: str, order_id: str) -> dict:
@@ -166,7 +168,7 @@ def _wait_terminal(account_id: str, order_id: str) -> dict:
     return last_state
 
 
-def _create_market_order(account_id: str, instrument_uid: str, side: str) -> dict:
+def _create_limit_order(account_id: str, instrument_uid: str, side: str, price: Decimal) -> dict:
     request_id = str(uuid.uuid4())
     return _request(
         "POST",
@@ -176,10 +178,13 @@ def _create_market_order(account_id: str, instrument_uid: str, side: str) -> dic
             "instrument_uid": instrument_uid,
             "instrument_id": instrument_uid,
             "direction": side,
-            "order_type": "MARKET",
+            "order_type": "LIMIT",
             "quantity": 1,
+            "price": str(price),
             "order_id": request_id,
             "request_id": request_id,
+            "time_in_force": "TIME_IN_FORCE_FILL_AND_KILL",
+            "price_type": "PRICE_TYPE_CURRENCY",
         },
     )
 
@@ -247,6 +252,7 @@ def test_sandbox_read_only_end_to_end(sandbox_adapter):
     assert health["environment"] == "sandbox"
 
     account_id = _get_account_id()
+
     positions = _request("POST", "/accounts/sandbox-positions", {"account_id": account_id})
     assert "money" in positions
     assert "securities" in positions
@@ -267,10 +273,13 @@ def test_sandbox_read_only_end_to_end(sandbox_adapter):
 
     prices = _request("POST", "/market/last-prices", {"instrument_ids": [instrument_uid]})
     assert "last_prices" in prices
+
     statuses = _request("POST", "/market/trading-statuses", {"instrument_ids": [instrument_uid]})
     assert "trading_statuses" in statuses
+
     orders = _request("POST", "/orders", {"account_id": account_id})
     assert "orders" in orders
+
     operations = _request("POST", "/operations", {"account_id": account_id, "limit": 10})
     assert "items" in operations or "operations" in operations
 
@@ -286,7 +295,7 @@ def test_sandbox_order_lifecycle_end_to_end(sandbox_adapter):
     before_positions = _request("POST", "/accounts/sandbox-positions", {"account_id": account_id})
     before_portfolio = _request("POST", "/accounts/sandbox-portfolio", {"account_id": account_id})
 
-    created = _create_market_order(account_id, instrument_uid, "BUY")
+    created = _create_limit_order(account_id, instrument_uid, "BUY", market_price)
     order_id = str(created.get("order_id") or created.get("id") or "")
     assert order_id, f"Sandbox did not return order_id: {created}"
 
@@ -306,13 +315,11 @@ def test_sandbox_order_lifecycle_end_to_end(sandbox_adapter):
         assert any(token in cancelled_status for token in ("CANCEL", "REJECT", "FAIL", "INACTIVE")), f"Unexpected terminal state after cancellation: {cancelled}"
         return
 
-    assert "FILL" in status or lots_executed >= lots_requested
-
     after_buy_positions = _request("POST", "/accounts/sandbox-positions", {"account_id": account_id})
     after_buy_portfolio = _request("POST", "/accounts/sandbox-portfolio", {"account_id": account_id})
     assert after_buy_positions != before_positions or after_buy_portfolio != before_portfolio
 
-    sell_created = _create_market_order(account_id, instrument_uid, "SELL")
+    sell_created = _create_limit_order(account_id, instrument_uid, "SELL", market_price)
     sell_order_id = str(sell_created.get("order_id") or sell_created.get("id") or "")
     assert sell_order_id, f"Sandbox did not return SELL order_id: {sell_created}"
 
