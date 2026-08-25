@@ -8,15 +8,15 @@ from edward.services.tinvest_execution_adapter import TInvestExecutionAdapter
 
 class FakeClient:
     def __init__(self):
-        self.created = []
+        self.submitted = []
         self.cancelled = []
         self.state = {}
 
-    def create_order(self, payload):
-        self.created.append(dict(payload))
+    def post_order(self, request):
+        self.submitted.append(request)
         return {"order_id": "broker-1"}
 
-    def order_state(self, account_id, order_id):
+    def get_order_state(self, account_id, order_id):
         return self.state[(account_id, order_id)]
 
     def cancel_order(self, account_id, order_id):
@@ -39,22 +39,14 @@ def request():
     )
 
 
-def test_submit_maps_execution_request_and_remembers_account():
+def test_submit_uses_existing_tinvest_request_contract():
     client = FakeClient()
     adapter = TInvestExecutionAdapter(client)
 
     broker_id = adapter.submit(request())
 
     assert broker_id == "broker-1"
-    assert client.created == [{
-        "request_id": "exec-1",
-        "account_id": "acc-1",
-        "instrument_uid": "uid-1",
-        "direction": "BUY",
-        "order_type": "LIMIT",
-        "quantity": 100,
-        "price": Decimal("10.25"),
-    }]
+    assert client.submitted == [request()]
 
 
 def test_status_maps_partial_fill_and_quotation():
@@ -113,7 +105,7 @@ def test_unknown_broker_order_is_rejected():
 
 def test_submit_requires_broker_order_id():
     class NoOrderIdClient(FakeClient):
-        def create_order(self, payload):
+        def post_order(self, request):
             return {"status": "ok"}
 
     adapter = TInvestExecutionAdapter(NoOrderIdClient())
