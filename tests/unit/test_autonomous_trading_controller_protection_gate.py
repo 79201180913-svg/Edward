@@ -36,7 +36,7 @@ def state():
 
 
 def plan():
-    return AutonomousExecutionPlan(steps=(SimpleNamespace(instrument_uid="uid", decision="HOLD"),))
+    return AutonomousExecutionPlan(steps=(SimpleNamespace(sequence=1, depends_on=None, instrument_uid="uid", action="HOLD", target_value=Decimal("0")),))
 
 
 def test_blocks_autonomous_execution_when_protection_reconciliation_fails():
