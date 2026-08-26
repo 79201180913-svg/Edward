@@ -244,7 +244,11 @@ def test_async_publish_uses_ui_dispatcher():
     def dispatch(callback, state):
         dispatched.append((callback, state))
 
-    controller = ExecutionCenterController(service, dispatch=dispatch)
+    controller = ExecutionCenterController(
+        service,
+        on_change=lambda state: None,
+        dispatch=dispatch,
+    )
     controller.load_request(request())
     assert dispatched[-1][1].request == request()
 
