@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
@@ -114,6 +115,17 @@ class TInvestAdapterClient:
         return {"units": str(whole), "nano": nano}
 
     @staticmethod
+    def _order_request_id(request: Any) -> str:
+        """Return a deterministic UUID for the broker request idempotency field."""
+        raw = str(getattr(request, "request_id", "") or getattr(request, "execution_id", "") or "").strip()
+        if not raw:
+            return str(uuid.uuid4())
+        try:
+            return str(uuid.UUID(raw))
+        except (ValueError, AttributeError, TypeError):
+            return str(uuid.uuid5(uuid.NAMESPACE_URL, raw))
+
+    @staticmethod
     def _order_payload(request: Any) -> dict:
         return {
             "quantity": int(getattr(request, "quantity")),
@@ -121,7 +133,7 @@ class TInvestAdapterClient:
             "account_id": str(getattr(request, "account_id")),
             "order_type": getattr(getattr(request, "order_type"), "value", getattr(request, "order_type")),
             "instrument_uid": str(getattr(request, "instrument_uid")),
-            "request_id": str(getattr(request, "request_id", getattr(request, "execution_id", ""))),
+            "request_id": TInvestAdapterClient._order_request_id(request),
             "price": TInvestAdapterClient._quotation_payload(getattr(request, "price", getattr(request, "entry_price", None))),
         }
 
@@ -133,6 +145,12 @@ class TInvestAdapterClient:
         normalized = dict(payload)
         if "price" in normalized:
             normalized["price"] = self._quotation_payload(normalized["price"])
+        if "request_id" in normalized:
+            raw = str(normalized["request_id"] or "").strip()
+            try:
+                normalized["request_id"] = str(uuid.UUID(raw)) if raw else str(uuid.uuid4())
+            except (ValueError, AttributeError, TypeError):
+                normalized["request_id"] = str(uuid.uuid5(uuid.NAMESPACE_URL, raw))
         return self._request("POST", "/orders/create", normalized)
 
     def order_state(self, account_id: str, order_id: str) -> dict:
