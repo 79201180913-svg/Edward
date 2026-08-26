@@ -46,7 +46,7 @@ class LiveOpportunitySearchService(OpportunitySearchService):
         plan = getattr(result, "trade_plan", None)
         risk_reward = getattr(plan, "risk_reward", None) if plan is not None else None
         strategy_quality_pass = str(result.reason or "") not in {"STRATEGY_QUALITY_FAIL", "RISK_FAIL", "CRITICAL_RISK"}
-        risk_reward_ok = decision not in {"BUY", "ADD", "REDUCE", "SELL"} or (risk_reward is not None and risk_reward > 0)
+        risk_reward_ok = decision not in {"BUY", "ADD"} or (risk_reward is not None and risk_reward > 0)
         position_size_ready = decision not in {"REDUCE", "SELL"} or int(getattr(result, "recommended_quantity", 0) or 0) > 0
         plan_ready = plan is not None
 
@@ -68,7 +68,9 @@ class LiveOpportunitySearchService(OpportunitySearchService):
         )
 
         readiness_text = "Исполнение: ДА" if gate.execution_ready else "Исполнение: НЕТ"
-        execution_explanation = f"{result.reason or ''} | Контроль качества прогноза: {forecast_quality_label} | {readiness_text}"
+        gate_reason_text = " | ".join(gate.reasons) if gate.reasons else ""
+        execution_parts = [str(result.reason or ""), *([gate_reason_text] if gate_reason_text else []), f"Контроль качества прогноза: {forecast_quality_label}", readiness_text]
+        execution_explanation = " | ".join(part for part in execution_parts if part)
         changes: dict[str, Any] = {"execution_ready": gate.execution_ready}
         if hasattr(result, "reason"):
             changes["reason"] = execution_explanation
