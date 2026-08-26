@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Callable
 
@@ -14,14 +15,27 @@ class ExecutionCenterState:
     result: ExecutionResult | None = None
     status: ExecutionStatus | None = None
     events: tuple[ExecutionEvent, ...] = ()
+    busy: bool = False
+    error: str | None = None
+
+
+Dispatch = Callable[[Callable[[ExecutionCenterState], None], ExecutionCenterState], None]
 
 
 class ExecutionCenterController:
     """UI-facing coordinator for the controlled execution flow."""
 
-    def __init__(self, service: ControlledExecutionService, on_change: Callable[[ExecutionCenterState], None] | None = None) -> None:
+    def __init__(
+        self,
+        service: ControlledExecutionService,
+        on_change: Callable[[ExecutionCenterState], None] | None = None,
+        dispatch: Dispatch | None = None,
+    ) -> None:
         self.service = service
         self.on_change = on_change
+        self.dispatch = dispatch or (lambda callback, state: callback(state))
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="edward-execution")
+        self._closed = False
         self.state = ExecutionCenterState()
 
     def load_request(self, request: ExecutionRequest) -> ExecutionCenterState:
@@ -62,6 +76,23 @@ class ExecutionCenterController:
         self._set_result(result)
         return result
 
+    def confirm_and_submit_async(self) -> Future[ExecutionResult]:
+        request = self._require_request()
+        if self.state.busy:
+            raise RuntimeError("execution operation is already running")
+        self.state = ExecutionCenterState(
+            request=request,
+            result=self.state.result,
+            status=self.state.status,
+            events=self.state.events,
+            busy=True,
+            error=None,
+        )
+        self._publish()
+        future = self._executor.submit(self.service.confirm_and_submit, request)
+        future.add_done_callback(self._async_complete)
+        return future
+
     def cancel(self) -> ExecutionResult:
         request = self._require_request()
         result = self.service.cancel_before_submission(request)
@@ -74,7 +105,37 @@ class ExecutionCenterController:
             result=self.state.result,
             status=event.status,
             events=self.state.events + (event,),
+            busy=self.state.busy,
+            error=self.state.error,
         )
+        self._publish()
+
+    def close(self) -> None:
+        self._closed = True
+        self.on_change = None
+        self._executor.shutdown(wait=False, cancel_futures=False)
+
+    def _async_complete(self, future: Future[ExecutionResult]) -> None:
+        try:
+            result = future.result()
+            next_state = ExecutionCenterState(
+                request=self.state.request,
+                result=result,
+                status=result.status,
+                events=self.state.events,
+                busy=False,
+                error=result.error_message,
+            )
+        except Exception as exc:
+            next_state = ExecutionCenterState(
+                request=self.state.request,
+                result=self.state.result,
+                status=ExecutionStatus.FAILED,
+                events=self.state.events,
+                busy=False,
+                error=str(exc),
+            )
+        self.state = next_state
         self._publish()
 
     def _set_result(self, result: ExecutionResult) -> None:
@@ -83,6 +144,8 @@ class ExecutionCenterController:
             result=result,
             status=result.status,
             events=self.state.events,
+            busy=False,
+            error=result.error_message,
         )
         self._publish()
 
@@ -92,13 +155,9 @@ class ExecutionCenterController:
         return self.state.request
 
     def _publish(self) -> None:
+        if self._closed:
+            return
         callback = self.on_change
         if callback is None:
             return
-        try:
-            callback(self.state)
-        except Exception:
-            # UI callbacks may outlive their Tk widgets after a window is closed.
-            # Detach a stale callback so later state publications do not break
-            # the execution flow.
-            self.on_change = None
+        self.dispatch(callback, self.state)
