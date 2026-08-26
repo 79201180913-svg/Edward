@@ -14,6 +14,7 @@ from edward.services.balance_service import BalanceService
 from edward.services.budget_planning_service import BudgetPlanningPolicy
 from edward.services.currency_service import CurrencyService
 from edward.services.opportunity_search_service import OpportunitySearchService
+from edward.ui.autonomous_control_ui_v07 import AutonomousControlPanel
 from edward.ui.autonomous_portfolio_ui_v07 import open_autonomous_portfolio_window
 
 logger = logging.getLogger("edward.autonomous.ui")
@@ -39,12 +40,11 @@ def _install_file_logging() -> Path:
 
 
 def install_autonomous_ui(app_class: type) -> None:
-    """Add the v0.7 autonomous read-only cycle to the existing GUI."""
+    """Add the v0.7 autonomous cycle and its explicit execution control to the existing GUI."""
     if getattr(app_class, "_autonomous_ui_v07_installed", False):
         return
     app_class._autonomous_ui_v07_installed = True
     log_path = _install_file_logging()
-
     original_shell = app_class._shell
     original_close = app_class._close
 
@@ -55,10 +55,13 @@ def install_autonomous_ui(app_class: type) -> None:
 
     def _page_autonomous(self: Any) -> None:
         ttk.Label(self.content, text="Автономная торговля", style="Title.TLabel").pack(anchor="w", pady=(0, 6))
-        ttk.Label(self.content, text="Планирование капитала и анализ возможностей. Текущий режим: только анализ, без отправки заявок.", style="Subtitle.TLabel").pack(anchor="w", pady=(0, 14))
+        ttk.Label(self.content, text="Планирование капитала и анализ возможностей.", style="Subtitle.TLabel").pack(anchor="w", pady=(0, 10))
         aid = self._require_account()
         if not aid:
             return
+
+        control = AutonomousControlPanel(self.content)
+        control.pack(fill="x", pady=(0, 12))
 
         controls = ttk.Frame(self.content)
         controls.pack(fill="x", pady=(0, 12))
@@ -174,14 +177,7 @@ def install_autonomous_ui(app_class: type) -> None:
             self.after(0, apply)
 
         def open_portfolio() -> None:
-            open_autonomous_portfolio_window(
-                self,
-                self.client,
-                aid,
-                display_currency=str(self.display_currency.get() or "RUB"),
-                opportunities=tuple(latest_portfolio_opportunities),
-            )
-
+            open_autonomous_portfolio_window(self, self.client, aid, display_currency=str(self.display_currency.get() or "RUB"), opportunities=tuple(latest_portfolio_opportunities))
         portfolio_button.configure(command=open_portfolio)
 
         def on_progress(stage: str, percent: float, current: int, total: int) -> None:
@@ -195,8 +191,8 @@ def install_autonomous_ui(app_class: type) -> None:
                 slots = int(slots_var.get())
                 reserve_pct = Decimal(str(reserve_var.get()).replace(",", "."))
                 policy = BudgetPlanningPolicy(slots=slots, reserve_pct=reserve_pct)
-                logger.info("autonomous_cycle_started account_id=%s profile=%s slots=%d reserve_pct=%s", aid, profile_var.get(), slots, reserve_pct)
-                log_ui("Запуск автономного цикла")
+                logger.info("autonomous_cycle_started account_id=%s profile=%s slots=%d reserve_pct=%s mode=%s enabled=%s", aid, profile_var.get(), slots, reserve_pct, control.mode().value, control.state.snapshot().enabled)
+                log_ui(f"Запуск автономного цикла: режим={control.mode().value}, исполнение={'ВКЛ' if control.state.snapshot().enabled else 'ВЫКЛ'}")
                 service = AutonomousCycleService(AutonomousPlanningService(BalanceService(self.client)), OpportunitySearchService(self.client))
                 active_scope = {"value": "Рынок"}
 
@@ -212,7 +208,7 @@ def install_autonomous_ui(app_class: type) -> None:
                     log_ui("План капитала рассчитан по текущему счёту")
 
                 result = service.run(account_id=aid, policy=policy, profile=profile_var.get(), instrument_kind="SHARE", progress_callback=on_progress, result_callback=result_callback, scope_callback=scope_callback, planning_callback=planning_callback)
-                logger.info("autonomous_cycle_completed account_id=%s profile=%s market=%d portfolio=%d allocation=%d execution_steps=%d", aid, profile_var.get(), len(result.market_opportunities), len(result.portfolio_opportunities), len(result.allocation_actions), len(result.execution_plan.steps) if result.execution_plan else 0)
+                logger.info("autonomous_cycle_completed account_id=%s profile=%s market=%d portfolio=%d allocation=%d execution_steps=%d mode=%s enabled=%s", aid, profile_var.get(), len(result.market_opportunities), len(result.portfolio_opportunities), len(result.allocation_actions), len(result.execution_plan.steps) if result.execution_plan else 0, control.mode().value, control.state.snapshot().enabled)
                 render_result(result)
             except Exception as exc:
                 logger.exception("autonomous_cycle_failed account_id=%s", aid)
@@ -231,12 +227,9 @@ def install_autonomous_ui(app_class: type) -> None:
             except Exception:
                 messagebox.showwarning("Edward", "Проверьте количество слотов и резерв.")
                 return
-            for item in tree.get_children():
-                tree.delete(item)
-            for item in allocation_tree.get_children():
-                allocation_tree.delete(item)
-            for item in execution_tree.get_children():
-                execution_tree.delete(item)
+            for item in tree.get_children(): tree.delete(item)
+            for item in allocation_tree.get_children(): allocation_tree.delete(item)
+            for item in execution_tree.get_children(): execution_tree.delete(item)
             latest_portfolio_opportunities.clear()
             start_button.configure(state="disabled")
             status_var.set("Подготовка автономного цикла...")
