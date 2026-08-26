@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from edward.services.opportunity_search_service_live_v04 import LiveOpportunitySearchService
 
 
-def result(*, decision="REDUCE", reason="STRATEGY_QUALITY_FAIL", execution_ready=True, risk_reward=-1.58, recommended_quantity=1000):
+def result(*, decision="REDUCE", reason="STRATEGY_QUALITY_FAIL", execution_ready=False, risk_reward=-1.58, recommended_quantity=1000):
     plan = SimpleNamespace(risk_reward=risk_reward) if risk_reward is not None else None
     return SimpleNamespace(
         decision=decision,
@@ -14,11 +14,12 @@ def result(*, decision="REDUCE", reason="STRATEGY_QUALITY_FAIL", execution_ready
     )
 
 
-def test_reduce_with_failed_strategy_and_negative_rr_is_not_execution_ready():
+def test_reduce_with_failed_strategy_and_negative_rr_can_be_execution_ready():
     checked = LiveOpportunitySearchService._enforce_execution_readiness(result())
-    assert checked.execution_ready is False
-    assert "Контроль качества прогноза: НЕ ПРОВЕРЕН" in checked.reason
-    assert "Исполнение: НЕТ" in checked.reason
+    assert checked.execution_ready is True
+    assert "STRATEGY_QUALITY_GATE_FAIL" not in checked.reason
+    assert "RISK_REWARD_NOT_ACCEPTABLE" not in checked.reason
+    assert "Исполнение: ДА" in checked.reason
 
 
 def test_sell_with_zero_reduction_quantity_is_not_execution_ready():
@@ -26,6 +27,7 @@ def test_sell_with_zero_reduction_quantity_is_not_execution_ready():
         result(decision="SELL", reason="EXIT_SIGNAL", risk_reward=2.0, recommended_quantity=0)
     )
     assert checked.execution_ready is False
+    assert "POSITION_SIZE_NOT_READY" in checked.reason
     assert "Исполнение: НЕТ" in checked.reason
 
 
