@@ -37,9 +37,9 @@ class AutonomousReplanningCycleService:
 
     def run(self) -> AutonomousReplanningCycleResult:
         executed: list[int] = []
+        state = self._refresh_state()
 
         for iteration in range(1, self._max_iterations + 1):
-            state = self._refresh_state()
             plan = self._build_plan(state)
             if not plan.steps:
                 return AutonomousReplanningCycleResult(True, iteration, tuple(executed))
@@ -48,13 +48,17 @@ class AutonomousReplanningCycleService:
             try:
                 execution = self._execute_step(step)
             except Exception as exc:
-                return AutonomousReplanningCycleResult(False, iteration, tuple(executed), f"EXECUTION_ERROR:{exc}")
+                return AutonomousReplanningCycleResult(
+                    False, iteration, tuple(executed), f"EXECUTION_ERROR:{exc}"
+                )
 
             try:
                 refreshed_state = self._refresh_state()
                 verification = self._verify_step(step, execution, refreshed_state)
             except Exception as exc:
-                return AutonomousReplanningCycleResult(False, iteration, tuple(executed), f"VERIFICATION_ERROR:{exc}")
+                return AutonomousReplanningCycleResult(
+                    False, iteration, tuple(executed), f"VERIFICATION_ERROR:{exc}"
+                )
 
             if not verification.passed:
                 return AutonomousReplanningCycleResult(
@@ -65,10 +69,18 @@ class AutonomousReplanningCycleService:
                 )
 
             executed.append(int(step.sequence))
-            # The old plan is now discarded. The next iteration starts from
-            # refreshed_state and rebuilds budget, opportunities and allocation.
+            # The verified refreshed state is authoritative for the next plan.
+            # Do not refresh it again before rebuilding: that would introduce a
+            # second state transition and could cause the next plan to be built
+            # from a different account snapshot than the one just verified.
+            state = refreshed_state
 
-        return AutonomousReplanningCycleResult(False, self._max_iterations, tuple(executed), "MAX_ITERATIONS_REACHED")
+        return AutonomousReplanningCycleResult(
+            False,
+            self._max_iterations,
+            tuple(executed),
+            "MAX_ITERATIONS_REACHED",
+        )
 
 
 __all__ = ["AutonomousReplanningCycleResult", "AutonomousReplanningCycleService"]
