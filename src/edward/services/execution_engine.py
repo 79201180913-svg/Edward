@@ -4,16 +4,7 @@ import logging
 from dataclasses import replace
 from typing import Callable, Optional, Protocol
 
-from edward.domain.execution import (
-    ExecutionEvent,
-    ExecutionEventType,
-    ExecutionJournal,
-    ExecutionJournalEntry,
-    ExecutionMode,
-    ExecutionRequest,
-    ExecutionResult,
-    ExecutionStatus,
-)
+from edward.domain.execution import ExecutionEvent, ExecutionEventType, ExecutionJournal, ExecutionJournalEntry, ExecutionMode, ExecutionRequest, ExecutionResult, ExecutionStatus
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +107,8 @@ class ExecutionEngine:
             raise ValueError(f"unsupported execution mode: {mode}")
 
         self._update_status(request.execution_id, ExecutionStatus.SUBMITTING)
-        self._emit(request.execution_id, ExecutionEventType.SUBMITTING, ExecutionStatus.SUBMITTING, "Автономная отправка заявки" if mode is ExecutionMode.AUTONOMOUS else "Отправка заявки")
+        message = "Автономная отправка заявки" if mode is ExecutionMode.AUTONOMOUS else "Отправка заявки"
+        self._emit(request.execution_id, ExecutionEventType.SUBMITTING, ExecutionStatus.SUBMITTING, message)
         logger.info("[EXECUTION] ORDER CREATE execution_id=%s ticker=%s side=%s quantity=%s order_type=%s mode=%s", request.execution_id, request.ticker, request.side, request.quantity, request.order_type, mode.value)
         try:
             broker_order_id = self.adapter.submit(request)
@@ -126,7 +118,6 @@ class ExecutionEngine:
             self._emit(request.execution_id, ExecutionEventType.ERROR, ExecutionStatus.FAILED, "Ошибка отправки заявки", {"error": str(exc)})
             return ExecutionResult(request.execution_id, ExecutionStatus.FAILED, error_code=type(exc).__name__, error_message=str(exc))
 
-        logger.info("[EXECUTION] ORDER CREATE SUCCESS execution_id=%s broker_order_id=%s", request.execution_id, broker_order_id)
         self._update_status(request.execution_id, ExecutionStatus.SUBMITTED, broker_order_id=broker_order_id)
         self._emit(request.execution_id, ExecutionEventType.SUBMITTED, ExecutionStatus.SUBMITTED, "Заявка отправлена", {"broker_order_id": broker_order_id})
         return ExecutionResult(request.execution_id, ExecutionStatus.SUBMITTED, broker_order_id=broker_order_id)
@@ -138,8 +129,7 @@ class ExecutionEngine:
         if self.adapter is None:
             raise RuntimeError("execution adapter is not configured")
         current = self.adapter.get_status(entry.broker_order_id)
-        if current.status != entry.status:
-            self._update_status(execution_id, current.status, broker_order_id=entry.broker_order_id, error_code=current.error_code, error_message=current.error_message)
+        self._update_status(execution_id, current.status, broker_order_id=entry.broker_order_id, filled_quantity=current.filled_quantity, average_fill_price=current.average_fill_price, commission=current.commission, error_code=current.error_code, error_message=current.error_message)
         return current
 
     def cancel(self, execution_id: str) -> ExecutionResult:
@@ -159,24 +149,35 @@ class ExecutionEngine:
         return ExecutionJournalEntry(
             execution_id=request.execution_id,
             account_id=request.account_id,
-            ticker=request.ticker,
             instrument_uid=request.instrument_uid,
+            ticker=request.ticker,
             decision=request.decision,
-            quantity=request.quantity,
+            side=request.side,
+            order_type=request.order_type,
+            requested_quantity=request.quantity,
+            requested_price=request.entry_price,
+            stop_price=request.stop_price,
+            execution_ready=request.execution_ready,
             status=status,
-            broker_order_id=None,
-            error_code=None,
-            error_message=None,
         )
 
-    def _update_status(self, execution_id: str, status: ExecutionStatus, *, broker_order_id: str | None = None, error_code: str | None = None, error_message: str | None = None) -> None:
+    def _update_status(self, execution_id: str, status: ExecutionStatus, *, broker_order_id: str | None = None, filled_quantity=None, average_fill_price=None, commission=None, error_code: str | None = None, error_message: str | None = None) -> None:
         current = self._require_existing(execution_id)
-        self.journal.update(replace(current, status=status, broker_order_id=broker_order_id if broker_order_id is not None else current.broker_order_id, error_code=error_code, error_message=error_message))
+        self.journal.update(replace(
+            current,
+            status=status,
+            broker_order_id=broker_order_id if broker_order_id is not None else current.broker_order_id,
+            filled_quantity=filled_quantity if filled_quantity is not None else current.filled_quantity,
+            average_fill_price=average_fill_price if average_fill_price is not None else current.average_fill_price,
+            commission=commission if commission is not None else current.commission,
+            error_code=error_code,
+            error_message=error_message,
+        ))
 
-    def _emit(self, execution_id: str, event_type: ExecutionEventType, status: ExecutionStatus, message: str, details: dict | None = None) -> None:
+    def _emit(self, execution_id: str, event_type: ExecutionEventType, status: ExecutionStatus, message: str, payload: dict | None = None) -> None:
         if self.event_callback is None:
             return
-        self.event_callback(ExecutionEvent(execution_id=execution_id, event_type=event_type, status=status, message=message, details=details or {}))
+        self.event_callback(ExecutionEvent(execution_id=execution_id, event_type=event_type, status=status, message=message, payload=payload or {}))
 
 
 __all__ = ["ExecutionAdapter", "ExecutionEngine", "InMemoryExecutionJournal"]
