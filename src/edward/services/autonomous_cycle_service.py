@@ -45,8 +45,12 @@ class AutonomousCycleService:
         instrument_kind: str = "SHARE",
         progress_callback: Callable[[str, float, int, int], None] | None = None,
         result_callback: Callable[[OpportunitySearchResult, int, int], None] | None = None,
+        scope_callback: Callable[[str], None] | None = None,
     ) -> AutonomousCycleResult:
         planning = self._planning.plan(account_id, policy)
+
+        if scope_callback is not None:
+            scope_callback(MARKET_SCOPE)
         market = self._opportunities.scan(
             profile=profile,
             instrument_kind=instrument_kind,
@@ -54,6 +58,9 @@ class AutonomousCycleService:
             progress_callback=progress_callback,
             result_callback=result_callback,
         )
+
+        if scope_callback is not None:
+            scope_callback(PORTFOLIO_SCOPE)
         portfolio = self._opportunities.scan(
             profile=profile,
             instrument_kind=instrument_kind,
