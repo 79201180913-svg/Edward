@@ -97,8 +97,9 @@ class TInvestAdapterClient:
     def get_orders(self, account_id: str) -> dict: return self._request("POST", "/orders", {"account_id": account_id})
     def get_order_state(self, account_id: str, order_id: str) -> dict: return self._request("POST", "/orders/state", {"account_id": account_id, "order_id": order_id})
     def get_order_price(self, account_id: str, instrument_id: str, price: Any, direction: str, quantity: int) -> dict:
-        return self._request("POST", "/orders/price", {"account_id": account_id, "instrument_id": instrument_id, "price": price, "direction": direction, "quantity": quantity})
-    def get_max_lots(self, account_id: str, instrument_id: str, price: Any) -> dict: return self._request("POST", "/orders/max-lots", {"account_id": account_id, "instrument_id": instrument_id, "price": price})
+        return self._request("POST", "/orders/price", {"account_id": account_id, "instrument_id": instrument_id, "price": self._quotation_payload(price), "direction": direction, "quantity": quantity})
+    def get_max_lots(self, account_id: str, instrument_id: str, price: Any) -> dict:
+        return self._request("POST", "/orders/max-lots", {"account_id": account_id, "instrument_id": instrument_id, "price": self._quotation_payload(price)})
     def get_operations(self, account_id: str, limit: int = 1000) -> dict: return self._request("POST", "/operations", {"account_id": account_id, "limit": limit})
 
     @staticmethod
@@ -150,5 +151,4 @@ class TInvestAdapterClient:
     def get_stop_orders(self, account_id: str) -> dict:
         return self._request("POST", "/stop-orders", {"account_id": account_id})
 
-    def cancel_stop_order(self, account_id: str, stop_order_id: str) -> dict:
-        return self._request("POST", "/stop-orders/cancel", {"account_id": account_id, "stop_order_id": stop_order_id})
+    def cancel_stop_order(self, account_id: str, stop_order_id: str) -> dict: return self._request("POST", "/stop-orders/cancel", {"account_id": account_id, "stop_order_id": stop_order_id})
