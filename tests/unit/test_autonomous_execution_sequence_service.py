@@ -3,11 +3,9 @@ from types import SimpleNamespace
 
 from edward.domain.execution import ExecutionStatus
 from edward.services.account_state_refresh_service import AccountState
-from edward.services.autonomous_execution_plan_service import (
-    AutonomousExecutionPlan,
-    ExecutionPlanStep,
-)
+from edward.services.autonomous_execution_plan_service import AutonomousExecutionPlan, ExecutionPlanStep
 from edward.services.autonomous_execution_sequence_service import (
+    AutonomousExecutionPhase,
     AutonomousExecutionSequenceService,
 )
 
@@ -35,10 +33,7 @@ class FakeBridge:
 
     def enqueue_opportunity(self, *, account_id, result):
         self.counter += 1
-        request = SimpleNamespace(
-            execution_id=f"exec-{self.counter}",
-            quantity=Decimal(str(result.recommended_quantity)),
-        )
+        request = SimpleNamespace(execution_id=f"exec-{self.counter}", quantity=Decimal(str(result.recommended_quantity)))
         return SimpleNamespace(accepted=True, request=request, result=SimpleNamespace(status=ExecutionStatus.READY), reason="")
 
     def request_confirmation(self, execution_id):
@@ -46,99 +41,81 @@ class FakeBridge:
 
 
 class FakeRefresh:
-    def __init__(self, before, after):
-        self.states = [before, after]
+    def __init__(self, *states):
+        self.states = list(states)
 
     def refresh(self, account_id):
         return self.states.pop(0)
 
 
 def state(uid="old", quantity=10):
-    return AccountState(
-        portfolio=None,
-        positions=[SimpleNamespace(instrument_uid=uid, quantity=quantity)],
-        balance=None,
-        orders=None,
-    )
+    return AccountState(portfolio=None, positions=[SimpleNamespace(instrument_uid=uid, quantity=quantity)], balance=None, orders=None)
 
 
 def step(sequence, action, uid, ticker, depends_on=None):
-    return ExecutionPlanStep(
-        sequence=sequence,
-        action=action,
-        ticker=ticker,
-        instrument_uid=uid,
-        target_value=Decimal("10000"),
-        depends_on=depends_on,
-    )
+    return ExecutionPlanStep(sequence=sequence, action=action, ticker=ticker, instrument_uid=uid, target_value=Decimal("10000"), depends_on=depends_on)
 
 
 def result(step):
-    return SimpleNamespace(
-        decision=step.action,
-        execution_ready=True,
-        instrument_uid=step.instrument_uid,
-        ticker=step.ticker,
-        recommended_quantity=10,
-        price=100,
-    )
+    return SimpleNamespace(decision=step.action, execution_ready=True, instrument_uid=step.instrument_uid, ticker=step.ticker, recommended_quantity=10, price=100)
 
 
 def test_replace_sequence_stops_before_buy_when_sell_not_verified():
     confirmation = FakeConfirmation()
-    bridge = FakeBridge(confirmation)
-    refresh = FakeRefresh(state("old", 10), state("old", 2))
-    service = AutonomousExecutionSequenceService(bridge, refresh)
-    plan = AutonomousExecutionPlan(steps=(
-        step(1, "SELL", "old", "OLD"),
-        step(2, "BUY", "new", "NEW", depends_on=1),
-    ))
+    service = AutonomousExecutionSequenceService(FakeBridge(confirmation), FakeRefresh(state("old", 10), state("old", 2)))
+    plan = AutonomousExecutionPlan(steps=(step(1, "SELL", "old", "OLD"), step(2, "BUY", "new", "NEW", depends_on=1)))
 
-    outcome = service.execute_confirmed_plan(
-        account_id="ACC", plan=plan, result_factory=result,
-    )
+    outcome = service.execute_confirmed_plan(account_id="ACC", plan=plan, result_factory=result)
 
     assert outcome.completed is False
     assert outcome.stopped_at == 1
-    assert len(outcome.steps) == 1
+    assert outcome.phase is AutonomousExecutionPhase.STOPPED
+    assert [event.phase for event in outcome.events] == [
+        AutonomousExecutionPhase.PREPARING,
+        AutonomousExecutionPhase.EXECUTING,
+        AutonomousExecutionPhase.VERIFYING,
+        AutonomousExecutionPhase.STOPPED,
+    ]
     assert confirmation.submitted == ["exec-1"]
 
 
 def test_replace_sequence_allows_buy_after_verified_sell():
     confirmation = FakeConfirmation()
-    bridge = FakeBridge(confirmation)
-    refresh = FakeRefresh(
-        state("old", 10),
-        state("old", 0),
+    service = AutonomousExecutionSequenceService(
+        FakeBridge(confirmation),
+        FakeRefresh(state("old", 10), state("old", 0), state("old", 0), state("new", 10)),
     )
-    # A real second refresh is needed before the BUY and after it.
-    refresh.states.extend([state("old", 0), state("new", 10)])
-    service = AutonomousExecutionSequenceService(bridge, refresh)
-    plan = AutonomousExecutionPlan(steps=(
-        step(1, "SELL", "old", "OLD"),
-        step(2, "BUY", "new", "NEW", depends_on=1),
-    ))
+    plan = AutonomousExecutionPlan(steps=(step(1, "SELL", "old", "OLD"), step(2, "BUY", "new", "NEW", depends_on=1)))
 
-    outcome = service.execute_confirmed_plan(
-        account_id="ACC", plan=plan, result_factory=result,
-    )
+    outcome = service.execute_confirmed_plan(account_id="ACC", plan=plan, result_factory=result)
 
     assert outcome.completed is True
+    assert outcome.phase is AutonomousExecutionPhase.COMPLETED
     assert [item.step.action for item in outcome.steps] == ["SELL", "BUY"]
     assert confirmation.submitted == ["exec-1", "exec-2"]
+    assert outcome.events[-1].phase is AutonomousExecutionPhase.COMPLETED
 
 
 def test_sequence_stops_when_submission_fails():
     confirmation = FakeConfirmation(ExecutionStatus.BLOCKED)
-    bridge = FakeBridge(confirmation)
-    refresh = FakeRefresh(state("old", 10), state("old", 10))
-    service = AutonomousExecutionSequenceService(bridge, refresh)
+    service = AutonomousExecutionSequenceService(FakeBridge(confirmation), FakeRefresh(state("old", 10), state("old", 10)))
     plan = AutonomousExecutionPlan(steps=(step(1, "SELL", "old", "OLD"),))
 
-    outcome = service.execute_confirmed_plan(
-        account_id="ACC", plan=plan, result_factory=result,
-    )
+    outcome = service.execute_confirmed_plan(account_id="ACC", plan=plan, result_factory=result)
 
     assert outcome.completed is False
     assert outcome.stopped_at == 1
+    assert outcome.phase is AutonomousExecutionPhase.STOPPED
     assert outcome.steps[0].verification is None
+
+
+def test_dependency_failure_is_reported_as_stopped_phase():
+    confirmation = FakeConfirmation()
+    service = AutonomousExecutionSequenceService(FakeBridge(confirmation), FakeRefresh(state("old", 0)))
+    plan = AutonomousExecutionPlan(steps=(step(1, "BUY", "new", "NEW", depends_on=99),))
+
+    outcome = service.execute_confirmed_plan(account_id="ACC", plan=plan, result_factory=result)
+
+    assert outcome.completed is False
+    assert outcome.phase is AutonomousExecutionPhase.STOPPED
+    assert outcome.steps[0].reason == "DEPENDENCY_NOT_COMPLETED:99"
