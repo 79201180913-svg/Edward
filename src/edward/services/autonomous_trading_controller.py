@@ -10,6 +10,7 @@ from edward.services.autonomous_execution_preflight_service import AutonomousExe
 from edward.services.autonomous_execution_sequence_service import AutonomousExecutionPhase, AutonomousExecutionPhaseEvent, AutonomousExecutionSequenceResult, AutonomousExecutionSequenceService
 from edward.services.autonomous_replanning_cycle_service import AutonomousReplanningCycleResult, AutonomousReplanningCycleService
 from edward.services.budget_planning_service import BudgetPlan
+from edward.services.protection_reconciliation_service import ProtectionReconciliationService
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,11 +26,10 @@ class AutonomousTradingControlResult:
 
 
 class AutonomousTradingController:
-    """Explicit gate between autonomous planning and real submission."""
-
-    def __init__(self, sequence_service: AutonomousExecutionSequenceService, *, preflight_service: AutonomousExecutionPreflightService | None = None) -> None:
+    def __init__(self, sequence_service: AutonomousExecutionSequenceService, *, preflight_service: AutonomousExecutionPreflightService | None = None, protection_reconciliation: ProtectionReconciliationService | None = None) -> None:
         self._sequence = sequence_service
         self._preflight = preflight_service or AutonomousExecutionPreflightService()
+        self._protection_reconciliation = protection_reconciliation
         self._enabled = False
 
     @property
@@ -42,7 +42,7 @@ class AutonomousTradingController:
     def disable(self) -> None:
         self._enabled = False
 
-    def _gate(self, *, mode: ExecutionMode, plan: AutonomousExecutionPlan, budget: BudgetPlan | None, state: AccountState | None) -> tuple[bool, str, tuple[str, ...]]:
+    def _gate(self, *, account_id: str, mode: ExecutionMode, plan: AutonomousExecutionPlan, budget: BudgetPlan | None, state: AccountState | None) -> tuple[bool, str, tuple[str, ...]]:
         if mode is not ExecutionMode.AUTONOMOUS:
             return False, "AUTONOMOUS_MODE_REQUIRED", ()
         if not self._enabled:
@@ -51,6 +51,10 @@ class AutonomousTradingController:
             return False, "EMPTY_EXECUTION_PLAN", ()
         if budget is None or state is None:
             return False, "FRESH_ACCOUNT_STATE_REQUIRED", ()
+        if self._protection_reconciliation is not None:
+            reconciliation = self._protection_reconciliation.reconcile(account_id=account_id, positions=state.positions)
+            if not reconciliation.protected:
+                return False, "PROTECTION_RECONCILIATION_FAILED", reconciliation.reasons
         preflight = self._preflight.validate(plan=plan, budget=budget, state=state)
         if not preflight.passed:
             return False, "PREFLIGHT_REJECTED", preflight.reasons
@@ -65,7 +69,7 @@ class AutonomousTradingController:
             return self._sequence.execute_confirmed_plan(account_id=account_id, plan=plan, result_factory=result_factory)
 
     def execute(self, *, account_id: str, plan: AutonomousExecutionPlan, result_factory: Callable[[Any], Any], mode: ExecutionMode = ExecutionMode.ANALYSIS_ONLY, budget: BudgetPlan | None = None, state: AccountState | None = None) -> AutonomousTradingControlResult:
-        allowed, reason, reasons = self._gate(mode=mode, plan=plan, budget=budget, state=state)
+        allowed, reason, reasons = self._gate(account_id=account_id, mode=mode, plan=plan, budget=budget, state=state)
         if not allowed:
             return AutonomousTradingControlResult(mode=mode, executed=False, reason=reason, preflight_reasons=reasons)
         sequence = self._execute_sequence(account_id=account_id, plan=plan, result_factory=result_factory, mode=mode)
@@ -84,7 +88,7 @@ class AutonomousTradingController:
             if not plan.steps:
                 return plan
             budget = budget_for_state(state)
-            allowed, reason, reasons = self._gate(mode=mode, plan=plan, budget=budget, state=state)
+            allowed, reason, reasons = self._gate(account_id=account_id, mode=mode, plan=plan, budget=budget, state=state)
             if not allowed:
                 preflight_reasons.extend(reasons or (reason,))
                 cycle_error.append(reason + (":" + ";".join(reasons) if reasons else ""))
