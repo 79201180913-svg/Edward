@@ -38,12 +38,7 @@ def _install_file_logging() -> Path:
 
 
 def install_autonomous_ui(app_class: type) -> None:
-    """Add the v0.7 autonomous read-only cycle to the existing GUI.
-
-    This is a UI adapter only. Market analysis remains inside the existing
-    OpportunitySearchService; the UI does not fetch candles or implement
-    analysis logic itself.
-    """
+    """Add the v0.7 autonomous read-only cycle to the existing GUI."""
     if getattr(app_class, "_autonomous_ui_v07_installed", False):
         return
     app_class._autonomous_ui_v07_installed = True
@@ -55,21 +50,11 @@ def install_autonomous_ui(app_class: type) -> None:
     def _shell(self: Any) -> None:
         original_shell(self)
         ttk.Separator(self.nav).pack(fill="x", pady=14)
-        ttk.Button(
-            self.nav,
-            text="Автономная торговля",
-            style="Nav.TButton",
-            command=lambda: self.show_page("autonomous"),
-        ).pack(fill="x", pady=2)
+        ttk.Button(self.nav, text="Автономная торговля", style="Nav.TButton", command=lambda: self.show_page("autonomous")).pack(fill="x", pady=2)
 
     def _page_autonomous(self: Any) -> None:
         ttk.Label(self.content, text="Автономная торговля", style="Title.TLabel").pack(anchor="w", pady=(0, 6))
-        ttk.Label(
-            self.content,
-            text="Планирование капитала и анализ возможностей. Текущий режим: только анализ, без отправки заявок.",
-            style="Subtitle.TLabel",
-        ).pack(anchor="w", pady=(0, 14))
-
+        ttk.Label(self.content, text="Планирование капитала и анализ возможностей. Текущий режим: только анализ, без отправки заявок.", style="Subtitle.TLabel").pack(anchor="w", pady=(0, 14))
         aid = self._require_account()
         if not aid:
             return
@@ -92,7 +77,6 @@ def install_autonomous_ui(app_class: type) -> None:
 
         status_var = tk.StringVar(value="Готово")
         ttk.Label(self.content, textvariable=status_var).pack(anchor="w", pady=(0, 8))
-
         cards = ttk.Frame(self.content)
         cards.pack(fill="x", pady=(0, 14))
         for column in range(5):
@@ -107,8 +91,7 @@ def install_autonomous_ui(app_class: type) -> None:
             card_values[key] = value
 
         ttk.Label(self.content, text="Возможности рынка и портфеля", style="CardTitle.TLabel").pack(anchor="w", pady=(4, 6))
-        columns = ("Область", "Тикер", "Решение", "Score", "Риск", "Цена", "Кол-во", "Стоимость", "Статус")
-        tree = self._tree(self.content, columns, (90, 100, 100, 80, 75, 110, 80, 115, 250))
+        tree = self._tree(self.content, ("Область", "Тикер", "Решение", "Score", "Риск", "Цена", "Кол-во", "Стоимость", "Статус"), (90, 100, 100, 80, 75, 110, 80, 115, 250))
         activity = tk.Text(self.content, height=7, wrap="word", state="disabled")
         activity.pack(fill="x", pady=(12, 0))
 
@@ -124,13 +107,22 @@ def install_autonomous_ui(app_class: type) -> None:
             target_currency = str(self.display_currency.get() or source_currency or "RUB").upper()
             source_currency = str(source_currency or "RUB").upper()
             try:
-                converted = value
-                if source_currency != target_currency:
-                    converted = CurrencyService(self.client).convert(value, source_currency, target_currency)
+                converted = value if source_currency == target_currency else CurrencyService(self.client).convert(value, source_currency, target_currency)
                 return self._money(converted, target_currency)
             except Exception:
                 logger.exception("autonomous_currency_conversion_failed source=%s target=%s", source_currency, target_currency)
                 return self._money(value, source_currency)
+
+        def render_budget(planning: Any) -> None:
+            budget = planning.budget
+            source_currency = getattr(budget, "currency", None) or "RUB"
+            def apply() -> None:
+                card_values["capital"].configure(text=display_money(budget.account_capital, source_currency))
+                card_values["reserve"].configure(text=display_money(budget.reserve, source_currency))
+                card_values["budget"].configure(text=display_money(budget.planning_budget, source_currency))
+                card_values["target"].configure(text=display_money(budget.target_position_value, source_currency))
+                card_values["cash"].configure(text=display_money(budget.investable_cash, source_currency))
+            self.after(0, apply)
 
         def insert_opportunity(opportunity: Any, scope: str) -> None:
             decision = opportunity.decision or "—"
@@ -150,13 +142,7 @@ def install_autonomous_ui(app_class: type) -> None:
                     insert_opportunity(opportunity, "Рынок")
                 for opportunity in result.portfolio_opportunities:
                     insert_opportunity(opportunity, "Портфель")
-                budget = result.planning.budget
-                source_currency = getattr(budget, "currency", None) or "RUB"
-                card_values["capital"].configure(text=display_money(budget.account_capital, source_currency))
-                card_values["reserve"].configure(text=display_money(budget.reserve, source_currency))
-                card_values["budget"].configure(text=display_money(budget.planning_budget, source_currency))
-                card_values["target"].configure(text=display_money(budget.target_position_value, source_currency))
-                card_values["cash"].configure(text=display_money(budget.investable_cash, source_currency))
+                render_budget(result.planning)
                 status_var.set(f"Завершено: рынок {len(result.market_opportunities)}, портфель {len(result.portfolio_opportunities)}")
                 log_ui(f"Цикл завершён: market={len(result.market_opportunities)} portfolio={len(result.portfolio_opportunities)}")
             self.after(0, apply)
@@ -184,15 +170,11 @@ def install_autonomous_ui(app_class: type) -> None:
                     active_scope["value"] = "Рынок" if scope == "MARKET" else "Портфель"
                     log_ui(f"Начат анализ: {active_scope['value']}")
 
-                result = service.run(
-                    account_id=aid,
-                    policy=policy,
-                    profile=profile_var.get(),
-                    instrument_kind="SHARE",
-                    progress_callback=on_progress,
-                    result_callback=result_callback,
-                    scope_callback=scope_callback,
-                )
+                def planning_callback(planning: Any) -> None:
+                    render_budget(planning)
+                    log_ui("План капитала рассчитан по текущему счёту")
+
+                result = service.run(account_id=aid, policy=policy, profile=profile_var.get(), instrument_kind="SHARE", progress_callback=on_progress, result_callback=result_callback, scope_callback=scope_callback, planning_callback=planning_callback)
                 logger.info("autonomous_cycle_completed account_id=%s market=%d portfolio=%d", aid, len(result.market_opportunities), len(result.portfolio_opportunities))
                 render_result(result)
             except Exception as exc:
@@ -212,6 +194,8 @@ def install_autonomous_ui(app_class: type) -> None:
             except Exception:
                 messagebox.showwarning("Edward", "Проверьте количество слотов и резерв.")
                 return
+            for item in tree.get_children():
+                tree.delete(item)
             start_button.configure(state="disabled")
             status_var.set("Подготовка автономного цикла...")
             threading.Thread(target=run_cycle, daemon=True, name="edward-autonomous-cycle").start()
