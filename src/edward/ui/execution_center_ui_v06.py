@@ -205,7 +205,10 @@ def _open_execution_center(self: Any) -> None:
 
     controller = getattr(self, "_execution_center_controller", None)
     if controller is not None:
-        controller.dispatch = lambda callback, state: window.after(0, callback, state)
+        # IMPORTANT: use the app-level dispatcher. Calling Toplevel.after()
+        # directly from the execution worker can cross the Tcl/Tk thread
+        # boundary and block the worker before /orders/create is reached.
+        controller.dispatch = lambda callback, state: self.after(0, callback, state)
         controller.on_change = redraw
         if controller.state.request is None:
             items = bridge_items()
