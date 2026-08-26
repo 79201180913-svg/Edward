@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from edward.services.autonomous_execution_plan_service import ExecutionPlanStep
 from edward.services.execution_bridge_service_v06 import ExecutionBridgeService
@@ -18,12 +18,12 @@ class AutonomousExecutionValidation:
 
 
 class AutonomousExecutionService:
-    """Validate one autonomous plan step against a fresh opportunity result.
+    """Validate autonomous plan steps against fresh opportunity results.
 
     This service does not submit orders itself. It validates that the current
     opportunity still matches the planned step and then delegates to the
     existing controlled Execution Bridge. Final live pre-trade validation and
-    user confirmation therefore remain in the existing execution flow.
+    user confirmation remain in the existing execution flow.
     """
 
     def __init__(self, bridge: ExecutionBridgeService) -> None:
@@ -90,6 +90,23 @@ class AutonomousExecutionService:
             raise ValueError("Autonomous execution step rejected: " + ";".join(validation.reasons))
 
         return self.bridge.enqueue_opportunity(account_id=account_id, result=result)
+
+    def prepare_step_from_fresh_result(
+        self,
+        *,
+        account_id: str,
+        step: ExecutionPlanStep,
+        result_factory: Callable[[ExecutionPlanStep], Any],
+        dependency_completed: bool = True,
+    ) -> ExecutionIntakeResult:
+        """Refresh the opportunity immediately before putting a step into the queue."""
+        result = result_factory(step)
+        return self.prepare_step(
+            account_id=account_id,
+            step=step,
+            result=result,
+            dependency_completed=dependency_completed,
+        )
 
 
 __all__ = ["AutonomousExecutionService", "AutonomousExecutionValidation"]
