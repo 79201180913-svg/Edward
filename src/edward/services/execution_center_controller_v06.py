@@ -78,5 +78,13 @@ class ExecutionCenterController:
         return self.state.request
 
     def _publish(self) -> None:
-        if self.on_change is not None:
-            self.on_change(self.state)
+        callback = self.on_change
+        if callback is None:
+            return
+        try:
+            callback(self.state)
+        except Exception:
+            # UI callbacks may outlive their Tk widgets after a window is closed.
+            # Detach a stale callback so later state publications do not break
+            # the execution flow.
+            self.on_change = None
