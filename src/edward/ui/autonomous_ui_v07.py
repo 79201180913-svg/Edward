@@ -63,11 +63,7 @@ def install_autonomous_ui(app_class: type) -> None:
         ).pack(fill="x", pady=2)
 
     def _page_autonomous(self: Any) -> None:
-        ttk.Label(
-            self.content,
-            text="Автономная торговля",
-            style="Title.TLabel",
-        ).pack(anchor="w", pady=(0, 6))
+        ttk.Label(self.content, text="Автономная торговля", style="Title.TLabel").pack(anchor="w", pady=(0, 6))
         ttk.Label(
             self.content,
             text="Планирование капитала и анализ возможностей. Текущий режим: только анализ, без отправки заявок.",
@@ -80,25 +76,15 @@ def install_autonomous_ui(app_class: type) -> None:
 
         controls = ttk.Frame(self.content)
         controls.pack(fill="x", pady=(0, 12))
-
         ttk.Label(controls, text="Профиль:").pack(side="left")
         profile_var = tk.StringVar(value="medium_term")
-        ttk.Combobox(
-            controls,
-            textvariable=profile_var,
-            state="readonly",
-            values=("speculative", "medium_term", "long_term"),
-            width=16,
-        ).pack(side="left", padx=(6, 16))
-
+        ttk.Combobox(controls, textvariable=profile_var, state="readonly", values=("speculative", "medium_term", "long_term"), width=16).pack(side="left", padx=(6, 16))
         ttk.Label(controls, text="Слоты:").pack(side="left")
         slots_var = tk.IntVar(value=5)
         ttk.Spinbox(controls, from_=1, to=50, textvariable=slots_var, width=6).pack(side="left", padx=(6, 16))
-
         ttk.Label(controls, text="Резерв %:").pack(side="left")
         reserve_var = tk.StringVar(value="10")
         ttk.Entry(controls, textvariable=reserve_var, width=8).pack(side="left", padx=(6, 16))
-
         start_button = ttk.Button(controls, text="Анализировать рынок")
         start_button.pack(side="left", padx=(4, 8))
         refresh_button = ttk.Button(controls, text="Обновить")
@@ -112,15 +98,7 @@ def install_autonomous_ui(app_class: type) -> None:
         for column in range(5):
             cards.columnconfigure(column, weight=1)
         card_values: dict[str, ttk.Label] = {}
-        for column, (key, title) in enumerate(
-            (
-                ("capital", "Капитал"),
-                ("reserve", "Резерв"),
-                ("budget", "Инвестиционный бюджет"),
-                ("target", "Целевая позиция"),
-                ("cash", "Доступные деньги"),
-            )
-        ):
+        for column, (key, title) in enumerate((("capital", "Капитал"), ("reserve", "Резерв"), ("budget", "Инвестиционный бюджет"), ("target", "Целевая позиция"), ("cash", "Доступные деньги"))):
             frame = ttk.Frame(cards, style="Card.TFrame", padding=12)
             frame.grid(row=0, column=column, sticky="nsew", padx=4)
             ttk.Label(frame, text=title, style="CardTitle.TLabel").pack(anchor="w")
@@ -131,7 +109,6 @@ def install_autonomous_ui(app_class: type) -> None:
         ttk.Label(self.content, text="Возможности рынка и портфеля", style="CardTitle.TLabel").pack(anchor="w", pady=(4, 6))
         columns = ("Область", "Тикер", "Решение", "Score", "Риск", "Цена", "Кол-во", "Стоимость", "Статус")
         tree = self._tree(self.content, columns, (90, 100, 100, 80, 75, 110, 80, 115, 250))
-
         activity = tk.Text(self.content, height=7, wrap="word", state="disabled")
         activity.pack(fill="x", pady=(12, 0))
 
@@ -157,21 +134,7 @@ def install_autonomous_ui(app_class: type) -> None:
 
         def insert_opportunity(opportunity: Any, scope: str) -> None:
             decision = opportunity.decision or "—"
-            tree.insert(
-                "",
-                "end",
-                values=(
-                    scope,
-                    opportunity.ticker,
-                    decision,
-                    f"{opportunity.opportunity_score:.2f}",
-                    f"{opportunity.risk_score:.2f}",
-                    "—" if opportunity.price is None else f"{opportunity.price:.4f}",
-                    opportunity.recommended_quantity or opportunity.quantity,
-                    f"{opportunity.recommended_value:.2f}",
-                    opportunity.status,
-                ),
-            )
+            tree.insert("", "end", values=(scope, opportunity.ticker, decision, f"{opportunity.opportunity_score:.2f}", f"{opportunity.risk_score:.2f}", "—" if opportunity.price is None else f"{opportunity.price:.4f}", opportunity.recommended_quantity or opportunity.quantity, f"{opportunity.recommended_value:.2f}", opportunity.status))
 
         def render_incremental(opportunity: Any, scope: str, current: int, total: int) -> None:
             def apply() -> None:
@@ -187,7 +150,6 @@ def install_autonomous_ui(app_class: type) -> None:
                     insert_opportunity(opportunity, "Рынок")
                 for opportunity in result.portfolio_opportunities:
                     insert_opportunity(opportunity, "Портфель")
-
                 budget = result.planning.budget
                 source_currency = getattr(budget, "currency", None) or "RUB"
                 card_values["capital"].configure(text=display_money(budget.account_capital, source_currency))
@@ -195,13 +157,8 @@ def install_autonomous_ui(app_class: type) -> None:
                 card_values["budget"].configure(text=display_money(budget.planning_budget, source_currency))
                 card_values["target"].configure(text=display_money(budget.target_position_value, source_currency))
                 card_values["cash"].configure(text=display_money(budget.investable_cash, source_currency))
-                status_var.set(
-                    f"Завершено: рынок {len(result.market_opportunities)}, портфель {len(result.portfolio_opportunities)}"
-                )
-                log_ui(
-                    f"Цикл завершён: market={len(result.market_opportunities)} "
-                    f"portfolio={len(result.portfolio_opportunities)}"
-                )
+                status_var.set(f"Завершено: рынок {len(result.market_opportunities)}, портфель {len(result.portfolio_opportunities)}")
+                log_ui(f"Цикл завершён: market={len(result.market_opportunities)} portfolio={len(result.portfolio_opportunities)}")
             self.after(0, apply)
 
         def on_progress(stage: str, percent: float, current: int, total: int) -> None:
@@ -215,22 +172,17 @@ def install_autonomous_ui(app_class: type) -> None:
                 slots = int(slots_var.get())
                 reserve_pct = Decimal(str(reserve_var.get()).replace(",", "."))
                 policy = BudgetPlanningPolicy(slots=slots, reserve_pct=reserve_pct)
-                logger.info(
-                    "autonomous_cycle_started account_id=%s profile=%s slots=%d reserve_pct=%s",
-                    aid,
-                    profile_var.get(),
-                    slots,
-                    reserve_pct,
-                )
+                logger.info("autonomous_cycle_started account_id=%s profile=%s slots=%d reserve_pct=%s", aid, profile_var.get(), slots, reserve_pct)
                 log_ui("Запуск автономного цикла")
-                service = AutonomousCycleService(
-                    AutonomousPlanningService(BalanceService(self.client)),
-                    OpportunitySearchService(self.client),
-                )
+                service = AutonomousCycleService(AutonomousPlanningService(BalanceService(self.client)), OpportunitySearchService(self.client))
                 active_scope = {"value": "Рынок"}
 
                 def result_callback(opportunity: Any, current: int, total: int) -> None:
                     render_incremental(opportunity, active_scope["value"], current, total)
+
+                def scope_callback(scope: str) -> None:
+                    active_scope["value"] = "Рынок" if scope == "MARKET" else "Портфель"
+                    log_ui(f"Начат анализ: {active_scope['value']}")
 
                 result = service.run(
                     account_id=aid,
@@ -239,14 +191,9 @@ def install_autonomous_ui(app_class: type) -> None:
                     instrument_kind="SHARE",
                     progress_callback=on_progress,
                     result_callback=result_callback,
+                    scope_callback=scope_callback,
                 )
-                active_scope["value"] = "Портфель"
-                logger.info(
-                    "autonomous_cycle_completed account_id=%s market=%d portfolio=%d",
-                    aid,
-                    len(result.market_opportunities),
-                    len(result.portfolio_opportunities),
-                )
+                logger.info("autonomous_cycle_completed account_id=%s market=%d portfolio=%d", aid, len(result.market_opportunities), len(result.portfolio_opportunities))
                 render_result(result)
             except Exception as exc:
                 logger.exception("autonomous_cycle_failed account_id=%s", aid)
