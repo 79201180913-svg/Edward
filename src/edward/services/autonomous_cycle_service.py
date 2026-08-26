@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Callable
 
+from edward.services.autonomous_execution_plan_service import (
+    AutonomousExecutionPlan,
+    AutonomousExecutionPlanService,
+)
 from edward.services.autonomous_planning_service import AutonomousPlanningResult, AutonomousPlanningService
 from edward.services.budget_planning_service import BudgetPlanningPolicy
 from edward.services.opportunity_search_service import (
@@ -20,14 +24,15 @@ class AutonomousCycleResult:
     market_opportunities: tuple[OpportunitySearchResult, ...]
     portfolio_opportunities: tuple[OpportunitySearchResult, ...]
     allocation_actions: tuple[AllocationAction, ...] = ()
+    execution_plan: AutonomousExecutionPlan | None = None
 
 
 class AutonomousCycleService:
-    """Coordinate one read-only autonomous cycle including allocation planning.
+    """Coordinate one read-only autonomous cycle through allocation planning.
 
-    Market analysis remains the responsibility of OpportunitySearchService.
-    This layer adds live capital planning, portfolio/market comparison and a
-    slot-aware reallocation plan. No orders are sent here.
+    Market analysis, capital planning and slot-aware reallocation are composed
+    here. The resulting execution plan is still non-submitting and requires
+    revalidation plus the existing controlled execution flow.
     """
 
     def __init__(
@@ -35,10 +40,12 @@ class AutonomousCycleService:
         planning_service: AutonomousPlanningService,
         opportunity_service: OpportunitySearchService,
         reallocation_service: PortfolioReallocationService | None = None,
+        execution_plan_service: AutonomousExecutionPlanService | None = None,
     ) -> None:
         self._planning = planning_service
         self._opportunities = opportunity_service
         self._reallocation = reallocation_service or PortfolioReallocationService()
+        self._execution_plan = execution_plan_service or AutonomousExecutionPlanService()
 
     def run(
         self,
@@ -86,9 +93,10 @@ class AutonomousCycleService:
             market_opportunities=market,
             portfolio_opportunities=portfolio,
         )
+        execution_plan = self._execution_plan.build(allocation)
         if progress_callback is not None:
             try:
-                progress_callback("План перераспределения готов", 100.0, len(allocation), len(allocation))
+                progress_callback("План исполнения подготовлен", 100.0, len(execution_plan.steps), len(execution_plan.steps))
             except Exception:
                 pass
 
@@ -97,4 +105,5 @@ class AutonomousCycleService:
             market_opportunities=tuple(market),
             portfolio_opportunities=tuple(portfolio),
             allocation_actions=allocation,
+            execution_plan=execution_plan,
         )
