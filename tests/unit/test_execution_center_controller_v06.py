@@ -46,6 +46,14 @@ class SlowService:
         return ExecutionResult(request.execution_id, ExecutionStatus.SUBMITTED, broker_order_id="broker-async")
 
 
+class FailingService(SlowService):
+    def confirm_and_submit(self, request):
+        self.thread_id = threading.get_ident()
+        self.started.set()
+        self.release.wait(timeout=2)
+        raise RuntimeError("sandbox submit failed")
+
+
 def request():
     return ExecutionRequest(
         execution_id="ex-center-1",
@@ -66,6 +74,17 @@ def service():
         ExecutionEngine(adapter=FakeAdapter()),
         FakeValidator(),
     )
+
+
+def _waiting_confirmation_controller(service_instance):
+    controller = ExecutionCenterController(service_instance)
+    controller.load_request(request())
+    controller.state = controller.state.__class__(
+        request=controller.state.request,
+        result=ExecutionResult("ex-center-1", ExecutionStatus.WAITING_CONFIRMATION),
+        status=ExecutionStatus.WAITING_CONFIRMATION,
+    )
+    return controller
 
 
 def test_controller_requires_request_before_action():
@@ -176,7 +195,74 @@ def test_confirm_and_submit_async_does_not_block_caller():
     assert result.status is ExecutionStatus.SUBMITTED
     assert controller.state.status is ExecutionStatus.SUBMITTED
     assert controller.state.busy is False
+    assert controller.state.error is None
     assert published[-1] == (ExecutionStatus.SUBMITTED, False)
     assert service.thread_id is not None
     assert service.thread_id != threading.get_ident()
+    controller.close()
+
+
+def test_confirm_and_submit_async_rejects_duplicate_operation():
+    service = SlowService()
+    controller = _waiting_confirmation_controller(service)
+
+    first = controller.confirm_and_submit_async()
+    assert service.started.wait(timeout=1)
+    with pytest.raises(RuntimeError, match="execution operation is already running"):
+        controller.confirm_and_submit_async()
+
+    service.release.set()
+    assert first.result(timeout=2).status is ExecutionStatus.SUBMITTED
+    controller.close()
+
+
+def test_confirm_and_submit_async_reports_worker_error():
+    service = FailingService()
+    controller = _waiting_confirmation_controller(service)
+
+    future = controller.confirm_and_submit_async()
+    assert service.started.wait(timeout=1)
+    service.release.set()
+
+    with pytest.raises(RuntimeError, match="sandbox submit failed"):
+        future.result(timeout=2)
+
+    deadline = time.monotonic() + 2
+    while controller.state.busy and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    assert controller.state.status is ExecutionStatus.FAILED
+    assert controller.state.busy is False
+    assert controller.state.error == "sandbox submit failed"
+    controller.close()
+
+
+def test_async_publish_uses_ui_dispatcher():
+    service = SlowService()
+    dispatched = []
+
+    def dispatch(callback, state):
+        dispatched.append((callback, state))
+
+    controller = ExecutionCenterController(service, dispatch=dispatch)
+    controller.load_request(request())
+    assert dispatched[-1][1].request == request()
+
+    controller.state = controller.state.__class__(
+        request=controller.state.request,
+        result=ExecutionResult("ex-center-1", ExecutionStatus.WAITING_CONFIRMATION),
+        status=ExecutionStatus.WAITING_CONFIRMATION,
+    )
+    future = controller.confirm_and_submit_async()
+    assert service.started.wait(timeout=1)
+    assert dispatched[-1][1].busy is True
+
+    service.release.set()
+    assert future.result(timeout=2).status is ExecutionStatus.SUBMITTED
+    deadline = time.monotonic() + 2
+    while controller.state.busy and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    assert dispatched[-1][1].busy is False
+    assert dispatched[-1][1].status is ExecutionStatus.SUBMITTED
     controller.close()
