@@ -7,16 +7,8 @@ from edward.domain.execution import ExecutionMode
 from edward.services.account_state_refresh_service import AccountState
 from edward.services.autonomous_execution_plan_service import AutonomousExecutionPlan
 from edward.services.autonomous_execution_preflight_service import AutonomousExecutionPreflightService
-from edward.services.autonomous_execution_sequence_service import (
-    AutonomousExecutionPhase,
-    AutonomousExecutionPhaseEvent,
-    AutonomousExecutionSequenceResult,
-    AutonomousExecutionSequenceService,
-)
-from edward.services.autonomous_replanning_cycle_service import (
-    AutonomousReplanningCycleResult,
-    AutonomousReplanningCycleService,
-)
+from edward.services.autonomous_execution_sequence_service import AutonomousExecutionPhase, AutonomousExecutionPhaseEvent, AutonomousExecutionSequenceResult, AutonomousExecutionSequenceService
+from edward.services.autonomous_replanning_cycle_service import AutonomousReplanningCycleResult, AutonomousReplanningCycleService
 from edward.services.budget_planning_service import BudgetPlan
 
 
@@ -68,7 +60,7 @@ class AutonomousTradingController:
         allowed, reason, reasons = self._gate(mode=mode, plan=plan, budget=budget, state=state)
         if not allowed:
             return AutonomousTradingControlResult(mode=mode, executed=False, reason=reason, preflight_reasons=reasons)
-        sequence = self._sequence.execute_confirmed_plan(account_id=account_id, plan=plan, result_factory=result_factory)
+        sequence = self._sequence.execute_confirmed_plan(account_id=account_id, plan=plan, result_factory=result_factory, mode=mode)
         return AutonomousTradingControlResult(mode=mode, executed=sequence.completed, reason="COMPLETED" if sequence.completed else f"STOPPED_AT:{sequence.stopped_at}", phase=getattr(sequence, "phase", AutonomousExecutionPhase.STOPPED), sequence=sequence, events=getattr(sequence, "events", ()))
 
     def execute_replanned(self, *, account_id: str, mode: ExecutionMode, refresh_state: Callable[[], AccountState], build_plan: Callable[[AccountState], AutonomousExecutionPlan], budget_for_state: Callable[[AccountState], BudgetPlan], result_factory: Callable[[Any], Any], max_iterations: int = 50) -> AutonomousTradingControlResult:
@@ -93,7 +85,7 @@ class AutonomousTradingController:
             return plan
 
         def execute_one(step: Any) -> Any:
-            sequence = self._sequence.execute_confirmed_plan(account_id=account_id, plan=AutonomousExecutionPlan(steps=(step,)), result_factory=result_factory)
+            sequence = self._sequence.execute_confirmed_plan(account_id=account_id, plan=AutonomousExecutionPlan(steps=(step,)), result_factory=result_factory, mode=mode)
             if not sequence.steps:
                 raise RuntimeError("EXECUTION_SEQUENCE_EMPTY")
             item = sequence.steps[0]
