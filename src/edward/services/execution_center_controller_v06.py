@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from edward.domain.execution import ExecutionEvent, ExecutionRequest, ExecutionResult, ExecutionStatus
+from edward.services.execution_bridge_service_v06 import ExecutionQueueItem
 from edward.services.execution_confirmation_service import ControlledExecutionService
 
 
@@ -27,6 +28,17 @@ class ExecutionCenterController:
         if self.state.request is not None and self.state.request.execution_id != request.execution_id:
             raise ValueError("another execution is already active")
         self.state = ExecutionCenterState(request=request, status=ExecutionStatus.CREATED)
+        self._publish()
+        return self.state
+
+    def load_queue_item(self, item: ExecutionQueueItem) -> ExecutionCenterState:
+        """Load an already-queued execution without resetting its current status."""
+        self.state = ExecutionCenterState(
+            request=item.request,
+            result=item.result,
+            status=item.result.status,
+            events=self.state.events,
+        )
         self._publish()
         return self.state
 
