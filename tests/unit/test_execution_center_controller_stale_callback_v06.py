@@ -55,5 +55,6 @@ def test_stale_ui_callback_is_detached_after_callback_failure():
     assert controller.on_change is None
 
     # Later publications must continue the execution flow without reusing the dead Tk callback.
-    assert controller.prepare().value == "READY"
+    result = controller.prepare()
+    assert result.status.value == "READY"
     assert controller.state.status.value == "READY"
