@@ -7,13 +7,21 @@ from edward.services.stop_order_service import StopOrderService
 class Gateway:
     def __init__(self):
         self.created = []
+        self.active = []
 
     def post_stop_order(self, request):
         self.created.append(request)
+        self.active.append(
+            {
+                "stop_order_id": "stop-1",
+                "instrument_uid": request["instrument_id"],
+                "status": "ACTIVE",
+            }
+        )
         return {"stop_order_id": "stop-1"}
 
     def get_stop_orders(self, account_id):
-        return [{"stop_order_id": "stop-1", "instrument_uid": "uid", "status": "ACTIVE"}]
+        return list(self.active)
 
     def cancel_stop_order(self, account_id, stop_order_id):
         return None
