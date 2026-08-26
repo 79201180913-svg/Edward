@@ -93,19 +93,29 @@ def _open_execution_center(self: Any) -> None:
 
     def current_controller():
         controller = getattr(self, "_execution_center_controller", None)
-        if controller is None: messagebox.showwarning("Центр исполнения", "Сервис исполнения ещё не подключён.")
+        if controller is None:
+            messagebox.showwarning("Центр исполнения", "Сервис исполнения ещё не подключён.")
         return controller
 
     def bridge_items() -> tuple[Any, ...]:
         bridge = getattr(self, "_execution_bridge", None)
-        if bridge is None: return ()
-        try: return bridge.all()
-        except Exception: return ()
+        if bridge is None:
+            return ()
+        try:
+            return bridge.all()
+        except Exception:
+            return ()
 
     def redraw(state: Any) -> None:
-        status_var.set(f"Сервис: {execution_status_label(state.status) if state.status else 'Готов'}")
         request = state.request
+        if state.error:
+            status_var.set(f"Ошибка: {state.error}")
+        elif state.busy:
+            status_var.set("Сервис: выполняется…")
+        else:
+            status_var.set(f"Сервис: {execution_status_label(state.status) if state.status else 'Готов'}")
         active_var.set(f"{request.ticker} / {request.decision.value} / {request.quantity} шт." if request else "Нет активной операции")
+
         tree.delete(*tree.get_children())
         items = bridge_items()
         if not items and request is not None:
@@ -117,73 +127,127 @@ def _open_execution_center(self: Any) -> None:
         if request is not None and request.execution_id in tree.get_children(""):
             tree.selection_set(request.execution_id); tree.focus(request.execution_id)
 
-        for item in steps.get_children(): steps.delete(item)
+        for item in steps.get_children():
+            steps.delete(item)
         for label in step_labels:
             state_text = "Ожидание"
-            if label == "Решение получено" and request: state_text = "Готово"
-            if label == "Execution Readiness" and request: state_text = "PASS" if request.execution_ready else "FAIL"
-            if label == "Pre-trade revalidation" and state.status is ExecutionStatus.BLOCKED: state_text = "FAIL"
-            if label == "Подтверждение пользователя" and state.status is ExecutionStatus.WAITING_CONFIRMATION: state_text = "Ожидается"
-            if label == "Отправка заявки" and state.status in {ExecutionStatus.SUBMITTING, ExecutionStatus.SUBMITTED}: state_text = execution_status_label(state.status)
+            if label == "Решение получено" and request:
+                state_text = "Готово"
+            if label == "Execution Readiness" and request:
+                state_text = "PASS" if request.execution_ready else "FAIL"
+            if label == "Pre-trade revalidation" and state.status is ExecutionStatus.BLOCKED:
+                state_text = "FAIL"
+            if label == "Подтверждение пользователя" and state.status is ExecutionStatus.WAITING_CONFIRMATION:
+                state_text = "Ожидается"
+            if label == "Отправка заявки" and state.status in {ExecutionStatus.SUBMITTING, ExecutionStatus.SUBMITTED}:
+                state_text = execution_status_label(state.status)
             steps.insert("", "end", values=(label, state_text))
+
         text.configure(state="normal"); text.delete("1.0", "end")
-        for event in state.events: text.insert("end", execution_event_text(event) + "\n")
+        for event in state.events:
+            text.insert("end", execution_event_text(event) + "\n")
+        if state.error:
+            text.insert("end", f"Ошибка: {state.error}\n")
         text.configure(state="disabled")
-        prepare_button.configure(state="normal" if request and state.status is ExecutionStatus.CREATED else "disabled")
-        confirm_request_button.configure(state="normal" if state.status is ExecutionStatus.READY else "disabled")
-        confirm_submit_button.configure(state="normal" if state.status is ExecutionStatus.WAITING_CONFIRMATION else "disabled")
-        cancel_button.configure(state="normal" if state.status is ExecutionStatus.WAITING_CONFIRMATION else "disabled")
+
+        busy = bool(state.busy)
+        prepare_button.configure(state="normal" if request and state.status is ExecutionStatus.CREATED and not busy else "disabled")
+        confirm_request_button.configure(state="normal" if state.status is ExecutionStatus.READY and not busy else "disabled")
+        confirm_submit_button.configure(state="normal" if state.status is ExecutionStatus.WAITING_CONFIRMATION and not busy else "disabled")
+        cancel_button.configure(state="normal" if state.status is ExecutionStatus.WAITING_CONFIRMATION and not busy else "disabled")
 
     def select_queue_item(_event: Any = None) -> None:
         selection = tree.selection()
-        if not selection: return
+        if not selection:
+            return
         execution_id = selection[0]; bridge = getattr(self, "_execution_bridge", None); controller = current_controller()
-        if bridge is None or controller is None: return
+        if bridge is None or controller is None:
+            return
         current_request = getattr(controller.state, "request", None)
         if current_request is not None and current_request.execution_id == execution_id:
             return
         try:
             item = bridge.get(execution_id)
-            if item is None: return
+            if item is None:
+                return
             controller.load_queue_item(item)
         except Exception as exc:
-            messagebox.showerror("Центр исполнения", str(exc)); return
+            messagebox.showerror("Центр исполнения", str(exc))
+            return
         redraw(controller.state)
 
     def invoke(action):
         controller = current_controller()
-        if controller is None: return
-        try: action(controller)
-        except Exception as exc: messagebox.showerror("Центр исполнения", str(exc))
+        if controller is None:
+            return
+        try:
+            action(controller)
+        except Exception as exc:
+            messagebox.showerror("Центр исполнения", str(exc))
+            return
         redraw(controller.state)
 
-    prepare_button.configure(command=lambda: invoke(lambda c: c.prepare())); confirm_request_button.configure(command=lambda: invoke(lambda c: c.request_confirmation())); confirm_submit_button.configure(command=lambda: invoke(lambda c: c.confirm_and_submit())); cancel_button.configure(command=lambda: invoke(lambda c: c.cancel()))
+    def invoke_async_submit() -> None:
+        controller = current_controller()
+        if controller is None:
+            return
+        try:
+            controller.confirm_and_submit_async()
+        except Exception as exc:
+            messagebox.showerror("Центр исполнения", str(exc))
+            redraw(controller.state)
+
+    prepare_button.configure(command=lambda: invoke(lambda c: c.prepare()))
+    confirm_request_button.configure(command=lambda: invoke(lambda c: c.request_confirmation()))
+    confirm_submit_button.configure(command=invoke_async_submit)
+    cancel_button.configure(command=lambda: invoke(lambda c: c.cancel()))
     tree.bind("<<TreeviewSelect>>", select_queue_item, add="+")
 
     controller = getattr(self, "_execution_center_controller", None)
     if controller is not None:
+        controller.dispatch = lambda callback, state: window.after(0, callback, state)
         controller.on_change = redraw
         if controller.state.request is None:
             items = bridge_items()
-            if items: controller.load_queue_item(items[-1])
+            if items:
+                controller.load_queue_item(items[-1])
         redraw(controller.state)
 
-    def close(): self._execution_center_window = None; window.destroy()
+    def close():
+        controller = getattr(self, "_execution_center_controller", None)
+        if controller is not None:
+            controller.close()
+        self._execution_center_window = None
+        window.destroy()
+
     window.protocol("WM_DELETE_WINDOW", close)
 
 
 def install_execution_center_ui(app_cls: Type[Any]) -> None:
-    if getattr(app_cls, "_execution_center_ui_v06_installed", False): return
+    if getattr(app_cls, "_execution_center_ui_v06_installed", False):
+        return
     original_shell = app_cls._shell
+
     def bind_execution_controller(self: Any, controller: Any) -> None:
         self._execution_center_controller = controller
+        if hasattr(self, "after"):
+            controller.dispatch = lambda callback, state: self.after(0, callback, state)
         if getattr(self, "_execution_center_window", None) is not None:
-            try: controller.on_change = lambda state: None
-            except Exception: pass
+            try:
+                controller.on_change = lambda state: None
+            except Exception:
+                pass
+
     def wrapped_shell(self: Any, *args: Any, **kwargs: Any) -> None:
         original_shell(self, *args, **kwargs)
-        button = ttk.Button(self.nav, text="Исполнение", style="Nav.TButton", command=self._open_execution_center); button.pack(fill="x", pady=2); self._execution_center_button = button
-    app_cls.bind_execution_controller = bind_execution_controller; app_cls._open_execution_center = _open_execution_center; app_cls._shell = wrapped_shell; app_cls._execution_center_ui_v06_installed = True
+        button = ttk.Button(self.nav, text="Исполнение", style="Nav.TButton", command=self._open_execution_center)
+        button.pack(fill="x", pady=2)
+        self._execution_center_button = button
+
+    app_cls.bind_execution_controller = bind_execution_controller
+    app_cls._open_execution_center = _open_execution_center
+    app_cls._shell = wrapped_shell
+    app_cls._execution_center_ui_v06_installed = True
 
 
 __all__ = ["execution_status_label", "execution_event_text", "build_execution_center_snapshot", "install_execution_center_ui"]
