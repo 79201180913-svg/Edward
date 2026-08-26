@@ -47,6 +47,36 @@ def test_live_pretrade_validator_accepts_ready_buy():
     assert reasons == ()
 
 
+def test_live_pretrade_validator_accepts_tinvest_flagged_trading_status():
+    client = FakeClient()
+    client.status = {
+        "figi": "TCS50A102093",
+        "trading_status": "SECURITY_TRADING_STATUS_NORMAL_TRADING",
+        "limit_order_available_flag": True,
+        "market_order_available_flag": True,
+        "api_trade_available_flag": True,
+        "bestprice_order_available_flag": True,
+    }
+    passed, reasons = LivePreTradeValidator(client).validate(request())
+    assert passed is True
+    assert reasons == ()
+
+
+def test_live_pretrade_validator_accepts_tinvest_flagged_exit_status():
+    client = FakeClient()
+    client.status = {
+        "figi": "BBG000FJ81J0",
+        "trading_status": "SECURITY_TRADING_STATUS_NORMAL_TRADING",
+        "limit_order_available_flag": True,
+        "market_order_available_flag": False,
+        "api_trade_available_flag": True,
+        "bestprice_order_available_flag": False,
+    }
+    passed, reasons = LivePreTradeValidator(client).validate(request(decision=ExecutionDecision.REDUCE, quantity=10, order_type="LIMIT", entry_price=Decimal("10")))
+    assert passed is True
+    assert reasons == ()
+
+
 def test_blocks_when_account_is_not_available():
     client = FakeClient(); client.accounts = []
     passed, reasons = LivePreTradeValidator(client).validate(request())
