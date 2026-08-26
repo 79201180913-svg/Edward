@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, Callable
 
 from edward.domain.execution import ExecutionStatus
@@ -14,6 +15,21 @@ from edward.services.autonomous_execution_verification_service import (
 from edward.services.execution_bridge_service_v06 import ExecutionBridgeService
 
 
+class AutonomousExecutionPhase(StrEnum):
+    PREPARING = "PREPARING"
+    EXECUTING = "EXECUTING"
+    VERIFYING = "VERIFYING"
+    COMPLETED = "COMPLETED"
+    STOPPED = "STOPPED"
+
+
+@dataclass(frozen=True, slots=True)
+class AutonomousExecutionPhaseEvent:
+    sequence: int | None
+    phase: AutonomousExecutionPhase
+    message: str = ""
+
+
 @dataclass(frozen=True, slots=True)
 class AutonomousExecutionStepResult:
     step: ExecutionPlanStep
@@ -21,6 +37,7 @@ class AutonomousExecutionStepResult:
     status: ExecutionStatus | None
     verification: ExecutionVerification | None
     completed: bool
+    phase: AutonomousExecutionPhase = AutonomousExecutionPhase.STOPPED
     reason: str = ""
 
 
@@ -29,6 +46,8 @@ class AutonomousExecutionSequenceResult:
     steps: tuple[AutonomousExecutionStepResult, ...]
     completed: bool
     stopped_at: int | None = None
+    phase: AutonomousExecutionPhase = AutonomousExecutionPhase.STOPPED
+    events: tuple[AutonomousExecutionPhaseEvent, ...] = ()
 
 
 class AutonomousExecutionSequenceService:
@@ -62,20 +81,23 @@ class AutonomousExecutionSequenceService:
         """Execute only after the caller has explicitly authorized the plan."""
         results: list[AutonomousExecutionStepResult] = []
         completed_sequences: set[int] = set()
+        events: list[AutonomousExecutionPhaseEvent] = []
+
+        def emit(sequence: int | None, phase: AutonomousExecutionPhase, message: str = "") -> None:
+            events.append(AutonomousExecutionPhaseEvent(sequence, phase, message))
 
         for step in plan.steps:
             if step.depends_on is not None and step.depends_on not in completed_sequences:
+                emit(step.sequence, AutonomousExecutionPhase.STOPPED, f"DEPENDENCY_NOT_COMPLETED:{step.depends_on}")
                 item = AutonomousExecutionStepResult(
-                    step=step,
-                    execution_id=None,
-                    status=None,
-                    verification=None,
-                    completed=False,
+                    step=step, execution_id=None, status=None, verification=None,
+                    completed=False, phase=AutonomousExecutionPhase.STOPPED,
                     reason=f"DEPENDENCY_NOT_COMPLETED:{step.depends_on}",
                 )
                 results.append(item)
-                return AutonomousExecutionSequenceResult(tuple(results), False, step.sequence)
+                return AutonomousExecutionSequenceResult(tuple(results), False, step.sequence, AutonomousExecutionPhase.STOPPED, tuple(events))
 
+            emit(step.sequence, AutonomousExecutionPhase.PREPARING, "Подготовка шага")
             before_state = self._refresh.refresh(account_id)
             before_quantity = self._quantity(before_state, step.instrument_uid)
 
@@ -87,55 +109,58 @@ class AutonomousExecutionSequenceService:
                     dependency_completed=True,
                 )
             except Exception as exc:
+                reason = str(exc)
+                emit(step.sequence, AutonomousExecutionPhase.STOPPED, reason)
                 results.append(AutonomousExecutionStepResult(
-                    step=step,
-                    execution_id=None,
-                    status=None,
-                    verification=None,
-                    completed=False,
-                    reason=str(exc),
+                    step=step, execution_id=None, status=None, verification=None,
+                    completed=False, phase=AutonomousExecutionPhase.STOPPED, reason=reason,
                 ))
-                return AutonomousExecutionSequenceResult(tuple(results), False, step.sequence)
+                return AutonomousExecutionSequenceResult(tuple(results), False, step.sequence, AutonomousExecutionPhase.STOPPED, tuple(events))
 
             if not intake.accepted or intake.request is None:
+                reason = intake.reason or "EXECUTION_INTAKE_REJECTED"
+                emit(step.sequence, AutonomousExecutionPhase.STOPPED, reason)
                 results.append(AutonomousExecutionStepResult(
                     step=step,
                     execution_id=getattr(intake.result, "execution_id", None),
                     status=getattr(intake.result, "status", None),
                     verification=None,
                     completed=False,
-                    reason=intake.reason or "EXECUTION_INTAKE_REJECTED",
+                    phase=AutonomousExecutionPhase.STOPPED,
+                    reason=reason,
                 ))
-                return AutonomousExecutionSequenceResult(tuple(results), False, step.sequence)
+                return AutonomousExecutionSequenceResult(tuple(results), False, step.sequence, AutonomousExecutionPhase.STOPPED, tuple(events))
 
             execution_id = intake.request.execution_id
+            emit(step.sequence, AutonomousExecutionPhase.EXECUTING, f"Отправка {execution_id}")
             try:
                 waiting = self._bridge.request_confirmation(execution_id)
                 if waiting.status is not ExecutionStatus.WAITING_CONFIRMATION:
                     raise ValueError(f"CONFIRMATION_NOT_READY:{waiting.status}")
                 submitted = self._bridge.intake.confirmation_service.confirm_and_submit(intake.request)
             except Exception as exc:
+                reason = str(exc)
+                emit(step.sequence, AutonomousExecutionPhase.STOPPED, reason)
                 results.append(AutonomousExecutionStepResult(
-                    step=step,
-                    execution_id=execution_id,
-                    status=None,
-                    verification=None,
-                    completed=False,
-                    reason=str(exc),
+                    step=step, execution_id=execution_id, status=None, verification=None,
+                    completed=False, phase=AutonomousExecutionPhase.STOPPED, reason=reason,
                 ))
-                return AutonomousExecutionSequenceResult(tuple(results), False, step.sequence)
+                return AutonomousExecutionSequenceResult(tuple(results), False, step.sequence, AutonomousExecutionPhase.STOPPED, tuple(events))
 
-            if submitted.status not in {ExecutionStatus.SUBMITTED, ExecutionStatus.PARTIALLY_FILLED, ExecutionStatus.FILLED, ExecutionStatus.RECONCILED}:
+            if submitted.status not in {
+                ExecutionStatus.SUBMITTED, ExecutionStatus.PARTIALLY_FILLED,
+                ExecutionStatus.FILLED, ExecutionStatus.RECONCILED,
+            }:
+                reason = submitted.error_message or f"EXECUTION_STATUS:{submitted.status}"
+                emit(step.sequence, AutonomousExecutionPhase.STOPPED, reason)
                 results.append(AutonomousExecutionStepResult(
-                    step=step,
-                    execution_id=execution_id,
-                    status=submitted.status,
-                    verification=None,
-                    completed=False,
-                    reason=submitted.error_message or f"EXECUTION_STATUS:{submitted.status}",
+                    step=step, execution_id=execution_id, status=submitted.status,
+                    verification=None, completed=False, phase=AutonomousExecutionPhase.STOPPED,
+                    reason=reason,
                 ))
-                return AutonomousExecutionSequenceResult(tuple(results), False, step.sequence)
+                return AutonomousExecutionSequenceResult(tuple(results), False, step.sequence, AutonomousExecutionPhase.STOPPED, tuple(events))
 
+            emit(step.sequence, AutonomousExecutionPhase.VERIFYING, "Проверка результата")
             after_state = self._refresh.refresh(account_id)
             expected_quantity = int(submitted.filled_quantity)
             verification = self._verifier.verify(
@@ -145,19 +170,21 @@ class AutonomousExecutionSequenceService:
                 before_quantity=before_quantity,
             )
             completed = verification.passed
+            phase = AutonomousExecutionPhase.COMPLETED if completed else AutonomousExecutionPhase.STOPPED
+            reason = "" if completed else ";".join(verification.reasons)
+            emit(step.sequence, phase, reason or "Шаг выполнен")
             results.append(AutonomousExecutionStepResult(
-                step=step,
-                execution_id=execution_id,
-                status=submitted.status,
-                verification=verification,
-                completed=completed,
-                reason="" if completed else ";".join(verification.reasons),
+                step=step, execution_id=execution_id, status=submitted.status,
+                verification=verification, completed=completed, phase=phase, reason=reason,
             ))
             if not completed:
-                return AutonomousExecutionSequenceResult(tuple(results), False, step.sequence)
+                return AutonomousExecutionSequenceResult(tuple(results), False, step.sequence, AutonomousExecutionPhase.STOPPED, tuple(events))
             completed_sequences.add(step.sequence)
 
-        return AutonomousExecutionSequenceResult(tuple(results), True, None)
+        emit(None, AutonomousExecutionPhase.COMPLETED, "План выполнен")
+        return AutonomousExecutionSequenceResult(
+            tuple(results), True, None, AutonomousExecutionPhase.COMPLETED, tuple(events)
+        )
 
     @staticmethod
     def _quantity(state: AccountState, instrument_uid: str) -> int:
@@ -178,4 +205,10 @@ class AutonomousExecutionSequenceService:
         return total
 
 
-__all__ = ["AutonomousExecutionSequenceService", "AutonomousExecutionSequenceResult", "AutonomousExecutionStepResult"]
+__all__ = [
+    "AutonomousExecutionPhase",
+    "AutonomousExecutionPhaseEvent",
+    "AutonomousExecutionSequenceService",
+    "AutonomousExecutionSequenceResult",
+    "AutonomousExecutionStepResult",
+]
