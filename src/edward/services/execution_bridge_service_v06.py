@@ -8,14 +8,9 @@ from edward.services.execution_confirmation_service import ControlledExecutionSe
 from edward.services.execution_intake_service_v06 import ExecutionIntakeResult, ExecutionIntakeService
 from edward.services.execution_request_factory_v06 import build_execution_request
 
-
 _TERMINAL_STATUSES = {
-    ExecutionStatus.CANCELLED,
-    ExecutionStatus.BLOCKED,
-    ExecutionStatus.FAILED,
-    ExecutionStatus.REJECTED,
-    ExecutionStatus.FILLED,
-    ExecutionStatus.RECONCILED,
+    ExecutionStatus.CANCELLED, ExecutionStatus.BLOCKED, ExecutionStatus.FAILED,
+    ExecutionStatus.REJECTED, ExecutionStatus.FILLED, ExecutionStatus.RECONCILED,
     ExecutionStatus.TIMEOUT,
 }
 
@@ -27,7 +22,7 @@ class ExecutionQueueItem:
 
 
 class ExecutionBridgeService:
-    """0.6.7 bridge from opportunity results to the Execution Center queue."""
+    """Bridge from opportunity results to the Execution Center queue."""
 
     def __init__(self, confirmation_service: ControlledExecutionService) -> None:
         self.intake = ExecutionIntakeService(confirmation_service)
@@ -38,20 +33,11 @@ class ExecutionBridgeService:
             request = build_execution_request(account_id=account_id, result=result)
             existing = self._items.get(request.execution_id)
             if existing is not None and existing.result.status not in _TERMINAL_STATUSES:
-                return ExecutionIntakeResult(
-                    request=existing.request,
-                    result=existing.result,
-                    accepted=False,
-                    reason="Заявка уже передана в исполнение",
-                )
-
+                return ExecutionIntakeResult(request=existing.request, result=existing.result, accepted=False, reason="Заявка уже передана в исполнение")
         accepted = self.intake.enqueue(account_id=account_id, result=result)
         if not accepted.accepted:
             return accepted
-        self._items[accepted.request.execution_id] = ExecutionQueueItem(
-            request=accepted.request,
-            result=accepted.result,
-        )
+        self._items[accepted.request.execution_id] = ExecutionQueueItem(accepted.request, accepted.result)
         return accepted
 
     def has_active_opportunity(self, *, account_id: str, result: Any) -> bool:
@@ -59,9 +45,7 @@ class ExecutionBridgeService:
             return False
         request = build_execution_request(account_id=account_id, result=result)
         item = self._items.get(request.execution_id)
-        if item is None:
-            return False
-        return item.result.status not in _TERMINAL_STATUSES
+        return item is not None and item.result.status not in _TERMINAL_STATUSES
 
     def get(self, execution_id: str) -> ExecutionQueueItem | None:
         return self._items.get(execution_id)
@@ -72,6 +56,12 @@ class ExecutionBridgeService:
     def request_confirmation(self, execution_id: str) -> ExecutionResult:
         item = self._require(execution_id)
         result = self.intake.request_confirmation(item.request)
+        self._items[execution_id] = ExecutionQueueItem(item.request, result)
+        return result
+
+    def autonomous_submit(self, execution_id: str) -> ExecutionResult:
+        item = self._require(execution_id)
+        result = self.intake.confirmation_service.autonomous_submit(item.request)
         self._items[execution_id] = ExecutionQueueItem(item.request, result)
         return result
 
