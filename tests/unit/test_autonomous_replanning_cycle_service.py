@@ -18,6 +18,24 @@ def make_plan(sequence: int, uid: str):
     return AutonomousExecutionPlan(steps=(step,))
 
 
+def passed_verification():
+    return ExecutionVerification(
+        passed=True,
+        actual_quantity=0,
+        expected_quantity=1,
+        reasons=(),
+    )
+
+
+def failed_verification():
+    return ExecutionVerification(
+        passed=False,
+        actual_quantity=1,
+        expected_quantity=1,
+        reasons=("POSITION_NOT_UPDATED",),
+    )
+
+
 def test_discards_old_plan_and_rebuilds_after_verified_step():
     states = iter(["before", "after", "after-2"])
     plans = iter([make_plan(1, "old"), make_plan(1, "new"), AutonomousExecutionPlan(steps=())])
@@ -36,7 +54,7 @@ def test_discards_old_plan_and_rebuilds_after_verified_step():
         return SimpleNamespace(id="exec-1")
 
     def verify(step, execution, state):
-        return ExecutionVerification(passed=True, reasons=())
+        return passed_verification()
 
     result = AutonomousReplanningCycleService(
         refresh_state=refresh,
@@ -63,7 +81,7 @@ def test_stops_when_verification_fails_and_does_not_replan():
         return make_plan(1, "old")
 
     def verify(step, execution, state):
-        return ExecutionVerification(passed=False, reasons=("POSITION_NOT_UPDATED",))
+        return failed_verification()
 
     result = AutonomousReplanningCycleService(
         refresh_state=refresh,
@@ -84,7 +102,7 @@ def test_stops_on_execution_error():
         refresh_state=lambda: "state",
         build_plan=lambda state: make_plan(1, "old"),
         execute_step=lambda step: (_ for _ in ()).throw(RuntimeError("submit failed")),
-        verify_step=lambda step, execution, state: ExecutionVerification(passed=True, reasons=()),
+        verify_step=lambda step, execution, state: passed_verification(),
     ).run()
 
     assert result.completed is False
@@ -96,7 +114,7 @@ def test_stops_after_max_iterations():
         refresh_state=lambda: "state",
         build_plan=lambda state: make_plan(1, "old"),
         execute_step=lambda step: SimpleNamespace(id="exec"),
-        verify_step=lambda step, execution, state: ExecutionVerification(passed=True, reasons=()),
+        verify_step=lambda step, execution, state: passed_verification(),
         max_iterations=2,
     ).run()
 
