@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Protocol
 
 from edward.domain.execution import ExecutionRequest, ExecutionResult, ExecutionStatus
 from edward.services.execution_engine import ExecutionEngine
+
+logger = logging.getLogger(__name__)
 
 
 class PreTradeValidator(Protocol):
@@ -37,6 +40,7 @@ class ControlledExecutionService:
         current = self._status(request.execution_id)
         if current != ExecutionStatus.READY:
             raise ValueError(f"confirmation is not available from {current}")
+        logger.info("[EXECUTION] WAITING_CONFIRMATION execution_id=%s", request.execution_id)
         return self.engine.require_confirmation(request)
 
     def confirm_and_submit(self, request: ExecutionRequest) -> ExecutionResult:
@@ -44,8 +48,10 @@ class ControlledExecutionService:
         if current != ExecutionStatus.WAITING_CONFIRMATION:
             raise ValueError(f"submission is not available from {current}")
 
+        logger.info("[EXECUTION] PRETRADE START execution_id=%s ticker=%s decision=%s", request.execution_id, request.ticker, request.decision.value)
         passed, reasons = self.validator.validate(request)
         if not passed:
+            logger.warning("[EXECUTION] PRETRADE BLOCKED execution_id=%s reasons=%s", request.execution_id, list(reasons))
             entry = self.engine.journal.get(request.execution_id)
             if entry is not None:
                 self.engine._update_status(
@@ -61,8 +67,13 @@ class ControlledExecutionService:
                 error_message=";".join(reasons),
             )
 
+        logger.info("[EXECUTION] PRETRADE PASSED execution_id=%s", request.execution_id)
+        logger.info("[EXECUTION] CONFIRM execution_id=%s", request.execution_id)
         self.engine.confirm(request)
-        return self.engine.submit(request)
+        logger.info("[EXECUTION] SUBMIT execution_id=%s", request.execution_id)
+        result = self.engine.submit(request)
+        logger.info("[EXECUTION] SUBMIT RESULT execution_id=%s status=%s broker_order_id=%s", request.execution_id, result.status.value, result.broker_order_id)
+        return result
 
     def cancel_before_submission(self, request: ExecutionRequest) -> ExecutionResult:
         current = self._status(request.execution_id)
