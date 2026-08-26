@@ -76,10 +76,25 @@ class LivePreTradeValidator:
         except Exception:
             reasons.append("TRADING_STATUS_NOT_OK")
             return
-        available = _bool_field(status, "api_trade_available", None)
+
+        # T-Invest adapter exposes the availability fields with the *_flag
+        # suffix. Accept both the adapter contract names and the normalized
+        # names used by tests/other clients.
+        available = _first_bool_field(
+            status,
+            "api_trade_available",
+            "api_trade_available_flag",
+        )
         raw = " ".join(str(_field(status, name, "")) for name in ("status", "trading_status", "execution_report_status")).upper()
         unavailable_marker = any(token in raw for token in ("NOT_AVAILABLE", "CLOSED", "HALTED", "SUSPEND"))
-        order_available = any(_bool_field(status, name, False) for name in ("limit_order_available", "market_order_available", "bestprice_order_available"))
+        order_available = any(
+            bool_value is True
+            for bool_value in (
+                _first_bool_field(status, "limit_order_available", "limit_order_available_flag"),
+                _first_bool_field(status, "market_order_available", "market_order_available_flag"),
+                _first_bool_field(status, "bestprice_order_available", "bestprice_order_available_flag"),
+            )
+        )
         if available is False or unavailable_marker or (available is None and not order_available):
             reasons.append("TRADING_STATUS_NOT_OK")
 
@@ -123,9 +138,6 @@ class LivePreTradeValidator:
             reasons.append("INSUFFICIENT_CASH")
 
     def _check_max_lots(self, request: ExecutionRequest, live_price: Decimal | None, reasons: list[str]) -> None:
-        # Entry-side broker limit only. REDUCE/SELL are constrained by the held
-        # position, which is checked separately above. Do not call /orders/max-lots
-        # for exits because the sandbox adapter may legitimately return not_found.
         if request.decision not in {ExecutionDecision.BUY, ExecutionDecision.ADD}:
             return
         if live_price is None or request.quantity <= 0:
@@ -146,6 +158,20 @@ def _field(value: Any, name: str, default: Any = None) -> Any:
     if isinstance(value, Mapping):
         return value.get(name, default)
     return getattr(value, name, default)
+
+
+def _first_bool_field(value: Any, *names: str) -> bool | None:
+    for name in names:
+        raw = _field(value, name, None)
+        if raw is not None:
+            return _bool_value(raw)
+    return None
+
+
+def _bool_value(raw: Any) -> bool:
+    if isinstance(raw, bool):
+        return raw
+    return str(raw).strip().lower() in {"1", "true", "yes", "да"}
 
 
 def _id(value: Any) -> str:
@@ -182,9 +208,7 @@ def _bool_field(value: Any, name: str, default: bool | None) -> bool | None:
     raw = _field(value, name, default)
     if raw is None:
         return default
-    if isinstance(raw, bool):
-        return raw
-    return str(raw).strip().lower() in {"1", "true", "yes", "да"}
+    return _bool_value(raw)
 
 
 def _available_cash(payload: Any) -> Decimal | None:
