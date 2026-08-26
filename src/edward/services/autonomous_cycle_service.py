@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable
+from typing import Any, Callable
 
+from edward.domain.execution import ExecutionMode
 from edward.services.autonomous_execution_plan_service import (
     AutonomousExecutionPlan,
     AutonomousExecutionPlanService,
 )
 from edward.services.autonomous_planning_service import AutonomousPlanningResult, AutonomousPlanningService
+from edward.services.autonomous_trading_controller import AutonomousTradingControlResult, AutonomousTradingController
 from edward.services.budget_planning_service import BudgetPlanningPolicy
 from edward.services.opportunity_search_service import (
     MARKET_SCOPE,
@@ -28,12 +30,7 @@ class AutonomousCycleResult:
 
 
 class AutonomousCycleService:
-    """Coordinate one read-only autonomous cycle through allocation planning.
-
-    Market analysis, capital planning and slot-aware reallocation are composed
-    here. The resulting execution plan is still non-submitting and requires
-    revalidation plus the existing controlled execution flow.
-    """
+    """Coordinate analysis/planning and optionally hand execution to the controlled runtime."""
 
     def __init__(
         self,
@@ -41,11 +38,13 @@ class AutonomousCycleService:
         opportunity_service: OpportunitySearchService,
         reallocation_service: PortfolioReallocationService | None = None,
         execution_plan_service: AutonomousExecutionPlanService | None = None,
+        trading_controller: AutonomousTradingController | None = None,
     ) -> None:
         self._planning = planning_service
         self._opportunities = opportunity_service
         self._reallocation = reallocation_service or PortfolioReallocationService()
         self._execution_plan = execution_plan_service or AutonomousExecutionPlanService()
+        self._trading_controller = trading_controller
 
     def run(
         self,
@@ -107,3 +106,35 @@ class AutonomousCycleService:
             allocation_actions=allocation,
             execution_plan=execution_plan,
         )
+
+    def execute_replanned(
+        self,
+        *,
+        account_id: str,
+        mode: ExecutionMode,
+        refresh_state: Callable[[], Any],
+        build_plan: Callable[[Any], AutonomousExecutionPlan],
+        budget_for_state: Callable[[Any], Any],
+        result_factory: Callable[[Any], Any],
+        max_iterations: int = 50,
+    ) -> AutonomousTradingControlResult:
+        """Run the live autonomous execution loop through the controlled controller.
+
+        The cycle deliberately accepts the existing planning callbacks rather than
+        implementing another market-analysis path. Each completed step invalidates
+        the previous plan and the next callback receives the verified account state.
+        """
+        if self._trading_controller is None:
+            raise RuntimeError("AUTONOMOUS_TRADING_CONTROLLER_REQUIRED")
+        return self._trading_controller.execute_replanned(
+            account_id=account_id,
+            mode=mode,
+            refresh_state=refresh_state,
+            build_plan=build_plan,
+            budget_for_state=budget_for_state,
+            result_factory=result_factory,
+            max_iterations=max_iterations,
+        )
+
+
+__all__ = ["AutonomousCycleResult", "AutonomousCycleService"]
