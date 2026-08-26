@@ -11,6 +11,7 @@ from edward.services.opportunity_search_service import (
     OpportunitySearchResult,
     OpportunitySearchService,
 )
+from edward.services.portfolio_reallocation_service import AllocationAction, PortfolioReallocationService
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,23 +19,26 @@ class AutonomousCycleResult:
     planning: AutonomousPlanningResult
     market_opportunities: tuple[OpportunitySearchResult, ...]
     portfolio_opportunities: tuple[OpportunitySearchResult, ...]
+    allocation_actions: tuple[AllocationAction, ...] = ()
 
 
 class AutonomousCycleService:
-    """Coordinate the existing v0.6 services for one read-only autonomous cycle.
+    """Coordinate one read-only autonomous cycle including allocation planning.
 
     Market analysis remains the responsibility of OpportunitySearchService.
-    This layer only adds live capital planning and combines market/portfolio
-    opportunity results for the next allocation stage.
+    This layer adds live capital planning, portfolio/market comparison and a
+    slot-aware reallocation plan. No orders are sent here.
     """
 
     def __init__(
         self,
         planning_service: AutonomousPlanningService,
         opportunity_service: OpportunitySearchService,
+        reallocation_service: PortfolioReallocationService | None = None,
     ) -> None:
         self._planning = planning_service
         self._opportunities = opportunity_service
+        self._reallocation = reallocation_service or PortfolioReallocationService()
 
     def run(
         self,
@@ -71,8 +75,26 @@ class AutonomousCycleService:
             progress_callback=progress_callback,
             result_callback=result_callback,
         )
+
+        if progress_callback is not None:
+            try:
+                progress_callback("Перераспределение портфеля", 98.0, 0, 0)
+            except Exception:
+                pass
+        allocation = self._reallocation.plan(
+            budget=planning.budget,
+            market_opportunities=market,
+            portfolio_opportunities=portfolio,
+        )
+        if progress_callback is not None:
+            try:
+                progress_callback("План перераспределения готов", 100.0, len(allocation), len(allocation))
+            except Exception:
+                pass
+
         return AutonomousCycleResult(
             planning=planning,
             market_opportunities=tuple(market),
             portfolio_opportunities=tuple(portfolio),
+            allocation_actions=allocation,
         )
