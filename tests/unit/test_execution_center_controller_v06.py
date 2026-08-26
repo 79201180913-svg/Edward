@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+import threading
+import time
 from decimal import Decimal
 
 import pytest
@@ -27,6 +31,19 @@ class FakeAdapter:
 class FakeValidator:
     def validate(self, request):
         return True, ()
+
+
+class SlowService:
+    def __init__(self):
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.thread_id = None
+
+    def confirm_and_submit(self, request):
+        self.thread_id = threading.get_ident()
+        self.started.set()
+        self.release.wait(timeout=2)
+        return ExecutionResult(request.execution_id, ExecutionStatus.SUBMITTED, broker_order_id="broker-async")
 
 
 def request():
@@ -65,6 +82,7 @@ def test_controller_runs_confirmed_flow():
     assert controller.request_confirmation().status is ExecutionStatus.WAITING_CONFIRMATION
     assert controller.confirm_and_submit().status is ExecutionStatus.SUBMITTED
     assert controller.state.status is ExecutionStatus.SUBMITTED
+    controller.close()
 
 
 def test_controller_does_not_accept_two_active_requests():
@@ -84,6 +102,7 @@ def test_controller_does_not_accept_two_active_requests():
     )
     with pytest.raises(ValueError, match="another execution is already active"):
         controller.load_request(second)
+    controller.close()
 
 
 def test_controller_restores_queued_item_without_resetting_status():
@@ -100,6 +119,7 @@ def test_controller_restores_queued_item_without_resetting_status():
     assert state.result == queued_result
     assert state.status is ExecutionStatus.CREATED
     assert controller.state.request == queued_request
+    controller.close()
 
 
 def test_controller_ignores_loading_the_same_queued_item_again():
@@ -121,3 +141,41 @@ def test_controller_ignores_loading_the_same_queued_item_again():
     assert state is initial_state
     assert controller.state is initial_state
     assert len(calls) == initial_calls
+    controller.close()
+
+
+def test_confirm_and_submit_async_does_not_block_caller():
+    service = SlowService()
+    published = []
+    controller = ExecutionCenterController(
+        service,  # type: ignore[arg-type]
+        on_change=lambda state: published.append((state.status, state.busy)),
+    )
+    controller.load_request(request())
+    controller.state = ExecutionCenterControllerState = controller.state.__class__(
+        request=controller.state.request,
+        result=ExecutionResult("ex-center-1", ExecutionStatus.WAITING_CONFIRMATION),
+        status=ExecutionStatus.WAITING_CONFIRMATION,
+    )
+
+    started_at = time.monotonic()
+    future = controller.confirm_and_submit_async()
+    elapsed = time.monotonic() - started_at
+
+    assert elapsed < 0.2
+    assert service.started.wait(timeout=1)
+    assert controller.state.busy is True
+
+    service.release.set()
+    result = future.result(timeout=2)
+    deadline = time.monotonic() + 2
+    while controller.state.busy and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    assert result.status is ExecutionStatus.SUBMITTED
+    assert controller.state.status is ExecutionStatus.SUBMITTED
+    assert controller.state.busy is False
+    assert published[-1] == (ExecutionStatus.SUBMITTED, False)
+    assert service.thread_id is not None
+    assert service.thread_id != threading.get_ident()
+    controller.close()
