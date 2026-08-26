@@ -44,8 +44,18 @@ class ExecutionQueueActionController:
             raise RuntimeError("Не найден активный торговый счёт")
         return enqueue_opportunity_result(bridge=self.bridge, account_id=account_id, result=result)
 
+    def is_already_queued(self, result: Any) -> bool:
+        account_id = self.account_id_provider()
+        if not account_id or not can_enqueue_opportunity(result):
+            return False
+        return bool(self.bridge.has_active_opportunity(account_id=account_id, result=result))
+
     def status_text(self, result: Any) -> str:
-        return "Готово к передаче в исполнение" if can_enqueue_opportunity(result) else "Исполнение недоступно"
+        if not can_enqueue_opportunity(result):
+            return "Исполнение недоступно"
+        if self.is_already_queued(result):
+            return "Уже передано в исполнение"
+        return "Готово к передаче в исполнение"
 
 
 __all__ = [
