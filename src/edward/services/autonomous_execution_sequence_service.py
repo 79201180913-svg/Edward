@@ -9,6 +9,7 @@ from edward.services.account_state_refresh_service import AccountState, AccountS
 from edward.services.autonomous_execution_plan_service import AutonomousExecutionPlan, ExecutionPlanStep
 from edward.services.autonomous_execution_service import AutonomousExecutionService
 from edward.services.autonomous_execution_verification_service import AutonomousExecutionVerificationService, ExecutionVerification
+from edward.services.autonomous_protection_service import AutonomousProtectionService, ProtectionResult
 from edward.services.execution_bridge_service_v06 import ExecutionBridgeService
 
 
@@ -16,6 +17,7 @@ class AutonomousExecutionPhase(StrEnum):
     PREPARING = "PREPARING"
     EXECUTING = "EXECUTING"
     VERIFYING = "VERIFYING"
+    PROTECTED = "PROTECTED"
     COMPLETED = "COMPLETED"
     STOPPED = "STOPPED"
 
@@ -36,6 +38,7 @@ class AutonomousExecutionStepResult:
     completed: bool
     phase: AutonomousExecutionPhase = AutonomousExecutionPhase.STOPPED
     reason: str = ""
+    protection: ProtectionResult | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,13 +51,14 @@ class AutonomousExecutionSequenceResult:
 
 
 class AutonomousExecutionSequenceService:
-    """Execute approved autonomous steps strictly one-by-one."""
+    """Execute autonomous steps one-by-one and protect new positions after fill."""
 
-    def __init__(self, bridge: ExecutionBridgeService, state_refresh: AccountStateRefreshService, *, step_service: AutonomousExecutionService | None = None, verifier: AutonomousExecutionVerificationService | None = None) -> None:
+    def __init__(self, bridge: ExecutionBridgeService, state_refresh: AccountStateRefreshService, *, step_service: AutonomousExecutionService | None = None, verifier: AutonomousExecutionVerificationService | None = None, protection_service: AutonomousProtectionService | None = None) -> None:
         self._bridge = bridge
         self._refresh = state_refresh
         self._steps = step_service or AutonomousExecutionService(bridge)
         self._verifier = verifier or AutonomousExecutionVerificationService()
+        self._protection = protection_service
 
     def execute_confirmed_plan(self, *, account_id: str, plan: AutonomousExecutionPlan, result_factory: Callable[[ExecutionPlanStep], Any], mode: ExecutionMode = ExecutionMode.USER_CONFIRMATION) -> AutonomousExecutionSequenceResult:
         results: list[AutonomousExecutionStepResult] = []
@@ -74,9 +78,10 @@ class AutonomousExecutionSequenceService:
             emit(step.sequence, AutonomousExecutionPhase.PREPARING, "Подготовка шага")
             before_state = self._refresh.refresh(account_id)
             before_quantity = self._quantity(before_state, step.instrument_uid)
-
+            result = None
             try:
-                intake = self._steps.prepare_step_from_fresh_result(account_id=account_id, step=step, result_factory=result_factory, dependency_completed=True)
+                result = result_factory(step)
+                intake = self._steps.prepare_step(account_id=account_id, step=step, result=result, dependency_completed=True)
             except Exception as exc:
                 reason = str(exc)
                 emit(step.sequence, AutonomousExecutionPhase.STOPPED, reason)
@@ -115,13 +120,24 @@ class AutonomousExecutionSequenceService:
             after_state = self._refresh.refresh(account_id)
             expected_quantity = int(submitted.filled_quantity)
             verification = self._verifier.verify(step=step, state=after_state, expected_quantity=expected_quantity, before_quantity=before_quantity)
-            completed = verification.passed
-            phase = AutonomousExecutionPhase.COMPLETED if completed else AutonomousExecutionPhase.STOPPED
-            reason = "" if completed else ";".join(verification.reasons)
-            emit(step.sequence, phase, reason or "Шаг выполнен")
-            results.append(AutonomousExecutionStepResult(step, execution_id, submitted.status, verification, completed, phase, reason))
-            if not completed:
+            if not verification.passed:
+                reason = ";".join(verification.reasons)
+                emit(step.sequence, AutonomousExecutionPhase.STOPPED, reason)
+                results.append(AutonomousExecutionStepResult(step, execution_id, submitted.status, verification, False, AutonomousExecutionPhase.STOPPED, reason))
                 return AutonomousExecutionSequenceResult(tuple(results), False, step.sequence, AutonomousExecutionPhase.STOPPED, tuple(events))
+
+            protection = None
+            if self._protection is not None and step.action in {"BUY", "ADD"}:
+                emit(step.sequence, AutonomousExecutionPhase.PROTECTED, "Создание защитного Stop Loss")
+                protection = self._protection.protect_fill(account_id=account_id, instrument_uid=step.instrument_uid, quantity=expected_quantity, result=result)
+                if not protection.protected:
+                    reason = protection.reason or "PROTECTION_FAILED"
+                    emit(step.sequence, AutonomousExecutionPhase.STOPPED, reason)
+                    results.append(AutonomousExecutionStepResult(step, execution_id, submitted.status, verification, False, AutonomousExecutionPhase.STOPPED, reason, protection))
+                    return AutonomousExecutionSequenceResult(tuple(results), False, step.sequence, AutonomousExecutionPhase.STOPPED, tuple(events))
+
+            emit(step.sequence, AutonomousExecutionPhase.COMPLETED, "Шаг выполнен" if protection is None else "Шаг выполнен и защищён")
+            results.append(AutonomousExecutionStepResult(step, execution_id, submitted.status, verification, True, AutonomousExecutionPhase.COMPLETED, "", protection))
             completed_sequences.add(step.sequence)
 
         emit(None, AutonomousExecutionPhase.COMPLETED, "План выполнен")
