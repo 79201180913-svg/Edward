@@ -32,13 +32,6 @@ class AutonomousTradingControlResult:
     events: tuple[AutonomousExecutionPhaseEvent, ...] = ()
 
 
-class _PreflightRejected(RuntimeError):
-    def __init__(self, reason: str, reasons: tuple[str, ...]):
-        super().__init__(reason)
-        self.reason = reason
-        self.reasons = reasons
-
-
 class AutonomousTradingController:
     """Explicit gate between autonomous planning and real submission."""
 
@@ -60,12 +53,12 @@ class AutonomousTradingController:
     def _gate(self, *, mode: ExecutionMode, plan: AutonomousExecutionPlan, budget: BudgetPlan | None, state: AccountState | None) -> tuple[bool, str, tuple[str, ...]]:
         if mode is not ExecutionMode.AUTONOMOUS:
             return False, "AUTONOMOUS_MODE_REQUIRED", ()
+        if not self._enabled:
+            return False, "AUTONOMOUS_TRADING_DISABLED", ()
         if not plan.steps:
             return False, "EMPTY_EXECUTION_PLAN", ()
         if budget is None or state is None:
             return False, "FRESH_ACCOUNT_STATE_REQUIRED", ()
-        if not self._enabled:
-            return False, "AUTONOMOUS_TRADING_DISABLED", ()
         preflight = self._preflight.validate(plan=plan, budget=budget, state=state)
         if not preflight.passed:
             return False, "PREFLIGHT_REJECTED", preflight.reasons
@@ -85,6 +78,7 @@ class AutonomousTradingController:
             return AutonomousTradingControlResult(mode=mode, executed=False, reason="AUTONOMOUS_TRADING_DISABLED")
 
         preflight_reasons: list[str] = []
+        cycle_error: list[str] = []
 
         def build_checked_plan(state: AccountState) -> AutonomousExecutionPlan:
             plan = build_plan(state)
@@ -94,7 +88,8 @@ class AutonomousTradingController:
             allowed, reason, reasons = self._gate(mode=mode, plan=plan, budget=budget, state=state)
             if not allowed:
                 preflight_reasons.extend(reasons or (reason,))
-                raise _PreflightRejected(reason, reasons or (reason,))
+                cycle_error.append(reason + (":" + ";".join(reasons) if reasons else ""))
+                return AutonomousExecutionPlan(steps=())
             return plan
 
         def execute_one(step: Any) -> Any:
@@ -112,12 +107,13 @@ class AutonomousTradingController:
                 raise RuntimeError("VERIFICATION_RESULT_MISSING")
             return verification
 
-        try:
-            cycle = AutonomousReplanningCycleService(refresh_state=refresh_state, build_plan=build_checked_plan, execute_step=execute_one, verify_step=verify_one, max_iterations=max_iterations).run()
-        except _PreflightRejected as exc:
-            return AutonomousTradingControlResult(mode=mode, executed=False, reason="PREFLIGHT_REJECTED", phase=AutonomousExecutionPhase.STOPPED, preflight_reasons=exc.reasons)
-
-        reason = "COMPLETED" if cycle.completed else (cycle.stopped_reason or "STOPPED")
+        cycle = AutonomousReplanningCycleService(refresh_state=refresh_state, build_plan=build_checked_plan, execute_step=execute_one, verify_step=verify_one, max_iterations=max_iterations).run()
+        if cycle_error:
+            reason = "EXECUTION_ERROR:" + cycle_error[-1]
+        elif cycle.completed:
+            reason = "COMPLETED"
+        else:
+            reason = cycle.stopped_reason or "STOPPED"
         return AutonomousTradingControlResult(mode=mode, executed=bool(cycle.executed_steps), reason=reason, phase=AutonomousExecutionPhase.COMPLETED if cycle.completed else AutonomousExecutionPhase.STOPPED, replanning=cycle, preflight_reasons=tuple(preflight_reasons))
 
 
