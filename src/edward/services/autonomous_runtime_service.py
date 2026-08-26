@@ -21,21 +21,9 @@ class AutonomousRuntimeConfig:
 
 
 class AutonomousRuntimeService:
-    """Own the long-running autonomous lifecycle around one complete cycle callback.
+    """Own the long-running autonomous lifecycle around one complete cycle callback."""
 
-    The callback is intentionally injected: the runtime service does not perform
-    market analysis or order execution itself. This keeps the lifecycle separate
-    from the existing planning/execution services and lets the UI control start,
-    pause and stop without duplicating trading logic.
-    """
-
-    def __init__(
-        self,
-        run_cycle: Callable[[], None],
-        *,
-        state_service: AutonomousRunStateService | None = None,
-        config: AutonomousRuntimeConfig | None = None,
-    ) -> None:
+    def __init__(self, run_cycle: Callable[[], None], *, state_service: AutonomousRunStateService | None = None, config: AutonomousRuntimeConfig | None = None) -> None:
         self._run_cycle = run_cycle
         self._state = state_service or AutonomousRunStateService()
         self._config = config or AutonomousRuntimeConfig()
@@ -56,7 +44,8 @@ class AutonomousRuntimeService:
             raise ValueError("AUTONOMOUS_MODE_REQUIRED")
         with self._lock:
             if self._thread is not None and self._thread.is_alive():
-                self._state.update(status="WAITING", message="Автономная торговля уже запущена")
+                self._state.set_enabled(True)
+                self._state.update(status="STARTING", message="Возобновление автономного цикла")
                 return
             self._stop.clear()
             self._state.set_enabled(True)
@@ -92,8 +81,8 @@ class AutonomousRuntimeService:
             try:
                 self._run_cycle()
             except Exception as exc:
-                self._state.update(status="ERROR", message=f"{type(exc).__name__}: {exc}")
                 self._state.set_enabled(False)
+                self._state.update(status="ERROR", message=f"{type(exc).__name__}: {exc}")
                 return
 
             if self._stop.is_set():
@@ -108,4 +97,4 @@ class AutonomousRuntimeService:
                 return
 
 
-__all__ = ["AutonomousRuntimeConfig", "AutonomousRuntimeService"]
+__all__ = ["AutonomousRuntimeService", "AutonomousRuntimeConfig"]
