@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 from edward.services.autonomous_protection_service import AutonomousProtectionService
 from edward.services.protection_reconciliation_service import ProtectionReconciliationService
+from edward.services.stop_order_service import StopOrderService
 
 
 class StopGateway:
@@ -13,16 +14,20 @@ class StopGateway:
     def get_stop_orders(self, account_id):
         return list(self.stops)
 
-    def post_stop_order(self, account_id, payload):
-        order = {**payload, "id": "stop-1", "status": "ACTIVE"}
+    def post_stop_order(self, payload):
+        order = {**payload, "stop_order_id": "stop-1", "status": "ACTIVE"}
         self.created.append(order)
         self.stops.append(order)
         return order
 
+    def cancel_stop_order(self, account_id, stop_order_id):
+        return {"stop_order_id": stop_order_id, "status": "CANCELLED"}
+
 
 def test_buy_fill_protection_then_reconciliation():
     gateway = StopGateway()
-    protection = AutonomousProtectionService(gateway)
+    stop_orders = StopOrderService(gateway)
+    protection = AutonomousProtectionService(stop_orders)
     result = SimpleNamespace(decision="BUY", instrument_uid="uid", trade_plan=SimpleNamespace(stop_price=Decimal("95")))
 
     protected = protection.protect_fill(account_id="ACC", instrument_uid="uid", quantity=10, result=result)
@@ -32,7 +37,7 @@ def test_buy_fill_protection_then_reconciliation():
     assert protected.stop_order_id == "stop-1"
     assert gateway.created[0]["quantity"] == 10
 
-    reconciliation = ProtectionReconciliationService(gateway).reconcile(
+    reconciliation = ProtectionReconciliationService(stop_orders).reconcile(
         account_id="ACC",
         positions=[{"instrument_uid": "uid", "quantity": 10}],
     )
