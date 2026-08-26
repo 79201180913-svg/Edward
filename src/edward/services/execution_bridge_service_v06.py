@@ -6,6 +6,7 @@ from typing import Any
 from edward.domain.execution import ExecutionRequest, ExecutionResult, ExecutionStatus
 from edward.services.execution_confirmation_service import ControlledExecutionService
 from edward.services.execution_intake_service_v06 import ExecutionIntakeResult, ExecutionIntakeService
+from edward.services.execution_request_factory_v06 import build_execution_request
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,6 +23,24 @@ class ExecutionBridgeService:
         self._items: dict[str, ExecutionQueueItem] = {}
 
     def enqueue_opportunity(self, *, account_id: str, result: Any) -> ExecutionIntakeResult:
+        request = build_execution_request(account_id=account_id, result=result)
+        existing = self._items.get(request.execution_id)
+        if existing is not None and existing.result.status not in {
+            ExecutionStatus.CANCELLED,
+            ExecutionStatus.BLOCKED,
+            ExecutionStatus.FAILED,
+            ExecutionStatus.REJECTED,
+            ExecutionStatus.FILLED,
+            ExecutionStatus.RECONCILED,
+            ExecutionStatus.TIMEOUT,
+        }:
+            return ExecutionIntakeResult(
+                request=existing.request,
+                result=existing.result,
+                accepted=False,
+                reason="Заявка уже передана в исполнение",
+            )
+
         accepted = self.intake.enqueue(account_id=account_id, result=result)
         if not accepted.accepted:
             return accepted
@@ -30,6 +49,21 @@ class ExecutionBridgeService:
             result=accepted.result,
         )
         return accepted
+
+    def has_active_opportunity(self, *, account_id: str, result: Any) -> bool:
+        request = build_execution_request(account_id=account_id, result=result)
+        item = self._items.get(request.execution_id)
+        if item is None:
+            return False
+        return item.result.status not in {
+            ExecutionStatus.CANCELLED,
+            ExecutionStatus.BLOCKED,
+            ExecutionStatus.FAILED,
+            ExecutionStatus.REJECTED,
+            ExecutionStatus.FILLED,
+            ExecutionStatus.RECONCILED,
+            ExecutionStatus.TIMEOUT,
+        }
 
     def get(self, execution_id: str) -> ExecutionQueueItem | None:
         return self._items.get(execution_id)
