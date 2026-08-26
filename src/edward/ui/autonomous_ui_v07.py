@@ -97,6 +97,8 @@ def install_autonomous_ui(app_class: type) -> None:
         tree = self._tree(self.content, ("Область", "Тикер", "Решение", "Score", "Риск", "Цена", "Кол-во", "Стоимость", "Статус"), (90, 100, 100, 80, 75, 110, 80, 115, 250))
         ttk.Label(self.content, text="План перераспределения", style="CardTitle.TLabel").pack(anchor="w", pady=(10, 6))
         allocation_tree = self._tree(self.content, ("Действие", "Тикер", "Что заменяем", "Score", "Риск", "Целевая стоимость", "Причина"), (100, 100, 110, 80, 80, 130, 520))
+        ttk.Label(self.content, text="Порядок исполнения (без отправки заявок)", style="CardTitle.TLabel").pack(anchor="w", pady=(10, 6))
+        execution_tree = self._tree(self.content, ("№", "Действие", "Тикер", "UID", "Целевая стоимость", "Зависит от", "Статус", "Причина"), (45, 90, 100, 220, 130, 90, 120, 420))
         activity = tk.Text(self.content, height=6, wrap="word", state="disabled")
         activity.pack(fill="x", pady=(10, 0))
         latest_portfolio_opportunities: list[Any] = []
@@ -140,6 +142,14 @@ def install_autonomous_ui(app_class: type) -> None:
             for action in actions:
                 allocation_tree.insert("", "end", values=(action.action, action.ticker, action.source_ticker or "—", f"{action.score:.2f}", f"{action.risk_score:.2f}", f"{action.target_value:.2f}", action.reason))
 
+        def render_execution_plan(plan: Any) -> None:
+            for item in execution_tree.get_children():
+                execution_tree.delete(item)
+            if plan is None:
+                return
+            for step in plan.steps:
+                execution_tree.insert("", "end", values=(step.sequence, step.action, step.ticker, step.instrument_uid, f"{step.target_value:.2f}", "—" if step.depends_on is None else step.depends_on, "Только план", step.reason))
+
         def render_incremental(opportunity: Any, scope: str, current: int, total: int) -> None:
             def apply() -> None:
                 insert_opportunity(opportunity, scope)
@@ -158,8 +168,9 @@ def install_autonomous_ui(app_class: type) -> None:
                     insert_opportunity(opportunity, "Портфель")
                 render_budget(result.planning)
                 render_allocation(result.allocation_actions)
-                status_var.set(f"Завершено: рынок {len(result.market_opportunities)}, портфель {len(result.portfolio_opportunities)}, действий {len(result.allocation_actions)}")
-                log_ui(f"Цикл завершён: market={len(result.market_opportunities)} portfolio={len(result.portfolio_opportunities)} allocation={len(result.allocation_actions)}")
+                render_execution_plan(result.execution_plan)
+                status_var.set(f"Завершено: рынок {len(result.market_opportunities)}, портфель {len(result.portfolio_opportunities)}, действий {len(result.allocation_actions)}, шагов {len(result.execution_plan.steps) if result.execution_plan else 0}")
+                log_ui(f"Цикл завершён: market={len(result.market_opportunities)} portfolio={len(result.portfolio_opportunities)} allocation={len(result.allocation_actions)} execution_steps={len(result.execution_plan.steps) if result.execution_plan else 0}")
             self.after(0, apply)
 
         def open_portfolio() -> None:
@@ -201,7 +212,7 @@ def install_autonomous_ui(app_class: type) -> None:
                     log_ui("План капитала рассчитан по текущему счёту")
 
                 result = service.run(account_id=aid, policy=policy, profile=profile_var.get(), instrument_kind="SHARE", progress_callback=on_progress, result_callback=result_callback, scope_callback=scope_callback, planning_callback=planning_callback)
-                logger.info("autonomous_cycle_completed account_id=%s profile=%s market=%d portfolio=%d allocation=%d", aid, profile_var.get(), len(result.market_opportunities), len(result.portfolio_opportunities), len(result.allocation_actions))
+                logger.info("autonomous_cycle_completed account_id=%s profile=%s market=%d portfolio=%d allocation=%d execution_steps=%d", aid, profile_var.get(), len(result.market_opportunities), len(result.portfolio_opportunities), len(result.allocation_actions), len(result.execution_plan.steps) if result.execution_plan else 0)
                 render_result(result)
             except Exception as exc:
                 logger.exception("autonomous_cycle_failed account_id=%s", aid)
@@ -224,6 +235,8 @@ def install_autonomous_ui(app_class: type) -> None:
                 tree.delete(item)
             for item in allocation_tree.get_children():
                 allocation_tree.delete(item)
+            for item in execution_tree.get_children():
+                execution_tree.delete(item)
             latest_portfolio_opportunities.clear()
             start_button.configure(state="disabled")
             status_var.set("Подготовка автономного цикла...")
