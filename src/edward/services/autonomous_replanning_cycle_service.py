@@ -16,11 +16,7 @@ class AutonomousReplanningCycleResult:
 
 
 class AutonomousReplanningCycleService:
-    """Run autonomous execution one step at a time and rebuild the plan after every verified step.
-
-    All live-state, budget, opportunity and plan construction remains delegated to
-    the existing application services through callbacks. This service is orchestration only.
-    """
+    """Run one execution step, verify it, then discard and rebuild the plan."""
 
     def __init__(
         self,
@@ -41,7 +37,6 @@ class AutonomousReplanningCycleService:
 
     def run(self) -> AutonomousReplanningCycleResult:
         executed: list[int] = []
-        previous_state: Any | None = None
 
         for iteration in range(1, self._max_iterations + 1):
             state = self._refresh_state()
@@ -53,17 +48,13 @@ class AutonomousReplanningCycleService:
             try:
                 execution = self._execute_step(step)
             except Exception as exc:
-                return AutonomousReplanningCycleResult(
-                    False, iteration, tuple(executed), f"EXECUTION_ERROR:{exc}"
-                )
+                return AutonomousReplanningCycleResult(False, iteration, tuple(executed), f"EXECUTION_ERROR:{exc}")
 
             try:
                 refreshed_state = self._refresh_state()
                 verification = self._verify_step(step, execution, refreshed_state)
             except Exception as exc:
-                return AutonomousReplanningCycleResult(
-                    False, iteration, tuple(executed), f"VERIFICATION_ERROR:{exc}"
-                )
+                return AutonomousReplanningCycleResult(False, iteration, tuple(executed), f"VERIFICATION_ERROR:{exc}")
 
             if not verification.passed:
                 return AutonomousReplanningCycleResult(
@@ -74,16 +65,10 @@ class AutonomousReplanningCycleService:
                 )
 
             executed.append(int(step.sequence))
-            previous_state = refreshed_state
+            # The old plan is now discarded. The next iteration starts from
+            # refreshed_state and rebuilds budget, opportunities and allocation.
 
-            # The refreshed state is deliberately used only as the input to the
-            # next planning iteration. The previous plan is discarded completely.
-            if refreshed_state is previous_state:
-                continue
-
-        return AutonomousReplanningCycleResult(
-            False, self._max_iterations, tuple(executed), "MAX_ITERATIONS_REACHED"
-        )
+        return AutonomousReplanningCycleResult(False, self._max_iterations, tuple(executed), "MAX_ITERATIONS_REACHED")
 
 
 __all__ = ["AutonomousReplanningCycleResult", "AutonomousReplanningCycleService"]
