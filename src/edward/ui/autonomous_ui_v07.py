@@ -39,6 +39,23 @@ def _install_file_logging() -> Path:
     return path
 
 
+def _display_opportunity_quantity(opportunity: Any) -> int:
+    """Return order quantity for the autonomous opportunities grid.
+
+    Current position quantity is not an order quantity. In particular, a short
+    position can legitimately have a negative current quantity. For PASS/HOLD
+    and other non-actionable decisions the grid must therefore show zero rather
+    than accidentally presenting the current position quantity as an order.
+    """
+    decision = str(getattr(opportunity, "decision", "") or "").upper()
+    if decision not in {"BUY", "ADD", "REDUCE", "SELL"}:
+        return 0
+    try:
+        return int(getattr(opportunity, "recommended_quantity", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def install_autonomous_ui(app_class: type) -> None:
     """Add the v0.7 autonomous cycle and its explicit execution control to the existing GUI."""
     if getattr(app_class, "_autonomous_ui_v07_installed", False):
@@ -137,7 +154,8 @@ def install_autonomous_ui(app_class: type) -> None:
 
         def insert_opportunity(opportunity: Any, scope: str) -> None:
             decision = opportunity.decision or "—"
-            tree.insert("", "end", values=(scope, opportunity.ticker, decision, f"{opportunity.opportunity_score:.2f}", f"{opportunity.risk_score:.2f}", "—" if opportunity.price is None else f"{opportunity.price:.4f}", opportunity.recommended_quantity or opportunity.quantity, f"{opportunity.recommended_value:.2f}", opportunity.status))
+            quantity = _display_opportunity_quantity(opportunity)
+            tree.insert("", "end", values=(scope, opportunity.ticker, decision, f"{opportunity.opportunity_score:.2f}", f"{opportunity.risk_score:.2f}", "—" if opportunity.price is None else f"{opportunity.price:.4f}", quantity, f"{opportunity.recommended_value:.2f}", opportunity.status))
 
         def render_allocation(actions: Any) -> None:
             for item in allocation_tree.get_children():
