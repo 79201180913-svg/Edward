@@ -5,7 +5,6 @@ from typing import Any, Mapping
 
 from edward.domain.execution import ExecutionDecision, ExecutionRequest
 
-
 ACTIONABLE = {
     ExecutionDecision.BUY,
     ExecutionDecision.ADD,
@@ -23,11 +22,9 @@ class LivePreTradeValidator:
     def validate(self, request: ExecutionRequest) -> tuple[bool, tuple[str, ...]]:
         reasons: list[str] = []
         decision = request.decision
-
         if decision not in ACTIONABLE:
             reasons.append("DECISION_NOT_EXECUTABLE")
             return False, tuple(reasons)
-
         self._check_account(request, reasons)
         instrument = self._get_instrument(request, reasons)
         live_price = self._get_live_price(request, reasons)
@@ -37,7 +34,6 @@ class LivePreTradeValidator:
         self._check_position(request, reasons)
         self._check_cash(request, live_price, reasons)
         self._check_max_lots(request, live_price, reasons)
-
         return not reasons, tuple(reasons)
 
     def _check_account(self, request: ExecutionRequest, reasons: list[str]) -> None:
@@ -48,10 +44,7 @@ class LivePreTradeValidator:
             return
         account = next((item for item in accounts if _id(item) == request.account_id), None)
         if account is None or str(_field(account, "status", "")).upper() in {
-            "ACCOUNT_STATUS_CLOSED",
-            "CLOSED",
-            "ACCOUNT_STATUS_BLOCKED",
-            "BLOCKED",
+            "ACCOUNT_STATUS_CLOSED", "CLOSED", "ACCOUNT_STATUS_BLOCKED", "BLOCKED"
         }:
             reasons.append("ACCOUNT_NOT_AVAILABLE")
 
@@ -84,15 +77,9 @@ class LivePreTradeValidator:
             reasons.append("TRADING_STATUS_NOT_OK")
             return
         available = _bool_field(status, "api_trade_available", None)
-        raw = " ".join(
-            str(_field(status, name, ""))
-            for name in ("status", "trading_status", "execution_report_status")
-        ).upper()
+        raw = " ".join(str(_field(status, name, "")) for name in ("status", "trading_status", "execution_report_status")).upper()
         unavailable_marker = any(token in raw for token in ("NOT_AVAILABLE", "CLOSED", "HALTED", "SUSPEND"))
-        order_available = any(
-            _bool_field(status, name, False)
-            for name in ("limit_order_available", "market_order_available", "bestprice_order_available")
-        )
+        order_available = any(_bool_field(status, name, False) for name in ("limit_order_available", "market_order_available", "bestprice_order_available"))
         if available is False or unavailable_marker or (available is None and not order_available):
             reasons.append("TRADING_STATUS_NOT_OK")
 
@@ -100,22 +87,14 @@ class LivePreTradeValidator:
         if request.quantity <= 0:
             reasons.append("INVALID_QUANTITY")
 
-    def _check_price(
-        self,
-        request: ExecutionRequest,
-        instrument: Any,
-        live_price: Decimal | None,
-        reasons: list[str],
-    ) -> None:
+    def _check_price(self, request: ExecutionRequest, instrument: Any, live_price: Decimal | None, reasons: list[str]) -> None:
         price = request.entry_price if request.order_type.lower() == "limit" else live_price
         if request.order_type.lower() == "limit" and (price is None or price <= 0):
             reasons.append("ENTRY_PRICE_REQUIRED")
             return
         increment = _decimal(_field(instrument, "min_price_increment", None)) if instrument is not None else Decimal("0")
-        if price is not None and increment > 0:
-            ratio = price / increment
-            if ratio != ratio.to_integral_value():
-                reasons.append("INVALID_PRICE_STEP")
+        if price is not None and increment > 0 and (price / increment) != (price / increment).to_integral_value():
+            reasons.append("INVALID_PRICE_STEP")
 
     def _check_position(self, request: ExecutionRequest, reasons: list[str]) -> None:
         if request.decision not in {ExecutionDecision.REDUCE, ExecutionDecision.SELL}:
@@ -132,9 +111,7 @@ class LivePreTradeValidator:
             reasons.append("INSUFFICIENT_POSITION")
 
     def _check_cash(self, request: ExecutionRequest, live_price: Decimal | None, reasons: list[str]) -> None:
-        if request.decision not in {ExecutionDecision.BUY, ExecutionDecision.ADD}:
-            return
-        if live_price is None:
+        if request.decision not in {ExecutionDecision.BUY, ExecutionDecision.ADD} or live_price is None:
             return
         try:
             payload = self.client.get_portfolio(request.account_id)
@@ -146,6 +123,11 @@ class LivePreTradeValidator:
             reasons.append("INSUFFICIENT_CASH")
 
     def _check_max_lots(self, request: ExecutionRequest, live_price: Decimal | None, reasons: list[str]) -> None:
+        # Entry-side broker limit only. REDUCE/SELL are constrained by the held
+        # position, which is checked separately above. Do not call /orders/max-lots
+        # for exits because the sandbox adapter may legitimately return not_found.
+        if request.decision not in {ExecutionDecision.BUY, ExecutionDecision.ADD}:
+            return
         if live_price is None or request.quantity <= 0:
             return
         try:
@@ -210,12 +192,11 @@ def _available_cash(payload: Any) -> Decimal | None:
     if direct is not None:
         return _decimal(direct)
     money = _items(payload, "money")
-    if money:
-        for item in money:
-            currency = str(_field(item, "currency", "")).upper()
-            if currency in {"RUB", "USD"}:
-                value = _field(item, "available", _field(item, "available_value", None))
-                return _decimal(value)
+    for item in money:
+        currency = str(_field(item, "currency", "")).upper()
+        if currency in {"RUB", "USD"}:
+            value = _field(item, "available", _field(item, "available_value", None))
+            return _decimal(value)
     return None
 
 
