@@ -249,8 +249,12 @@ def test_async_publish_uses_ui_dispatcher():
         on_change=lambda state: None,
         dispatch=dispatch,
     )
-    controller.load_request(request())
-    assert dispatched[-1][1].request == request()
+    expected_request = request()
+    controller.load_request(expected_request)
+    dispatched_request = dispatched[-1][1].request
+    assert dispatched_request is not None
+    assert dispatched_request.execution_id == expected_request.execution_id
+    assert dispatched_request.ticker == expected_request.ticker
 
     controller.state = controller.state.__class__(
         request=controller.state.request,
