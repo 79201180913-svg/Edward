@@ -100,3 +100,24 @@ def test_controller_restores_queued_item_without_resetting_status():
     assert state.result == queued_result
     assert state.status is ExecutionStatus.CREATED
     assert controller.state.request == queued_request
+
+
+def test_controller_ignores_loading_the_same_queued_item_again():
+    calls = []
+    controller = ExecutionCenterController(service(), on_change=lambda state: calls.append(state))
+    queued_request = request()
+    queued_result = ExecutionResult(
+        execution_id=queued_request.execution_id,
+        status=ExecutionStatus.CREATED,
+    )
+    item = ExecutionQueueItem(request=queued_request, result=queued_result)
+
+    controller.load_queue_item(item)
+    initial_state = controller.state
+    initial_calls = len(calls)
+
+    state = controller.load_queue_item(item)
+
+    assert state is initial_state
+    assert controller.state is initial_state
+    assert len(calls) == initial_calls
