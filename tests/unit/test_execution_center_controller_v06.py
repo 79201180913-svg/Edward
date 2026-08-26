@@ -72,6 +72,7 @@ def test_controller_requires_request_before_action():
     controller = ExecutionCenterController(service())
     with pytest.raises(RuntimeError, match="execution request is not loaded"):
         controller.prepare()
+    controller.close()
 
 
 def test_controller_runs_confirmed_flow():
@@ -152,7 +153,7 @@ def test_confirm_and_submit_async_does_not_block_caller():
         on_change=lambda state: published.append((state.status, state.busy)),
     )
     controller.load_request(request())
-    controller.state = ExecutionCenterControllerState = controller.state.__class__(
+    controller.state = controller.state.__class__(
         request=controller.state.request,
         result=ExecutionResult("ex-center-1", ExecutionStatus.WAITING_CONFIRMATION),
         status=ExecutionStatus.WAITING_CONFIRMATION,
