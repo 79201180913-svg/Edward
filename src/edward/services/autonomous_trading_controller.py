@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from edward.domain.execution import ExecutionStatus, ExecutionMode
+from edward.domain.execution import ExecutionMode
 from edward.services.account_state_refresh_service import AccountState
 from edward.services.autonomous_execution_plan_service import AutonomousExecutionPlan
 from edward.services.autonomous_execution_preflight_service import AutonomousExecutionPreflightService
@@ -87,9 +87,9 @@ class AutonomousTradingController:
             mode=mode,
             executed=sequence.completed,
             reason="COMPLETED" if sequence.completed else f"STOPPED_AT:{sequence.stopped_at}",
-            phase=sequence.phase,
+            phase=getattr(sequence, "phase", AutonomousExecutionPhase.STOPPED),
             sequence=sequence,
-            events=sequence.events,
+            events=getattr(sequence, "events", ()),
         )
 
 
