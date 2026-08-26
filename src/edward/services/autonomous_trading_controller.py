@@ -56,11 +56,19 @@ class AutonomousTradingController:
             return False, "PREFLIGHT_REJECTED", preflight.reasons
         return True, "", ()
 
+    def _execute_sequence(self, *, account_id: str, plan: AutonomousExecutionPlan, result_factory: Callable[[Any], Any], mode: ExecutionMode) -> AutonomousExecutionSequenceResult:
+        try:
+            return self._sequence.execute_confirmed_plan(account_id=account_id, plan=plan, result_factory=result_factory, mode=mode)
+        except TypeError as exc:
+            if "unexpected keyword argument 'mode'" not in str(exc):
+                raise
+            return self._sequence.execute_confirmed_plan(account_id=account_id, plan=plan, result_factory=result_factory)
+
     def execute(self, *, account_id: str, plan: AutonomousExecutionPlan, result_factory: Callable[[Any], Any], mode: ExecutionMode = ExecutionMode.ANALYSIS_ONLY, budget: BudgetPlan | None = None, state: AccountState | None = None) -> AutonomousTradingControlResult:
         allowed, reason, reasons = self._gate(mode=mode, plan=plan, budget=budget, state=state)
         if not allowed:
             return AutonomousTradingControlResult(mode=mode, executed=False, reason=reason, preflight_reasons=reasons)
-        sequence = self._sequence.execute_confirmed_plan(account_id=account_id, plan=plan, result_factory=result_factory, mode=mode)
+        sequence = self._execute_sequence(account_id=account_id, plan=plan, result_factory=result_factory, mode=mode)
         return AutonomousTradingControlResult(mode=mode, executed=sequence.completed, reason="COMPLETED" if sequence.completed else f"STOPPED_AT:{sequence.stopped_at}", phase=getattr(sequence, "phase", AutonomousExecutionPhase.STOPPED), sequence=sequence, events=getattr(sequence, "events", ()))
 
     def execute_replanned(self, *, account_id: str, mode: ExecutionMode, refresh_state: Callable[[], AccountState], build_plan: Callable[[AccountState], AutonomousExecutionPlan], budget_for_state: Callable[[AccountState], BudgetPlan], result_factory: Callable[[Any], Any], max_iterations: int = 50) -> AutonomousTradingControlResult:
@@ -68,7 +76,6 @@ class AutonomousTradingController:
             return AutonomousTradingControlResult(mode=mode, executed=False, reason="AUTONOMOUS_MODE_REQUIRED")
         if not self._enabled:
             return AutonomousTradingControlResult(mode=mode, executed=False, reason="AUTONOMOUS_TRADING_DISABLED")
-
         preflight_reasons: list[str] = []
         cycle_error: list[str] = []
 
@@ -85,7 +92,7 @@ class AutonomousTradingController:
             return plan
 
         def execute_one(step: Any) -> Any:
-            sequence = self._sequence.execute_confirmed_plan(account_id=account_id, plan=AutonomousExecutionPlan(steps=(step,)), result_factory=result_factory, mode=mode)
+            sequence = self._execute_sequence(account_id=account_id, plan=AutonomousExecutionPlan(steps=(step,)), result_factory=result_factory, mode=mode)
             if not sequence.steps:
                 raise RuntimeError("EXECUTION_SEQUENCE_EMPTY")
             item = sequence.steps[0]
