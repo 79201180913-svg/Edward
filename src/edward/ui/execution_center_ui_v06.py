@@ -6,8 +6,42 @@ from typing import Any, Type
 
 from edward.domain.execution import ExecutionEvent, ExecutionEventType, ExecutionStatus
 
-_STATUS_LABELS = {ExecutionStatus.CREATED: "Создано", ExecutionStatus.VALIDATING: "Проверка", ExecutionStatus.READY: "Готово к исполнению", ExecutionStatus.WAITING_CONFIRMATION: "Ожидает подтверждения", ExecutionStatus.SUBMITTING: "Отправка заявки", ExecutionStatus.SUBMITTED: "Заявка отправлена", ExecutionStatus.PARTIALLY_FILLED: "Частично исполнено", ExecutionStatus.FILLED: "Исполнено", ExecutionStatus.RECONCILED: "Сверено", ExecutionStatus.BLOCKED: "Заблокировано", ExecutionStatus.REJECTED: "Отклонено", ExecutionStatus.CANCELLED: "Отменено", ExecutionStatus.TIMEOUT: "Тайм-аут", ExecutionStatus.FAILED: "Ошибка", ExecutionStatus.RECONCILIATION_ERROR: "Ошибка сверки"}
-_EVENT_LABELS = {ExecutionEventType.CREATED: "Исполнение создано", ExecutionEventType.VALIDATION_STARTED: "Начата проверка исполнения", ExecutionEventType.VALIDATION_PASSED: "Проверка исполнения пройдена", ExecutionEventType.VALIDATION_FAILED: "Исполнение заблокировано", ExecutionEventType.REVALIDATION_STARTED: "Начата повторная проверка", ExecutionEventType.REVALIDATION_FAILED: "Повторная проверка не пройдена", ExecutionEventType.CONFIRMATION_REQUIRED: "Требуется подтверждение пользователя", ExecutionEventType.CONFIRMED: "Пользователь подтвердил исполнение", ExecutionEventType.SUBMITTING: "Отправка заявки", ExecutionEventType.SUBMITTED: "Заявка отправлена", ExecutionEventType.STATUS_CHANGED: "Получен новый статус заявки", ExecutionEventType.FILL_UPDATED: "Обновлено исполнение", ExecutionEventType.CANCEL_REQUESTED: "Запрошена отмена заявки", ExecutionEventType.CANCELLED: "Заявка отменена", ExecutionEventType.RECONCILIATION_STARTED: "Начата сверка позиции", ExecutionEventType.RECONCILED: "Сверка завершена", ExecutionEventType.ERROR: "Ошибка исполнения"}
+_STATUS_LABELS = {
+    ExecutionStatus.CREATED: "Создано",
+    ExecutionStatus.VALIDATING: "Проверка",
+    ExecutionStatus.READY: "Готово к исполнению",
+    ExecutionStatus.WAITING_CONFIRMATION: "Ожидает подтверждения",
+    ExecutionStatus.SUBMITTING: "Отправка заявки",
+    ExecutionStatus.SUBMITTED: "Заявка отправлена",
+    ExecutionStatus.PARTIALLY_FILLED: "Частично исполнено",
+    ExecutionStatus.FILLED: "Исполнено",
+    ExecutionStatus.RECONCILED: "Сверено",
+    ExecutionStatus.BLOCKED: "Заблокировано",
+    ExecutionStatus.REJECTED: "Отклонено",
+    ExecutionStatus.CANCELLED: "Отменено",
+    ExecutionStatus.TIMEOUT: "Тайм-аут",
+    ExecutionStatus.FAILED: "Ошибка",
+    ExecutionStatus.RECONCILIATION_ERROR: "Ошибка сверки",
+}
+_EVENT_LABELS = {
+    ExecutionEventType.CREATED: "Исполнение создано",
+    ExecutionEventType.VALIDATION_STARTED: "Начата проверка исполнения",
+    ExecutionEventType.VALIDATION_PASSED: "Проверка исполнения пройдена",
+    ExecutionEventType.VALIDATION_FAILED: "Исполнение заблокировано",
+    ExecutionEventType.REVALIDATION_STARTED: "Начата повторная проверка",
+    ExecutionEventType.REVALIDATION_FAILED: "Повторная проверка не пройдена",
+    ExecutionEventType.CONFIRMATION_REQUIRED: "Требуется подтверждение пользователя",
+    ExecutionEventType.CONFIRMED: "Пользователь подтвердил исполнение",
+    ExecutionEventType.SUBMITTING: "Отправка заявки",
+    ExecutionEventType.SUBMITTED: "Заявка отправлена",
+    ExecutionEventType.STATUS_CHANGED: "Получен новый статус заявки",
+    ExecutionEventType.FILL_UPDATED: "Обновлено исполнение",
+    ExecutionEventType.CANCEL_REQUESTED: "Запрошена отмена заявки",
+    ExecutionEventType.CANCELLED: "Заявка отменена",
+    ExecutionEventType.RECONCILIATION_STARTED: "Начата сверка позиции",
+    ExecutionEventType.RECONCILED: "Сверка завершена",
+    ExecutionEventType.ERROR: "Ошибка исполнения",
+}
 
 
 def execution_status_label(status: Any) -> str:
@@ -23,7 +57,8 @@ def execution_event_text(event: Any) -> str:
         return f"{_EVENT_LABELS.get(event.event_type, event.event_type.value)}: {event.message}"
     if isinstance(event, ExecutionEventType):
         return _EVENT_LABELS.get(event, event.value)
-    event_type = getattr(event, "event_type", None); message = getattr(event, "message", None)
+    event_type = getattr(event, "event_type", None)
+    message = getattr(event, "message", None)
     if event_type is not None:
         try:
             key = event_type if isinstance(event_type, ExecutionEventType) else ExecutionEventType(str(getattr(event_type, "value", event_type)))
@@ -35,7 +70,22 @@ def execution_event_text(event: Any) -> str:
 
 
 def build_execution_center_snapshot(*, account_label: str, service_status: str, mode_label: str, queue: list[dict[str, Any]], active: dict[str, Any] | None, events: list[Any]) -> dict[str, Any]:
-    return {"account_label": account_label, "service_status": service_status, "mode_label": mode_label, "queue": queue, "active_status": execution_status_label(active.get("status")) if active else "Нет активной операции", "events": [{"time": getattr(e, "created_at", None), "text": execution_event_text(e), "status": execution_status_label(getattr(e, "status", "")), "message": getattr(e, "message", "")} for e in events]}
+    return {
+        "account_label": account_label,
+        "service_status": service_status,
+        "mode_label": mode_label,
+        "queue": queue,
+        "active_status": execution_status_label(active.get("status")) if active else "Нет активной операции",
+        "events": [
+            {
+                "time": getattr(e, "created_at", None),
+                "text": execution_event_text(e),
+                "status": execution_status_label(getattr(e, "status", "")),
+                "message": getattr(e, "message", ""),
+            }
+            for e in events
+        ],
+    }
 
 
 def _open_execution_center(self: Any) -> None:
@@ -43,37 +93,76 @@ def _open_execution_center(self: Any) -> None:
     if window is not None:
         try:
             if window.winfo_exists():
-                window.deiconify(); window.lift(); return
+                window.deiconify()
+                window.lift()
+                return
         except tk.TclError:
             pass
-    window = tk.Toplevel(self); self._execution_center_window = window; window.title("Центр исполнения"); window.geometry("1050x720")
-    root = ttk.Frame(window, padding=16); root.pack(fill="both", expand=True)
+
+    window = tk.Toplevel(self)
+    self._execution_center_window = window
+    window.title("Центр исполнения")
+    window.geometry("1050x720")
+    root = ttk.Frame(window, padding=16)
+    root.pack(fill="both", expand=True)
     ttk.Label(root, text="Центр исполнения", font=("Segoe UI", 18, "bold")).pack(anchor="w")
-    header = ttk.Frame(root); header.pack(fill="x", pady=8)
+
+    header = ttk.Frame(root)
+    header.pack(fill="x", pady=8)
     mode_var = tk.StringVar(value="Требуется подтверждение")
     status_var = tk.StringVar(value="Сервис: не подключён")
     active_var = tk.StringVar(value="Нет активной операции")
-    ttk.Label(header, textvariable=status_var).pack(side="left"); ttk.Label(header, text="Режим:").pack(side="left", padx=(25, 5)); ttk.Label(header, textvariable=mode_var).pack(side="left")
+    ttk.Label(header, textvariable=status_var).pack(side="left")
+    ttk.Label(header, text="Режим:").pack(side="left", padx=(25, 5))
+    ttk.Label(header, textvariable=mode_var).pack(side="left")
 
-    queue = ttk.LabelFrame(root, text="Очередь исполнения", padding=8); queue.pack(fill="x", pady=5)
-    tree = ttk.Treeview(queue, columns=("ticker", "decision", "quantity", "price", "ready", "status"), show="headings", height=5); tree.pack(fill="x")
-    for col, title in (("ticker", "Инструмент"), ("decision", "Решение"), ("quantity", "Количество"), ("price", "Цена"), ("ready", "Готовность"), ("status", "Статус")): tree.heading(col, text=title)
+    queue = ttk.LabelFrame(root, text="Очередь исполнения", padding=8)
+    queue.pack(fill="x", pady=5)
+    tree = ttk.Treeview(queue, columns=("ticker", "decision", "quantity", "price", "ready", "status"), show="headings", height=5)
+    tree.pack(fill="x")
+    for col, title in (
+        ("ticker", "Инструмент"),
+        ("decision", "Решение"),
+        ("quantity", "Количество"),
+        ("price", "Цена"),
+        ("ready", "Готовность"),
+        ("status", "Статус"),
+    ):
+        tree.heading(col, text=title)
 
-    active = ttk.LabelFrame(root, text="Текущая операция", padding=8); active.pack(fill="x", pady=5)
+    active = ttk.LabelFrame(root, text="Текущая операция", padding=8)
+    active.pack(fill="x", pady=5)
     ttk.Label(active, textvariable=active_var, font=("Segoe UI", 12, "bold")).pack(anchor="w")
-    actions = ttk.Frame(active); actions.pack(fill="x", pady=(8, 2))
+    actions = ttk.Frame(active)
+    actions.pack(fill="x", pady=(8, 2))
     prepare_button = ttk.Button(actions, text="Подготовить")
     confirm_request_button = ttk.Button(actions, text="Запросить подтверждение")
     confirm_submit_button = ttk.Button(actions, text="Подтвердить и отправить")
     cancel_button = ttk.Button(actions, text="Отменить")
-    for button in (prepare_button, confirm_request_button, confirm_submit_button, cancel_button): button.pack(side="left", padx=(0, 8))
+    for button in (prepare_button, confirm_request_button, confirm_submit_button, cancel_button):
+        button.pack(side="left", padx=(0, 8))
 
-    steps = ttk.Treeview(active, columns=("step", "state"), show="headings", height=8); steps.pack(fill="x", pady=6); steps.heading("step", text="Этап"); steps.heading("state", text="Состояние")
-    step_labels = ("Решение получено", "Execution Readiness", "Trading Status", "Проверка позиции", "Проверка денежных средств", "Pre-trade revalidation", "Подтверждение пользователя", "Отправка заявки", "Мониторинг", "Сверка")
-    for label in step_labels: steps.insert("", "end", values=(label, "Ожидание"))
+    steps = ttk.Treeview(active, columns=("step", "state"), show="headings", height=8)
+    steps.pack(fill="x", pady=6)
+    steps.heading("step", text="Этап")
+    steps.heading("state", text="Состояние")
+    step_labels = (
+        "Решение получено",
+        "Execution Readiness",
+        "Trading Status",
+        "Проверка позиции",
+        "Проверка денежных средств",
+        "Pre-trade revalidation",
+        "Подтверждение пользователя",
+        "Отправка заявки",
+        "Мониторинг",
+        "Сверка",
+    )
 
-    journal = ttk.LabelFrame(root, text="Журнал событий", padding=8); journal.pack(fill="both", expand=True, pady=5)
-    text = tk.Text(journal, state="disabled", wrap="word"); text.pack(fill="both", expand=True)
+    journal = ttk.LabelFrame(root, text="Журнал событий", padding=8)
+    journal.pack(fill="both", expand=True, pady=5)
+    text = tk.Text(journal, state="disabled", wrap="word")
+    text.pack(fill="both", expand=True)
 
     def current_controller():
         controller = getattr(self, "_execution_center_controller", None)
@@ -81,54 +170,144 @@ def _open_execution_center(self: Any) -> None:
             messagebox.showwarning("Центр исполнения", "Сервис исполнения ещё не подключён.")
         return controller
 
+    def bridge_items() -> tuple[Any, ...]:
+        bridge = getattr(self, "_execution_bridge", None)
+        if bridge is None:
+            return ()
+        try:
+            return bridge.all()
+        except Exception:
+            return ()
+
     def redraw(state: Any) -> None:
         status_var.set(f"Сервис: {execution_status_label(state.status) if state.status else 'Готов'}")
         request = state.request
-        active_var.set(f"{request.ticker} / {request.decision.value} / {request.quantity} шт." if request else "Нет активной операции")
+        active_var.set(
+            f"{request.ticker} / {request.decision.value} / {request.quantity} шт." if request else "Нет активной операции"
+        )
+
         tree.delete(*tree.get_children())
-        if request:
-            tree.insert("", "end", values=(request.ticker, request.decision.value, str(request.quantity), str(request.entry_price or "—"), "ДА" if request.execution_ready else "НЕТ", execution_status_label(state.status or ExecutionStatus.CREATED)))
-        for item in steps.get_children(): steps.delete(item)
+        items = bridge_items()
+        if not items and request is not None:
+            items = ()
+            tree.insert(
+                request.execution_id,
+                "end",
+                values=(
+                    request.ticker,
+                    request.decision.value,
+                    str(request.quantity),
+                    str(request.entry_price or "—"),
+                    "ДА" if request.execution_ready else "НЕТ",
+                    execution_status_label(state.status or ExecutionStatus.CREATED),
+                ),
+            )
+        else:
+            for item in items:
+                req = item.request
+                tree.insert(
+                    req.execution_id,
+                    "end",
+                    iid=req.execution_id,
+                    values=(
+                        req.ticker,
+                        req.decision.value,
+                        str(req.quantity),
+                        str(req.entry_price or "—"),
+                        "ДА" if req.execution_ready else "НЕТ",
+                        execution_status_label(item.result.status),
+                    ),
+                )
+
+        if request is not None and request.execution_id in tree.get_children(""):
+            tree.selection_set(request.execution_id)
+            tree.focus(request.execution_id)
+
+        for item in steps.get_children():
+            steps.delete(item)
         for label in step_labels:
             state_text = "Ожидание"
-            if label == "Решение получено" and request: state_text = "Готово"
-            if label == "Execution Readiness" and request: state_text = "PASS" if request.execution_ready else "FAIL"
-            if label == "Pre-trade revalidation" and state.status is ExecutionStatus.BLOCKED: state_text = "FAIL"
-            if label == "Подтверждение пользователя" and state.status is ExecutionStatus.WAITING_CONFIRMATION: state_text = "Ожидается"
-            if label == "Отправка заявки" and state.status in {ExecutionStatus.SUBMITTING, ExecutionStatus.SUBMITTED}: state_text = execution_status_label(state.status)
+            if label == "Решение получено" and request:
+                state_text = "Готово"
+            if label == "Execution Readiness" and request:
+                state_text = "PASS" if request.execution_ready else "FAIL"
+            if label == "Pre-trade revalidation" and state.status is ExecutionStatus.BLOCKED:
+                state_text = "FAIL"
+            if label == "Подтверждение пользователя" and state.status is ExecutionStatus.WAITING_CONFIRMATION:
+                state_text = "Ожидается"
+            if label == "Отправка заявки" and state.status in {ExecutionStatus.SUBMITTING, ExecutionStatus.SUBMITTED}:
+                state_text = execution_status_label(state.status)
             steps.insert("", "end", values=(label, state_text))
-        text.configure(state="normal"); text.delete("1.0", "end")
-        for event in state.events: text.insert("end", execution_event_text(event) + "\n")
+
+        text.configure(state="normal")
+        text.delete("1.0", "end")
+        for event in state.events:
+            text.insert("end", execution_event_text(event) + "\n")
         text.configure(state="disabled")
+
         prepare_button.configure(state="normal" if request and state.status is ExecutionStatus.CREATED else "disabled")
         confirm_request_button.configure(state="normal" if state.status is ExecutionStatus.READY else "disabled")
         confirm_submit_button.configure(state="normal" if state.status is ExecutionStatus.WAITING_CONFIRMATION else "disabled")
         cancel_button.configure(state="normal" if state.status is ExecutionStatus.WAITING_CONFIRMATION else "disabled")
 
+    def select_queue_item(_event: Any = None) -> None:
+        selection = tree.selection()
+        if not selection:
+            return
+        execution_id = selection[0]
+        bridge = getattr(self, "_execution_bridge", None)
+        controller = current_controller()
+        if bridge is None or controller is None:
+            return
+        try:
+            item = bridge.get(execution_id)
+            if item is None:
+                return
+            controller.load_queue_item(item)
+        except Exception as exc:
+            messagebox.showerror("Центр исполнения", str(exc))
+            return
+        redraw(controller.state)
+
     def invoke(action):
         controller = current_controller()
-        if controller is None: return
-        try: action(controller)
-        except Exception as exc: messagebox.showerror("Центр исполнения", str(exc))
+        if controller is None:
+            return
+        try:
+            action(controller)
+        except Exception as exc:
+            messagebox.showerror("Центр исполнения", str(exc))
         redraw(controller.state)
 
     prepare_button.configure(command=lambda: invoke(lambda c: c.prepare()))
     confirm_request_button.configure(command=lambda: invoke(lambda c: c.request_confirmation()))
     confirm_submit_button.configure(command=lambda: invoke(lambda c: c.confirm_and_submit()))
     cancel_button.configure(command=lambda: invoke(lambda c: c.cancel()))
+    tree.bind("<<TreeviewSelect>>", select_queue_item, add="+")
 
     controller = getattr(self, "_execution_center_controller", None)
     if controller is not None:
         controller.on_change = redraw
+
+        # Restore the most recently queued execution when the center is opened.
+        if controller.state.request is None:
+            items = bridge_items()
+            if items:
+                controller.load_queue_item(items[-1])
         redraw(controller.state)
 
-    def close(): self._execution_center_window = None; window.destroy()
+    def close():
+        self._execution_center_window = None
+        window.destroy()
+
     window.protocol("WM_DELETE_WINDOW", close)
 
 
 def install_execution_center_ui(app_cls: Type[Any]) -> None:
-    if getattr(app_cls, "_execution_center_ui_v06_installed", False): return
+    if getattr(app_cls, "_execution_center_ui_v06_installed", False):
+        return
     original_shell = app_cls._shell
+
     def bind_execution_controller(self: Any, controller: Any) -> None:
         self._execution_center_controller = controller
         if getattr(self, "_execution_center_window", None) is not None:
@@ -136,11 +315,17 @@ def install_execution_center_ui(app_cls: Type[Any]) -> None:
                 controller.on_change = lambda state: None
             except Exception:
                 pass
+
     def wrapped_shell(self: Any, *args: Any, **kwargs: Any) -> None:
         original_shell(self, *args, **kwargs)
-        button = ttk.Button(self.nav, text="Исполнение", style="Nav.TButton", command=self._open_execution_center); button.pack(fill="x", pady=2); self._execution_center_button = button
+        button = ttk.Button(self.nav, text="Исполнение", style="Nav.TButton", command=self._open_execution_center)
+        button.pack(fill="x", pady=2)
+        self._execution_center_button = button
+
     app_cls.bind_execution_controller = bind_execution_controller
-    app_cls._open_execution_center = _open_execution_center; app_cls._shell = wrapped_shell; app_cls._execution_center_ui_v06_installed = True
+    app_cls._open_execution_center = _open_execution_center
+    app_cls._shell = wrapped_shell
+    app_cls._execution_center_ui_v06_installed = True
 
 
 __all__ = ["execution_status_label", "execution_event_text", "build_execution_center_snapshot", "install_execution_center_ui"]
