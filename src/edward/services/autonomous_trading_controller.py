@@ -88,12 +88,7 @@ class AutonomousTradingController:
     ) -> AutonomousTradingControlResult:
         allowed, reason, reasons = self._gate(mode=mode, plan=plan, budget=budget, state=state)
         if not allowed:
-            return AutonomousTradingControlResult(
-                mode=mode,
-                executed=False,
-                reason=reason,
-                preflight_reasons=reasons,
-            )
+            return AutonomousTradingControlResult(mode=mode, executed=False, reason=reason, preflight_reasons=reasons)
 
         sequence = self._sequence.execute_confirmed_plan(
             account_id=account_id,
@@ -112,6 +107,7 @@ class AutonomousTradingController:
     def execute_replanned(
         self,
         *,
+        account_id: str,
         mode: ExecutionMode,
         refresh_state: Callable[[], AccountState],
         build_plan: Callable[[AccountState], AutonomousExecutionPlan],
@@ -119,38 +115,29 @@ class AutonomousTradingController:
         result_factory: Callable[[Any], Any],
         max_iterations: int = 50,
     ) -> AutonomousTradingControlResult:
-        """Run the autonomous step -> refresh -> verify -> replan loop.
-
-        Every newly built plan is preflighted against the exact account snapshot
-        used to build it. Only the first step is submitted; after verification
-        the verified snapshot becomes the input for the next planning pass.
-        """
+        """Execute one step at a time and rebuild the plan from verified state."""
         if mode is not ExecutionMode.AUTONOMOUS:
             return AutonomousTradingControlResult(mode=mode, executed=False, reason="AUTONOMOUS_MODE_REQUIRED")
         if not self._enabled:
             return AutonomousTradingControlResult(mode=mode, executed=False, reason="AUTONOMOUS_TRADING_DISABLED")
 
         preflight_reasons: list[str] = []
-        stopped_reason: list[str] = []
 
         def build_checked_plan(state: AccountState) -> AutonomousExecutionPlan:
             plan = build_plan(state)
+            if not plan.steps:
+                return plan
             budget = budget_for_state(state)
-            allowed, reason, reasons = self._gate(
-                mode=mode, plan=plan, budget=budget, state=state
-            )
+            allowed, reason, reasons = self._gate(mode=mode, plan=plan, budget=budget, state=state)
             if not allowed:
                 preflight_reasons.extend(reasons or (reason,))
-                if not plan.steps and reason == "EMPTY_EXECUTION_PLAN":
-                    return plan
                 raise RuntimeError(reason + (":" + ";".join(reasons) if reasons else ""))
             return plan
 
         def execute_one(step: Any) -> Any:
-            one_step_plan = AutonomousExecutionPlan(steps=(step,))
             sequence = self._sequence.execute_confirmed_plan(
-                account_id=getattr(step, "account_id", ""),
-                plan=one_step_plan,
+                account_id=account_id,
+                plan=AutonomousExecutionPlan(steps=(step,)),
                 result_factory=result_factory,
             )
             if not sequence.steps:
@@ -166,23 +153,14 @@ class AutonomousTradingController:
                 raise RuntimeError("VERIFICATION_RESULT_MISSING")
             return verification
 
-        try:
-            cycle = AutonomousReplanningCycleService(
-                refresh_state=refresh_state,
-                build_plan=build_checked_plan,
-                execute_step=execute_one,
-                verify_step=verify_one,
-                max_iterations=max_iterations,
-            ).run()
-        except Exception as exc:
-            stopped_reason.append(str(exc))
-            cycle = AutonomousReplanningCycleResult(
-                completed=False, iterations=0, executed_steps=(), stopped_reason=str(exc)
-            )
-
+        cycle = AutonomousReplanningCycleService(
+            refresh_state=refresh_state,
+            build_plan=build_checked_plan,
+            execute_step=execute_one,
+            verify_step=verify_one,
+            max_iterations=max_iterations,
+        ).run()
         reason = "COMPLETED" if cycle.completed else (cycle.stopped_reason or "STOPPED")
-        if preflight_reasons and cycle.stopped_reason and cycle.stopped_reason.startswith("EXECUTION_ERROR:"):
-            reason = cycle.stopped_reason
         return AutonomousTradingControlResult(
             mode=mode,
             executed=bool(cycle.executed_steps),
