@@ -17,11 +17,14 @@ from edward.services.decision_engine import (
     Scenario,
     StrategyContextData,
 )
+from edward.services.forecast_model_selection_service import ForecastModelSelectionService
 from edward.services.instrument_catalog_service import InstrumentCatalogService
 from edward.services.instrument_decision_context_service import InstrumentDecisionContextService
 from edward.services.market_decision_context_service import MarketDecisionContextService
 from edward.services.opportunity_engine import OpportunityEngine
 from edward.services.portfolio_decision_context_service import PortfolioDecisionContextService
+from edward.services.position_sizing_service import PositionSizingInput, PositionSizingService
+from edward.services.trade_plan_service import TradePlanInput, TradePlanService
 
 logger = logging.getLogger(__name__)
 
@@ -49,10 +52,22 @@ class OpportunitySearchResult:
     explanation: str
     quantity: float
     risk_score: float = 0.0
+    forecast_model: str | None = None
+    forecast_confidence: str | None = None
+    forecast_prices: tuple[tuple[int, float], ...] = ()
+    forecast_probability_up: tuple[tuple[int, float], ...] = ()
+    forecast_probability_down: tuple[tuple[int, float], ...] = ()
+    forecast_downside: tuple[tuple[int, float], ...] = ()
+    forecast_upside: tuple[tuple[int, float], ...] = ()
+    trade_plan: Any | None = None
+    recommended_quantity: int = 0
+    recommended_value: float = 0.0
+    recommended_weight_pct: float = 0.0
+    execution_ready: bool = False
 
 
 class OpportunitySearchService:
-    """Run the v0.4 decision pipeline over a deliberately bounded instrument universe."""
+    """Run the v0.4/v0.5 decision pipeline over a deliberately bounded instrument universe."""
 
     def __init__(self, client: Any, analysis_service: AnalysisService | None = None):
         self.client = client
@@ -71,7 +86,7 @@ class OpportunitySearchService:
         except Exception:
             pass
 
-    def scan(self, *, profile: str = "medium_term", instrument_kind: str = "SHARE", scope: str = MARKET_SCOPE, progress_callback: ProgressCallback | None = None) -> list[OpportunitySearchResult]:
+    def scan(self, *, profile: str = "medium_term", instrument_kind: str = "SHARE", scope: str = MARKET_SCOPE, progress_callback: ProgressCallback | None = None, result_callback: Callable[[OpportunitySearchResult, int, int], None] | None = None, force_recompute: bool = False) -> list[OpportunitySearchResult]:
         scope = str(scope or MARKET_SCOPE).upper()
         if scope not in SUPPORTED_SCOPES:
             raise ValueError(f"Unsupported opportunity scope: {scope}")
@@ -98,6 +113,11 @@ class OpportunitySearchService:
             self._notify(progress_callback, f"Market Data: {ticker}", progress_base, valid_index, total)
             result = self._evaluate_instrument(instrument=instrument, profile=profile, positions=positions, portfolio=portfolio, progress_callback=progress_callback, progress_base=progress_base, progress_span=progress_span, current=valid_index, total=total)
             results.append(result)
+            if result_callback is not None:
+                try:
+                    result_callback(result, valid_index, total)
+                except Exception:
+                    logger.exception("[OPPORTUNITY RESULT CALLBACK] ticker=%s", ticker)
             self._notify(progress_callback, f"Обработано: {ticker}", progress_base + progress_span, valid_index, total)
         self._notify(progress_callback, "Ранжирование возможностей", 97.0, valid_index, total)
         results = sorted(results, key=lambda item: (item.decision not in {"BUY", "WAIT", "HOLD", "ADD", "REDUCE", "SELL"}, item.decision not in {"BUY", "ADD", "REDUCE", "SELL", "HOLD"}, -item.opportunity_score))
@@ -140,6 +160,21 @@ class OpportunitySearchService:
         kind = str(instrument_kind or "SHARE").upper()
         return ("SHARE", "BOND", "ETF", "CURRENCY", "FUTURES", "OPTION") if kind == INSTRUMENT_KIND_ALL else (kind,)
 
+    @staticmethod
+    def _forecast_horizon(profile: str) -> int:
+        return {"speculative": 5, "medium_term": 20, "long_term": 60}.get(str(profile), 20)
+
+    @staticmethod
+    def _forecast_maps(result: Any) -> tuple[tuple[tuple[int, float], ...], ...]:
+        points = tuple(result.forecast.points)
+        return (
+            tuple((p.horizon_days, p.expected_price) for p in points),
+            tuple((p.horizon_days, p.probability_up) for p in points),
+            tuple((p.horizon_days, p.probability_down) for p in points),
+            tuple((p.horizon_days, p.downside_price) for p in points),
+            tuple((p.horizon_days, p.upside_price) for p in points),
+        )
+
     def _evaluate_instrument(self, *, instrument: Any, profile: str, positions: Any, portfolio: Any, progress_callback: ProgressCallback | None = None, progress_base: float = 15.0, progress_span: float = 80.0, current: int = 0, total: int = 0) -> OpportunitySearchResult:
         uid = str(_field(instrument, "uid", _field(instrument, "instrument_uid", "")))
         ticker = str(_field(instrument, "ticker", ""))
@@ -167,11 +202,26 @@ class OpportunitySearchService:
                 reason = f"Недостаточно исторических данных: получено {len(candles)} свечей, требуется не менее 150."
                 logger.warning("[OPPORTUNITY CANDLES] uid=%s ticker=%s count=%d", uid, ticker, len(candles))
                 return self._unavailable(instrument, price, position_data.quantity, reason)
+
             self._notify(progress_callback, f"Анализ стратегий: {ticker}", progress_base + progress_span * 0.28, current, total)
             analysis = self.analysis.analyze(instrument_uid=uid, ticker=ticker, candles=candles, profile=profile)
             selected = self._best_strategy(analysis.strategies)
             market = self.market_context.build(last_price=_field(instrument, "last_price", None), candles=candles, market_regime=analysis.market_regime)
-            self._notify(progress_callback, f"Risk / Opportunity: {ticker}", progress_base + progress_span * 0.58, current, total)
+
+            forecast = None
+            forecast_prices = forecast_up = forecast_down = forecast_low = forecast_high = ()
+            self._notify(progress_callback, f"Прогноз цены: {ticker}", progress_base + progress_span * 0.44, current, total)
+            if candles and all(isinstance(item, Candle) for item in candles):
+                try:
+                    selected_forecast = ForecastModelSelectionService.select_and_forecast(instrument_uid=uid, ticker=ticker, candles=candles)
+                    forecast = selected_forecast.forecast
+                    forecast_prices, forecast_up, forecast_down, forecast_low, forecast_high = self._forecast_maps(selected_forecast)
+                except Exception:
+                    logger.exception("[OPPORTUNITY FORECAST] uid=%s ticker=%s", uid, ticker)
+            else:
+                logger.debug("[OPPORTUNITY FORECAST] skipped incompatible candle objects uid=%s ticker=%s", uid, ticker)
+
+            self._notify(progress_callback, f"Risk / Opportunity: {ticker}", progress_base + progress_span * 0.60, current, total)
             if selected is None:
                 opportunity_context = OpportunityContext(0.0, False, False, False, False, True)
                 strategy_context = StrategyContextData(strategy_name=None, strategy_score=0.0, quality_gate=False, available=True)
@@ -186,7 +236,7 @@ class OpportunitySearchService:
                 risk_score = float(getattr(risk, "score", 0.0) or 0.0)
                 strategy_context = StrategyContextData(strategy_name=selected.strategy, strategy_score=selected.score, walk_forward_score=selected.test_score, stability_score=selected.stability, confidence=analysis.confidence, quality_gate=selected.quality_gate, entry_signal=bool(selected.quality_gate and opportunity_context.entry_ok), quality_degraded=not selected.quality_gate, available=True)
             risk_context = RiskContextData(risk_gate=opportunity_context.risk_ok, critical_risk=opportunity_context.critical_risk, risk_score=risk_score, max_drawdown_pct=selected.max_drawdown_pct if selected else None, available=True)
-            self._notify(progress_callback, f"Decision Engine: {ticker}", progress_base + progress_span * 0.82, current, total)
+            self._notify(progress_callback, f"Decision Engine: {ticker}", progress_base + progress_span * 0.78, current, total)
             request = DecisionRequest(
                 scenario=Scenario.SINGLE_INSTRUMENT if position_data.is_open else Scenario.OPPORTUNITY_SEARCH,
                 instrument=instrument_data,
@@ -206,8 +256,30 @@ class OpportunitySearchService:
                 profile=profile,
             )
             decision = DecisionEngine.evaluate(request)
+            decision_value = decision.decision.value if decision.decision else None
+
+            trade_plan = None
+            recommended_quantity = 0
+            recommended_value = 0.0
+            recommended_weight_pct = 0.0
+            execution_ready = False
+            horizon = self._forecast_horizon(profile)
+            if forecast is not None:
+                try:
+                    plan_action = decision_value if decision_value in {"BUY", "ADD", "HOLD", "REDUCE", "SELL"} else "HOLD"
+                    fp = forecast.point(horizon)
+                    trade_plan = TradePlanService.build(TradePlanInput(action=plan_action, forecast=fp, confidence=fp.confidence, holding_horizon_days=horizon, entry_price=market.current_price or price, position_weight_pct=position_data.portfolio_weight_pct, target_weight_pct=position_data.target_weight_pct, max_position_weight_pct=portfolio_data.max_position_weight_pct or 10.0))
+                    if portfolio_data.portfolio_value and (market.current_price or price) and trade_plan.stop_price:
+                        sizing = PositionSizingService.calculate(PositionSizingInput(action=plan_action, portfolio_value=float(portfolio_data.portfolio_value), current_price=float(market.current_price or price), stop_price=float(trade_plan.stop_price), risk_per_trade_pct=1.0, max_position_weight_pct=float(portfolio_data.max_position_weight_pct or 10.0), available_cash=float(portfolio_data.available_cash or 0.0), current_quantity=int(position_data.quantity or 0), current_weight_pct=float(position_data.portfolio_weight_pct or 0.0), lot_size=1))
+                        recommended_quantity = sizing.recommended_quantity
+                        recommended_value = sizing.recommended_value
+                        recommended_weight_pct = sizing.recommended_weight_pct
+                    execution_ready = bool(decision_value in {"BUY", "ADD", "HOLD", "REDUCE", "SELL"} and trade_plan is not None and (decision.status.value == "VALID" if hasattr(decision.status, "value") else True))
+                except Exception:
+                    logger.exception("[OPPORTUNITY TRADE PLAN] uid=%s ticker=%s", uid, ticker)
+
             reason = decision.reason_codes[0] if decision.reason_codes else ""
-            return OpportunitySearchResult(uid, ticker, name, market.current_price if market.current_price is not None else price, analysis.market_regime, decision.strategy_name, decision.strategy_score, decision.opportunity_score, decision.decision.value if decision.decision else None, decision.status.value, reason, decision.explanation, position_data.quantity, risk_score)
+            return OpportunitySearchResult(uid, ticker, name, market.current_price if market.current_price is not None else price, analysis.market_regime, decision.strategy_name, decision.strategy_score, decision.opportunity_score, decision_value, decision.status.value, reason, decision.explanation, position_data.quantity, risk_score, forecast.model if forecast is not None else None, forecast.confidence if forecast is not None else None, forecast_prices, forecast_up, forecast_down, forecast_low, forecast_high, trade_plan, recommended_quantity, recommended_value, recommended_weight_pct, execution_ready)
         except Exception as exc:
             logger.exception("[OPPORTUNITY ANALYSIS ERROR] uid=%s ticker=%s", uid, ticker)
             return self._unavailable(instrument, price, position_data.quantity, f"Ошибка анализа: {exc}")
@@ -220,7 +292,6 @@ class OpportunitySearchService:
         return max(passing or strategies, key=lambda item: item.score)
 
     def _get_candles(self, instrument_uid: str) -> list[Candle]:
-        """Load enough daily candles for WF/strategy analysis from the T-Invest client."""
         payload: Any = None
         try:
             payload = self.client.get_candles(instrument_uid, interval="CANDLE_INTERVAL_DAY", limit=2400)

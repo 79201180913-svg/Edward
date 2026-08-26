@@ -22,7 +22,26 @@ FILTER_LABELS = ("Все", "Купить", "Ждать", "Удерживать",
 FILTER_CODE_BY_LABEL = dict(zip(FILTER_LABELS, FILTER_VALUES))
 REGIME_LABELS = {"TREND": "Тренд", "Trend": "Тренд", "MOMENTUM": "Импульс", "Momentum": "Импульс", "BREAKOUT": "Пробой", "Breakout": "Пробой", "MEAN_REVERSION": "Возврат к среднему", "Mean Reversion": "Возврат к среднему", "UNCLEAR": "Неясный", "UNCLEAR_REGIME": "Неясный"}
 STRATEGY_LABELS = {"Trend Following": "Следование за трендом", "Momentum": "Импульсная стратегия", "Breakout": "Пробой", "Mean Reversion": "Возврат к среднему"}
-REASON_LABELS = {"STRATEGY_QUALITY_FAIL": "Стратегия не прошла контроль качества", "RISK_FAIL": "Не пройдены риск-ограничения", "RISK_DETERIORATION": "Риск позиции ухудшился", "CRITICAL_RISK": "Критический риск", "MARKET_REGIME_UNFAVORABLE": "Рыночный режим неблагоприятен", "PORTFOLIO_CONSTRAINT": "Ограничение портфеля", "INSTRUMENT_BUY_UNAVAILABLE": "Покупка инструмента недоступна", "ENTRY_NOT_READY": "Условия входа ещё не готовы", "BUY_CONDITIONS_MET": "Условия покупки выполнены", "OPPORTUNITY_BELOW_BUY_THRESHOLD": "Привлекательность ниже порога покупки", "OPPORTUNITY_TOO_LOW": "Торговая возможность недостаточно привлекательна", "EXIT_SIGNAL": "Получен сигнал на выход", "POSITION_ABOVE_TARGET": "Доля позиции выше целевой", "POSITION_BELOW_TARGET": "Доля позиции ниже целевой", "STRATEGY_QUALITY_DEGRADED": "Качество стратегии ухудшилось", "SIGNAL_DEGRADED": "Торговый сигнал ухудшился", "ANALYSIS_UNAVAILABLE": "Недостаточно данных для принятия решения", "NO_ACCEPTABLE_STRATEGY": "Нет приемлемой стратегии"}
+REASON_LABELS = {
+    "STRATEGY_QUALITY_FAIL": "Стратегия не прошла контроль качества",
+    "RISK_FAIL": "Не пройдены риск-ограничения",
+    "RISK_DETERIORATION": "Риск позиции ухудшился",
+    "CRITICAL_RISK": "Критический риск",
+    "MARKET_REGIME_UNFAVORABLE": "Рыночный режим неблагоприятен",
+    "PORTFOLIO_CONSTRAINT": "Ограничение портфеля",
+    "INSTRUMENT_BUY_UNAVAILABLE": "Покупка инструмента недоступна",
+    "ENTRY_NOT_READY": "Условия входа ещё не готовы",
+    "BUY_CONDITIONS_MET": "Условия покупки выполнены",
+    "OPPORTUNITY_BELOW_BUY_THRESHOLD": "Привлекательность ниже порога покупки",
+    "OPPORTUNITY_TOO_LOW": "Торговая возможность недостаточно привлекательна",
+    "EXIT_SIGNAL": "Получен сигнал на выход",
+    "POSITION_ABOVE_TARGET": "Доля позиции выше целевой",
+    "POSITION_BELOW_TARGET": "Доля позиции ниже целевой",
+    "STRATEGY_QUALITY_DEGRADED": "Качество стратегии ухудшилось",
+    "SIGNAL_DEGRADED": "Торговый сигнал ухудшился",
+    "ANALYSIS_UNAVAILABLE": "Недостаточно данных для принятия решения",
+    "NO_ACCEPTABLE_STRATEGY": "Нет приемлемой стратегии",
+}
 
 
 def _label(mapping: dict[str, str], value: str | None, default: str = "—") -> str:
@@ -39,6 +58,58 @@ def _safe_configure(widget: Any, **kwargs: Any) -> bool:
     except tk.TclError:
         return False
     return False
+
+
+def _forecast_value(points: tuple[tuple[int, float], ...], horizon: int) -> str:
+    values = dict(points)
+    value = values.get(horizon)
+    return "—" if value is None else f"{value:.4f}"
+
+
+def _forecast_probability(points: tuple[tuple[int, float], ...], horizon: int) -> str:
+    values = dict(points)
+    value = values.get(horizon)
+    return "—" if value is None else f"{value:.1f}%"
+
+
+def _execution_ready_text(item: Any) -> str:
+    return "Готово" if bool(getattr(item, "execution_ready", False)) else "Заблокировано"
+
+
+def _display_reason(value: Any) -> str:
+    raw = str(value or "")
+    base = raw.split(" | ", 1)[0].strip()
+    return _label(REASON_LABELS, base, base or "—")
+
+
+def _trade_plan_text(item: Any) -> str:
+    plan = getattr(item, "trade_plan", None)
+    decision = str(getattr(item, "decision", "") or "").upper()
+    if decision == "PASS":
+        return "Торговый план: не применяется для решения «Пропустить»."
+    if plan is None:
+        return "Торговый план: не сформирован"
+    rr = "—" if plan.risk_reward is None else f"{plan.risk_reward:.2f}"
+    current_quantity = int(getattr(item, "quantity", 0) or 0)
+    recommended_quantity = int(getattr(item, "recommended_quantity", 0) or 0)
+    if decision == "SELL":
+        size_label = f"Объём закрытия: {recommended_quantity} шт. / осталось: {max(0, current_quantity - recommended_quantity)} шт."
+    elif decision == "REDUCE":
+        size_label = f"Объём сокращения: {recommended_quantity} шт. / останется: {max(0, current_quantity - recommended_quantity)} шт."
+    else:
+        size_label = f"Рекомендуемый размер: {recommended_quantity} шт. / {getattr(item, 'recommended_weight_pct', 0.0):.2f}%"
+    return "\n".join((
+        f"Вход: {plan.entry_low:.4f} — {plan.entry_high:.4f}" if plan.entry_low is not None and plan.entry_high is not None else "Вход: —",
+        f"Цель: {plan.target_price:.4f}" if plan.target_price is not None else "Цель: —",
+        f"Стоп: {plan.stop_price:.4f}" if plan.stop_price is not None else "Стоп: —",
+        f"Ожидаемая доходность: {plan.expected_return_pct:.2f}%",
+        f"Ожидаемый риск: {plan.expected_risk_pct:.2f}%",
+        f"Risk/Reward: {rr}",
+        f"Горизонт: {plan.holding_horizon_days} дн.",
+        f"Уверенность: {plan.confidence}",
+        size_label,
+        f"Исполнение: {'ДА' if getattr(item, 'execution_ready', False) else 'НЕТ'}",
+    ))
 
 
 def install_opportunity_search_ui(app_class: type[Any]) -> None:
@@ -64,6 +135,7 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
         profile_var = tk.StringVar(value="Среднесрочная")
         kind_var = tk.StringVar(value="Акции")
         decision_var = tk.StringVar(value="Все")
+        detail_var = tk.StringVar(value="Выберите инструмент, чтобы увидеть прогноз и торговый план.")
 
         settings = ApplicationSettingsStore().load()
         cache = StrategyOptimizationCache(settings.storage_path)
@@ -90,12 +162,24 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
         ttk.Label(filter_frame, text="Фильтр решения:").pack(side="left")
         filter_combo = ttk.Combobox(filter_frame, textvariable=decision_var, state="readonly", values=FILTER_LABELS, width=15); filter_combo.pack(side="left", padx=(6, 12))
 
-        columns = ("ticker", "price", "regime", "strategy", "strategy_score", "risk_score", "opportunity_score", "decision", "reason")
-        tree = ttk.Treeview(frame, columns=columns, show="headings", height=20)
-        for key, label, width in (("ticker", "Инструмент", 105), ("price", "Цена", 85), ("regime", "Рыночный режим", 115), ("strategy", "Стратегия", 180), ("strategy_score", "Балл стратегии", 105), ("risk_score", "Риск", 75), ("opportunity_score", "Балл возможности", 120), ("decision", "Решение", 100), ("reason", "Причина", 300)):
-            tree.heading(key, text=label); tree.column(key, width=width, anchor="center" if key not in {"ticker", "strategy", "reason"} else "w")
+        columns = ("ticker", "price", "forecast5", "prob5", "confidence", "strategy", "strategy_score", "risk_score", "opportunity_score", "decision", "readiness", "reason")
+        tree = ttk.Treeview(frame, columns=columns, show="headings", height=16)
+        headers = (
+            ("ticker", "Инструмент", 105), ("price", "Цена", 85), ("forecast5", "Прогноз 5Д", 100),
+            ("prob5", "Рост 5Д", 80), ("confidence", "Уверенность", 95), ("strategy", "Стратегия", 165),
+            ("strategy_score", "Балл стратегии", 105), ("risk_score", "Риск", 75), ("opportunity_score", "Балл возможности", 120),
+            ("decision", "Решение", 100), ("readiness", "Готовность", 105), ("reason", "Причина", 250),
+        )
+        for key, label, width in headers:
+            anchor = "w" if key in {"ticker", "strategy", "reason"} else "center"
+            tree.heading(key, text=label); tree.column(key, width=width, anchor=anchor)
         tree.pack(fill="both", expand=True)
-        summary_var = tk.StringVar(value="Покупка: 0   Ждать: 0   Удерживать: 0   Увеличить: 0   Сократить: 0   Продать: 0   Пропустить: 0   Недоступны: 0   Показано: 0")
+
+        detail_frame = ttk.LabelFrame(frame, text="Прогноз и торговый план")
+        detail_frame.pack(fill="x", pady=(8, 0))
+        ttk.Label(detail_frame, textvariable=detail_var, justify="left", anchor="w").pack(fill="x", padx=8, pady=8)
+
+        summary_var = tk.StringVar(value="Покупка: 0   Ждать: 0   Удерживать: 0   Увеличить: 0   Сократить: 0   Продать: 0   Пропустить: 0   Готово: 0   Заблокировано: 0   Недоступны: 0   Показано: 0")
         ttk.Label(frame, textvariable=summary_var).pack(anchor="w", pady=(8, 0))
         state: dict[str, Any] = {"results": []}
 
@@ -121,15 +205,51 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
 
         def row_values(item: Any) -> tuple[str, ...]:
             decision = item.decision or "PASS"
-            return (item.ticker, f"{item.price:.4f}" if item.price is not None else "—", _label(REGIME_LABELS, item.market_regime), _label(STRATEGY_LABELS, item.strategy_name), f"{item.strategy_score:.1f}", f"{getattr(item, 'risk_score', 0.0):.1f}", f"{item.opportunity_score:.1f}", _label(DECISION_LABELS, decision), _label(REASON_LABELS, item.reason))
+            return (
+                item.ticker,
+                f"{item.price:.4f}" if item.price is not None else "—",
+                _forecast_value(getattr(item, "forecast_prices", ()), 5),
+                _forecast_probability(getattr(item, "forecast_probability_up", ()), 5),
+                getattr(item, "forecast_confidence", None) or "—",
+                _label(STRATEGY_LABELS, item.strategy_name),
+                f"{item.strategy_score:.1f}",
+                f"{getattr(item, 'risk_score', 0.0):.1f}",
+                f"{item.opportunity_score:.1f}",
+                _label(DECISION_LABELS, decision),
+                _execution_ready_text(item) if decision in {"BUY", "ADD", "HOLD", "REDUCE", "SELL"} else "—",
+                _display_reason(item.reason),
+            )
+
+        def show_detail(item: Any | None) -> None:
+            if item is None:
+                detail_var.set("Выберите инструмент, чтобы увидеть прогноз и торговый план.")
+                return
+            decision = str(getattr(item, "decision", "") or "").upper()
+            forecast_rows = [
+                f"{h}Д: цена {_forecast_value(getattr(item, 'forecast_prices', ()), h)} / рост {_forecast_probability(getattr(item, 'forecast_probability_up', ()), h)}"
+                for h in (1, 5, 20, 60)
+            ]
+            header = (
+                f"{item.ticker} · {_label(DECISION_LABELS, item.decision)} · "
+                f"Модель: {getattr(item, 'forecast_model', None) or '—'} · "
+                f"Уверенность: {getattr(item, 'forecast_confidence', None) or '—'}"
+            )
+            readiness = f"Готовность к исполнению: {_execution_ready_text(item) if decision in {'BUY', 'ADD', 'HOLD', 'REDUCE', 'SELL'} else 'не применяется'}"
+            if decision in {"BUY", "ADD", "HOLD", "REDUCE", "SELL"}:
+                detail_var.set("\n".join((header, "Прогноз:", *forecast_rows, readiness, "Торговый план:", _trade_plan_text(item))))
+            else:
+                detail_var.set("\n".join((header, "Прогноз:", *forecast_rows, readiness, f"Причина: {_display_reason(item.reason)}", "Торговый план: не применяется.")))
 
         def update_summary() -> None:
             if not page_alive(): return
             counts = {value: 0 for value in FILTER_VALUES if value != "ALL"}
             for item in state["results"]: counts[item.decision or "PASS"] = counts.get(item.decision or "PASS", 0) + 1
             unavailable = sum(1 for item in state["results"] if item.status == "ANALYSIS_UNAVAILABLE")
+            actionable = [item for item in state["results"] if item.decision in {"BUY", "ADD", "HOLD", "REDUCE", "SELL"}]
+            ready = sum(1 for item in actionable if item.execution_ready)
+            blocked = sum(1 for item in actionable if not item.execution_ready)
             selected = decision_code(); visible = sum(1 for item in state["results"] if selected == "ALL" or (item.decision or "PASS") == selected)
-            summary_var.set("   ".join((f"Покупка: {counts.get('BUY', 0)}", f"Ждать: {counts.get('WAIT', 0)}", f"Удерживать: {counts.get('HOLD', 0)}", f"Увеличить: {counts.get('ADD', 0)}", f"Сократить: {counts.get('REDUCE', 0)}", f"Продать: {counts.get('SELL', 0)}", f"Пропустить: {counts.get('PASS', 0)}", f"Недоступны: {unavailable}", f"Показано: {visible}")))
+            summary_var.set("   ".join((f"Покупка: {counts.get('BUY', 0)}", f"Ждать: {counts.get('WAIT', 0)}", f"Удерживать: {counts.get('HOLD', 0)}", f"Увеличить: {counts.get('ADD', 0)}", f"Сократить: {counts.get('REDUCE', 0)}", f"Продать: {counts.get('SELL', 0)}", f"Пропустить: {counts.get('PASS', 0)}", f"Готово: {ready}", f"Заблокировано: {blocked}", f"Недоступны: {unavailable}", f"Показано: {visible}")))
 
         def render() -> None:
             if not page_alive(): return
@@ -147,13 +267,20 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
             if selected == "ALL" or (item.decision or "PASS") == selected: tree.insert("", "end", values=row_values(item))
             update_summary()
 
+        def on_tree_select(_event: Any = None) -> None:
+            selection = tree.selection()
+            if not selection: return show_detail(None)
+            index = tree.index(selection[0])
+            selected_visible = [item for item in state["results"] if decision_code() == "ALL" or (item.decision or "PASS") == decision_code()]
+            if 0 <= index < len(selected_visible): show_detail(selected_visible[index])
+
         def update_scope_ui(*_args: Any) -> None:
             if not page_alive(): return
             title_var.set("Анализ портфеля" if scope_code() == PORTFOLIO_SCOPE else "Возможности рынка")
-            decision_var.set("Все"); state["results"] = []; progress_var.set(0.0); progress_text_var.set("Готово"); status_var.set("Готово"); render()
+            decision_var.set("Все"); state["results"] = []; progress_var.set(0.0); progress_text_var.set("Готово"); status_var.set("Готово"); show_detail(None); render()
 
         def localize_stage(stage: str) -> str:
-            for source, target in (("Market Data: candles ", "Рыночные данные: свечи "), ("Market Data: ", "Рыночные данные: "), ("Risk / Opportunity: ", "Риск и возможность: "), ("Decision Engine: ", "Формирование решения: "), ("Portfolio Context загружается", "Загрузка контекста портфеля"), ("Portfolio Context загружен", "Контекст портфеля загружен"), ("Вселенная анализа:", "Инструментов для анализа:")):
+            for source, target in (("Market Data: candles ", "Рыночные данные: свечи "), ("Market Data: ", "Рыночные данные: "), ("Прогноз цены: ", "Прогноз цены: "), ("Анализ стратегий: ", "Анализ стратегий: "), ("Контроль качества прогноза: ", "Контроль качества прогноза: "), ("Risk / Opportunity: ", "Риск и возможность: "), ("Decision Engine: ", "Формирование решения: "), ("Portfolio Context загружается", "Загрузка контекста портфеля"), ("Portfolio Context загружен", "Контекст портфеля загружен"), ("Вселенная анализа:", "Инструментов для анализа:")):
                 if stage.startswith(source): return target + stage[len(source):]
             return stage
 
@@ -173,7 +300,7 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
             if not page_alive(): return
             set_controls(False); state["results"] = []
             for row in tree.get_children(): tree.delete(row)
-            update_summary(); progress_var.set(0.0); progress_text_var.set("Подготовка сканирования — 0%"); status_var.set("Запуск")
+            show_detail(None); update_summary(); progress_var.set(0.0); progress_text_var.set("Подготовка сканирования — 0%"); status_var.set("Запуск")
             if force_recompute: status_var.set("Принудительный пересчёт Walk Forward")
             scope, kind, profile = scope_code(), kind_code(), profile_code()
 
@@ -207,6 +334,7 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
         recompute_button.configure(command=lambda: scan(True))
         clear_cache_button.configure(command=clear_cache)
         filter_combo.bind("<<ComboboxSelected>>", lambda _event: render())
+        tree.bind("<<TreeviewSelect>>", on_tree_select)
         render(); refresh_cache_status()
 
     app_class._shell = shell

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any, Callable
 
 from edward.config.application_settings import ApplicationSettingsStore
 from edward.services.cached_analysis_service import CachedAnalysisService
+from edward.services.execution_readiness_service import ExecutionReadinessInput, ExecutionReadinessService
+from edward.services.forecast_quality_gate_service import ForecastQualityGateService
+from edward.services.forecast_walk_forward_service import ForecastWalkForwardService
 from edward.services.opportunity_search_service import (
     MARKET_SCOPE,
     ProgressCallback,
@@ -27,6 +31,71 @@ class LiveOpportunitySearchService(OpportunitySearchService):
     def cache_info(self) -> dict[str, int]:
         analysis = self.analysis
         return analysis.cache_info() if isinstance(analysis, CachedAnalysisService) else {"hits": 0, "misses": 0, "total": 0}
+
+    @staticmethod
+    def _enforce_execution_readiness(
+        result: OpportunitySearchResult,
+        *,
+        forecast_quality_pass: bool = False,
+        forecast_quality_label: str = "НЕ ПРОВЕРЕН",
+    ) -> OpportunitySearchResult:
+        decision = str(result.decision or "").upper()
+        if decision not in {"BUY", "ADD", "HOLD", "REDUCE", "SELL"}:
+            return result
+
+        plan = getattr(result, "trade_plan", None)
+        risk_reward = getattr(plan, "risk_reward", None) if plan is not None else None
+        strategy_quality_pass = str(result.reason or "") not in {"STRATEGY_QUALITY_FAIL", "RISK_FAIL", "CRITICAL_RISK"}
+        risk_reward_ok = decision not in {"BUY", "ADD"} or (risk_reward is not None and risk_reward > 0)
+        position_size_ready = decision not in {"REDUCE", "SELL"} or int(getattr(result, "recommended_quantity", 0) or 0) > 0
+        plan_ready = plan is not None
+
+        gate = ExecutionReadinessService.evaluate(
+            ExecutionReadinessInput(
+                decision=decision,
+                forecast_quality_pass=forecast_quality_pass,
+                risk_ok=str(result.reason or "") not in {"RISK_FAIL", "CRITICAL_RISK"},
+                portfolio_available=True,
+                trading_status_ok=True,
+                position_size_ready=position_size_ready,
+                entry_ready=plan_ready,
+                target_ready=plan_ready,
+                stop_ready=plan_ready,
+                liquidity_ok=True,
+                strategy_quality_pass=strategy_quality_pass,
+                risk_reward_ok=risk_reward_ok,
+            )
+        )
+
+        readiness_text = "Исполнение: ДА" if gate.execution_ready else "Исполнение: НЕТ"
+        gate_reason_text = " | ".join(gate.reasons) if gate.reasons else ""
+        execution_parts = [str(result.reason or ""), *([gate_reason_text] if gate_reason_text else []), f"Контроль качества прогноза: {forecast_quality_label}", readiness_text]
+        execution_explanation = " | ".join(part for part in execution_parts if part)
+        changes: dict[str, Any] = {"execution_ready": gate.execution_ready}
+        if hasattr(result, "reason"):
+            changes["reason"] = execution_explanation
+        if gate.execution_ready == result.execution_ready and execution_explanation == str(getattr(result, "reason", "") or ""):
+            return result
+        try:
+            return replace(result, **changes)
+        except TypeError:
+            try:
+                result.execution_ready = gate.execution_ready
+                if hasattr(result, "reason"):
+                    result.reason = execution_explanation
+            except Exception:
+                return result
+            return result
+
+    @classmethod
+    def _forecast_quality_gate(cls, service: OpportunitySearchService, instrument_uid: str, profile: str) -> tuple[bool, str]:
+        decision_horizon = service._forecast_horizon(profile)
+        candles = service._get_candles(instrument_uid)
+        if len(candles) < 150:
+            return False, "НЕ ПРОВЕРЕН: недостаточно истории"
+        wf = ForecastWalkForwardService.validate(candles=candles, horizon=decision_horizon)
+        gate = ForecastQualityGateService.evaluate(wf)
+        return gate.passed, ("PASS" if gate.passed else "FAIL")
 
     def scan(
         self,
@@ -76,6 +145,23 @@ class LiveOpportunitySearchService(OpportunitySearchService):
                 progress_span=progress_span,
                 current=valid_index,
                 total=total,
+            )
+
+            forecast_quality_pass = False
+            forecast_quality_label = "НЕ ПРИМЕНИМ"
+            if result.decision in {"BUY", "ADD", "HOLD", "REDUCE", "SELL"}:
+                forecast_quality_label = "НЕ ПРОВЕРЕН"
+                try:
+                    self._notify(progress_callback, f"Контроль качества прогноза: {ticker}", progress_base + progress_span * 0.91, valid_index, total)
+                    forecast_quality_pass, forecast_quality_label = self._forecast_quality_gate(self, uid, profile)
+                except Exception:
+                    forecast_quality_pass = False
+                    forecast_quality_label = "FAIL"
+
+            result = self._enforce_execution_readiness(
+                result,
+                forecast_quality_pass=forecast_quality_pass,
+                forecast_quality_label=forecast_quality_label,
             )
             results.append(result)
             if result_callback is not None:

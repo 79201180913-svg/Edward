@@ -6,6 +6,7 @@ from math import sqrt
 from statistics import mean, pstdev
 from typing import Any, Callable, Iterable
 
+from edward.services.strategy_confidence_policy_v06 import StrategyConfidencePolicy
 from edward.storage.sqlite_store import SQLiteStore
 
 
@@ -415,9 +416,13 @@ class AnalysisService:
         results = [self.walk_forward(ordered, strategy, profile) for strategy in self.STRATEGIES]
         passed = [item for item in results if item.quality_gate]
         winner = max(passed, key=lambda item: item.score) if passed else None
-        confidence = "Low"
+        raw_confidence = "Low"
         if winner:
-            confidence = "High" if winner.stability >= 80 and winner.score >= 75 else "Medium" if winner.stability >= 65 and winner.score >= 60 else "Low"
+            raw_confidence = "High" if winner.stability >= 80 and winner.score >= 75 else "Medium" if winner.stability >= 65 and winner.score >= 60 else "Low"
+        confidence = StrategyConfidencePolicy.resolve(
+            quality_gate=winner is not None,
+            confidence=raw_confidence,
+        )
         explanation = (
             f"Рекомендована {winner.strategy}: Score {winner.score:.1f}, "
             f"Walk Forward stability {winner.stability:.0f}%, режим {regime}."

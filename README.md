@@ -2,27 +2,29 @@
 
 Python trading platform for T-Invest.
 
-Current stable version: **0.4.0**
+Current stable version: **0.6.0**
 
 ## Platform overview
 
-Edward combines manual trading through T-Invest with an adaptive market-analysis and decision pipeline. The platform is designed around an instrument-centric workflow and supports both individual instrument analysis and portfolio-aware opportunity search.
+Edward is a desktop trading platform for T-Invest that combines manual trading, adaptive market analysis, portfolio-aware opportunity search and controlled order execution. The platform is built around an instrument-centric workflow and separates analytical decisions from the final execution confirmation.
 
-## Trading and portfolio
+## Core capabilities
 
 - T-Invest Sandbox integration for accounts, portfolio, positions, balances and market data;
 - instrument catalog with ticker, UID, identifiers, price and trading availability;
-- current market price, close-price change and trading status;
+- market prices, close-price change and trading status;
 - BUY/SELL availability and order-type availability;
 - manual order entry and order lifecycle monitoring;
 - order history and local persistence;
 - portfolio value, available cash, position quantity and portfolio weight;
 - position and P&L context for decision making;
-- portfolio analysis limited to currently held positions.
+- adaptive strategy analysis for different trading profiles;
+- portfolio-aware opportunity search;
+- controlled execution through an explicit user confirmation step.
 
-## v0.4 Decision Engine
+## v0.4 Decision Engine baseline
 
-Version 0.4 introduces a complete analysis-to-decision pipeline:
+Version 0.4 introduced the analysis-to-decision pipeline:
 
 ```text
 Market Data
@@ -38,8 +40,6 @@ Decision Engine
 BUY / WAIT / HOLD / ADD / REDUCE / SELL / PASS
 ```
 
-### Strategy analysis
-
 Edward evaluates multiple strategies and selects the best available candidate for the current trading profile:
 
 - Trend Following;
@@ -53,119 +53,142 @@ Trading profiles are adaptive to the intended trading horizon:
 - medium-term;
 - speculative.
 
-Each strategy is evaluated using historical testing and Walk Forward validation with Quality Gate diagnostics.
+The Risk Engine evaluates drawdown, volatility, risk level, portfolio weight, cash, portfolio fit and critical-risk conditions. The Opportunity Score combines strategy quality, entry quality, market-regime compatibility, risk, portfolio fit and confidence.
 
-### Risk Engine
+## v0.5 Forecast and trading-readiness layer
 
-The Risk Engine evaluates the strategy and portfolio context, including:
+Version 0.5 extended the decision pipeline with forward-looking price analysis and execution-readiness controls:
 
-- maximum drawdown;
-- volatility;
-- risk score and risk level;
-- current portfolio weight;
-- target and maximum position weight;
-- available cash;
-- portfolio fit;
-- critical-risk conditions.
+```text
+Strategy / Risk / Portfolio Context
+              ↓
+       Forecast Model Selection
+              ↓
+      Point-in-Time Forecast
+              ↓
+       Forecast Walk Forward
+              ↓
+       Forecast Quality Gate
+              ↓
+          Trade Plan
+              ↓
+       Position Sizing
+              ↓
+    Execution Readiness Gate
+```
 
-Risk is evaluated even when a strategy fails the Quality Gate, so the final decision remains explainable.
+The forecasting layer supports 1-, 5-, 20- and 60-trading-day horizons, adaptive model selection, point-in-time validation, anti-leakage checks and versioned forecast caching.
 
-### Opportunity Score
+Trade plans can contain entry range, target, stop, expected return, expected risk, Risk/Reward, holding horizon, confidence and recommended position size. Portfolio reductions and exits expose the recommended reduction quantity and expected remaining position.
 
-The Opportunity Score combines:
+Execution readiness combines strategy Quality Gate, forecast Quality Gate, risk conditions, portfolio availability, trading status, position sizing, entry/target/stop readiness, liquidity and Risk/Reward. The result is exposed as **Execution Ready: YES/NO**.
 
-- strategy quality;
-- entry quality;
-- market-regime compatibility;
-- risk;
-- portfolio fit;
-- analysis confidence.
+## v0.6 Controlled Execution
 
-The score is used to rank actionable opportunities rather than relying on Strategy Score alone.
+Version 0.6 turns execution from a UI placeholder into a controlled execution flow connected to the T-Invest Sandbox.
 
-### Decision Engine
+### Business flow
 
-Edward separates two decision scenarios:
+```text
+Analysis decision
+      ↓
+Execution Ready
+      ↓
+Передать в исполнение
+      ↓
+Ожидает подтверждения
+      ↓
+Live pre-trade revalidation
+      ↓
+Подтвердить и отправить
+      ↓
+T-Invest /orders/create
+      ↓
+Submitted
+```
 
-**Market opportunity search**
+### Execution Center
 
-Only instruments that are currently tradable and available for BUY are included. Existing portfolio positions are excluded from the new-entry universe.
+The Execution Center provides:
 
-Typical decisions:
+- a shared execution queue between opportunity analysis and execution UI;
+- selection of the active execution request;
+- readable Russian execution status and event text;
+- a simplified confirmation UX without exposing the internal validation pipeline;
+- explicit user confirmation immediately before broker submission;
+- asynchronous submission so network operations do not block Tkinter;
+- protection against duplicate active submissions;
+- safe handling of stale UI callbacks and queue-selection recursion;
+- execution event journal and submission status.
 
-- BUY;
-- WAIT;
-- PASS.
+The UI intentionally hides technical checks such as Trading Status, position revalidation and cash/max-lots validation. These checks remain mandatory in the execution service.
 
-**Portfolio analysis**
+### Live pre-trade validation
 
-Only currently held positions are analyzed.
+Immediately before submission Edward revalidates live broker/account conditions.
 
-Typical decisions:
+For BUY/ADD the validator checks account availability, live price, trading status, quantity, price step, cash and broker max-lots.
 
-- HOLD;
-- ADD;
-- REDUCE;
-- SELL.
+For REDUCE/SELL it checks account availability, live price, trading status, quantity, price step and the actual held position. Broker max-lots is not used for exits because the held position is the controlling quantity constraint.
 
-The Decision Engine also considers trading availability, portfolio limits, risk deterioration and strategy degradation.
+The validator accepts both normalized Edward fields and the T-Invest contract fields such as `*_available_flag`.
 
-## Opportunity search UI
+### T-Invest order contract
 
-The v0.4 UI provides:
+Version 0.6 includes compatibility fixes for the Sandbox order boundary, including:
 
-- selectable analysis scope: **Market Opportunities** / **My Portfolio**;
-- instrument-type filtering;
-- trading-profile selection;
-- decision filtering;
-- staged progress reporting with the current processing stage and instrument count;
-- incremental table population while the scan is running;
-- immediate display of analyzed instruments without waiting for the full scan;
-- Strategy Score, Risk Score, Opportunity Score, Decision and explanation columns;
-- localized Russian UI and decision explanations;
-- safe handling when the user changes pages while background analysis is running.
+- quotation serialization for Decimal prices;
+- UUID normalization for `request_id` / order id;
+- preservation of the execution identity while satisfying the broker UUID contract;
+- adapter handling for live trading-status flags.
 
-## Walk Forward cache
+A real Sandbox REDUCE execution has been verified end-to-end through `/orders/create` with a successful API response.
 
-Walk Forward optimization results are persisted and reused between repeated analyses.
+### Simplified confirmation UX
 
-The cache supports:
+The user sees a small number of business states instead of the internal execution pipeline:
 
-- reuse of valid strategy optimization results;
-- invalidation when analysis inputs/data change;
-- forced Walk Forward recalculation;
-- complete cache clearing;
-- cache usage in both mass opportunity search and individual instrument analysis.
+```text
+Решение готово
+    ↓
+Передать в исполнение
+    ↓
+Заявка подготовлена / Ожидает подтверждения
+    ↓
+Подтвердить и отправить
+    ↓
+Заявка отправлена
+```
 
-This avoids repeating expensive parameter searches when the analysis context has not changed.
+Before submission the system performs the technical live checks automatically.
 
-## Market data and T-Invest contract compatibility
+## Market data and T-Invest compatibility
 
-Edward uses the T-Invest market-data contracts for:
+Edward uses T-Invest contracts for historical candles, last prices, trading statuses and instrument availability. Historical daily data is normalized before entering the analysis pipeline, including protobuf-style timestamps and quotations.
 
-- historical candles;
-- last prices;
-- trading statuses;
-- instrument availability.
-
-Historical daily data is normalized before entering the analysis pipeline, including protobuf-style timestamps and quotations.
-
-Large market-data requests are processed in batches to avoid oversized API requests and to isolate failures between batches.
+Large market-data requests are processed in batches to avoid oversized API requests and isolate failures between batches.
 
 ## Testing
 
-The v0.4 release includes unit and E2E coverage for:
+The v0.6 development line includes regression coverage for:
 
 - Decision Engine scenarios and ranking;
 - Risk Engine;
 - Opportunity Engine;
-- portfolio and market opportunity search;
-- Walk Forward cache;
-- candle normalization;
-- instrument and market decision context;
-- UI progress and incremental result updates;
-- T-Invest adapter compatibility;
-- regression coverage for the v0.4 integration pipeline.
+- market and portfolio opportunity search;
+- Walk Forward and forecast caches;
+- forecast model selection and Walk Forward validation;
+- point-in-time and anti-leakage validation;
+- trade plan and position sizing;
+- execution-readiness gates;
+- execution queue and bridge behavior;
+- Execution Center controller and UI behavior;
+- asynchronous execution and UI-thread dispatch;
+- stale Tk callback protection;
+- live pre-trade validation;
+- T-Invest trading-status compatibility;
+- T-Invest order payload and UUID compatibility;
+- Sandbox execution regression scenarios.
 
 Run the full test suite with:
 
@@ -173,8 +196,17 @@ Run the full test suite with:
 python -m pytest -q
 ```
 
-## Version 0.4.0 status
+## Version 0.6.0 status
 
-Version 0.4.0 is the frozen release baseline for the adaptive analysis and Decision Engine layer.
+Version **0.6.0** is the frozen baseline for the controlled execution layer on top of the v0.5 analysis and execution-readiness architecture.
 
-The next development cycle can build on top of this baseline without changing the v0.4 architecture.
+Validated in the T-Invest Sandbox:
+
+- execution request creation;
+- user confirmation flow;
+- live pre-trade revalidation;
+- REDUCE order submission through `/orders/create`;
+- T-Invest UUID contract compliance;
+- successful Sandbox API acceptance of the submitted REDUCE order.
+
+The next validation step is a complete BUY/ADD Sandbox execution scenario, followed by order monitoring, fill/reconciliation verification and final release hardening.

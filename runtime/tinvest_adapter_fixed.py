@@ -219,7 +219,16 @@ def _sandbox_create_order(self, payload):
 
 def _list_instruments(self, kind="SHARE", trade=True):
     key = str(kind).upper()
-    method_map = {"SHARE": "Shares", "BOND": "Bonds", "ETF": "Etfs", "CURRENCY": "Currencies", "FUTURES": "Futures"}
+    method_map = {
+        "SHARE": "Shares",
+        "BOND": "Bonds",
+        "ETF": "Etfs",
+        "CURRENCY": "Currencies",
+        "FUTURES": "Futures",
+        "OPTION": "Options",
+        "SP": "StructuredNotes",
+        "DFA": "Dfas",
+    }
     method_name = method_map.get(key)
     if method_name is None:
         raise ValueError(f"Unsupported instrument kind: {kind}")

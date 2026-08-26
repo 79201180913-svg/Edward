@@ -37,29 +37,4 @@ class ExecutionOpportunityRegistry:
             return tuple(self._items.values())
 
 
-GLOBAL_EXECUTION_OPPORTUNITY_REGISTRY = ExecutionOpportunityRegistry()
-
-
-def install_live_scan_registry(service_class: type[Any]) -> None:
-    if getattr(service_class, "_execution_registry_v06_installed", False):
-        return
-    original_scan = service_class.scan
-
-    def wrapped_scan(self: Any, *args: Any, **kwargs: Any):
-        callback = kwargs.get("result_callback")
-
-        def register_and_forward(item: Any, current: int, total: int) -> None:
-            GLOBAL_EXECUTION_OPPORTUNITY_REGISTRY.add(item)
-            if callback is not None:
-                callback(item, current, total)
-
-        kwargs["result_callback"] = register_and_forward
-        results = original_scan(self, *args, **kwargs)
-        GLOBAL_EXECUTION_OPPORTUNITY_REGISTRY.replace(list(results))
-        return results
-
-    service_class.scan = wrapped_scan
-    service_class._execution_registry_v06_installed = True
-
-
-__all__ = ["ExecutionOpportunityRegistry", "GLOBAL_EXECUTION_OPPORTUNITY_REGISTRY", "install_live_scan_registry"]
+__all__ = ["ExecutionOpportunityRegistry"]
