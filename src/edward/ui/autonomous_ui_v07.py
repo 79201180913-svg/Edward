@@ -14,6 +14,7 @@ from edward.services.balance_service import BalanceService
 from edward.services.budget_planning_service import BudgetPlanningPolicy
 from edward.services.currency_service import CurrencyService
 from edward.services.opportunity_search_service import OpportunitySearchService
+from edward.ui.autonomous_portfolio_ui_v07 import open_autonomous_portfolio_window
 
 logger = logging.getLogger("edward.autonomous.ui")
 
@@ -72,6 +73,8 @@ def install_autonomous_ui(app_class: type) -> None:
         ttk.Entry(controls, textvariable=reserve_var, width=8).pack(side="left", padx=(6, 16))
         start_button = ttk.Button(controls, text="Анализировать рынок")
         start_button.pack(side="left", padx=(4, 8))
+        portfolio_button = ttk.Button(controls, text="Портфель")
+        portfolio_button.pack(side="left", padx=(0, 8))
         refresh_button = ttk.Button(controls, text="Обновить")
         refresh_button.pack(side="left")
 
@@ -94,6 +97,7 @@ def install_autonomous_ui(app_class: type) -> None:
         tree = self._tree(self.content, ("Область", "Тикер", "Решение", "Score", "Риск", "Цена", "Кол-во", "Стоимость", "Статус"), (90, 100, 100, 80, 75, 110, 80, 115, 250))
         activity = tk.Text(self.content, height=7, wrap="word", state="disabled")
         activity.pack(fill="x", pady=(12, 0))
+        latest_portfolio_opportunities: list[Any] = []
 
         def log_ui(message: str) -> None:
             def apply() -> None:
@@ -136,6 +140,8 @@ def install_autonomous_ui(app_class: type) -> None:
 
         def render_result(result: Any) -> None:
             def apply() -> None:
+                latest_portfolio_opportunities.clear()
+                latest_portfolio_opportunities.extend(result.portfolio_opportunities)
                 for item in tree.get_children():
                     tree.delete(item)
                 for opportunity in result.market_opportunities:
@@ -146,6 +152,17 @@ def install_autonomous_ui(app_class: type) -> None:
                 status_var.set(f"Завершено: рынок {len(result.market_opportunities)}, портфель {len(result.portfolio_opportunities)}")
                 log_ui(f"Цикл завершён: market={len(result.market_opportunities)} portfolio={len(result.portfolio_opportunities)}")
             self.after(0, apply)
+
+        def open_portfolio() -> None:
+            open_autonomous_portfolio_window(
+                self,
+                self.client,
+                aid,
+                display_currency=str(self.display_currency.get() or "RUB"),
+                opportunities=tuple(latest_portfolio_opportunities),
+            )
+
+        portfolio_button.configure(command=open_portfolio)
 
         def on_progress(stage: str, percent: float, current: int, total: int) -> None:
             logger.info("autonomous_progress stage=%s percent=%.1f current=%d total=%d", stage, percent, current, total)
@@ -196,6 +213,7 @@ def install_autonomous_ui(app_class: type) -> None:
                 return
             for item in tree.get_children():
                 tree.delete(item)
+            latest_portfolio_opportunities.clear()
             start_button.configure(state="disabled")
             status_var.set("Подготовка автономного цикла...")
             threading.Thread(target=run_cycle, daemon=True, name="edward-autonomous-cycle").start()
