@@ -21,8 +21,14 @@ def test_installs_autonomous_page_and_navigation_hook():
 
 
 def test_install_is_idempotent():
-    class AnotherFakeApp(FakeApp):
-        pass
+    class AnotherFakeApp:
+        _autonomous_ui_v07_installed = False
+
+        def _shell(self):
+            pass
+
+        def _close(self):
+            pass
 
     install_autonomous_ui(AnotherFakeApp)
     first_shell = AnotherFakeApp._shell
