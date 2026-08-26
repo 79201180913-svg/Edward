@@ -5,7 +5,7 @@ from tkinter import messagebox, ttk
 from typing import Any, Type
 
 from edward.services.execution_opportunity_registry_v06 import ExecutionOpportunityRegistry
-from edward.services.execution_queue_action_v06 import enqueue_button_text
+from edward.services.execution_queue_action_v06 import ExecutionQueueActionController, enqueue_button_text
 from edward.services.opportunity_search_service_live_v04 import LiveOpportunitySearchService
 
 
@@ -63,35 +63,59 @@ def install_execution_opportunity_action_ui(app_class: Type[Any]) -> None:
             ticker = str(values[0])
             return registry.get(ticker)
 
+        def queue_action() -> ExecutionQueueActionController | None:
+            return getattr(self, "_execution_queue_action_controller", None)
+
         def refresh_action(_event: Any = None) -> None:
             result = current_result()
-            text = enqueue_button_text(result)
-            action_button.configure(text=text, state="normal" if text == "Передать в исполнение" else "disabled")
+            action = queue_action()
+            if result is None:
+                text = "Исполнение недоступно"
+                button_state = "disabled"
+            elif action is not None:
+                text = action.status_text(result)
+                button_state = "normal" if text == "Готово к передаче в исполнение" else "disabled"
+            else:
+                text = enqueue_button_text(result)
+                button_state = "normal" if text == "Передать в исполнение" else "disabled"
+
+            if text == "Готово к передаче в исполнение":
+                button_text = "Передать в исполнение"
+            elif text == "Уже передано в исполнение":
+                button_text = "Уже передано в исполнение"
+            else:
+                button_text = "Исполнение недоступно"
+
+            action_button.configure(text=button_text, state=button_state)
             if result is None:
                 selected_var.set("Выберите готовый инструмент для передачи в исполнение.")
-            elif text == "Передать в исполнение":
+            elif button_text == "Передать в исполнение":
                 selected_var.set(f"{getattr(result, 'ticker', '—')} готов к передаче в исполнение")
+            elif button_text == "Уже передано в исполнение":
+                selected_var.set(f"{getattr(result, 'ticker', '—')}: заявка уже передана в исполнение")
             else:
                 selected_var.set(f"{getattr(result, 'ticker', '—')}: исполнение недоступно")
 
         def enqueue_selected() -> None:
             result = current_result()
-            if result is None:
+            action = queue_action()
+            if result is None or action is None:
                 return
-            action = getattr(self, "_execution_queue_action_controller", None)
-            if action is None:
-                messagebox.showwarning("Центр исполнения", "Сервис исполнения ещё не подключён.")
+            if action.is_already_queued(result):
+                refresh_action()
                 return
             try:
                 accepted = action.enqueue(result)
-                messagebox.showinfo("Центр исполнения", "Решение передано в очередь исполнения. Заявка не отправлена.")
-                center = getattr(self, "_execution_center_controller", None)
-                if center is not None and accepted.request is not None:
-                    bridge_item = getattr(self, "_execution_bridge", None).get(accepted.request.execution_id)
-                    if bridge_item is not None and hasattr(center, "load_queue_item"):
-                        center.load_queue_item(bridge_item)
-                if getattr(self, "current_page", "") != "opportunities":
-                    self.show_page("opportunities")
+                if not accepted.accepted:
+                    messagebox.showwarning("Центр исполнения", accepted.reason or "Решение не добавлено в очередь.")
+                else:
+                    messagebox.showinfo("Центр исполнения", "Решение передано в очередь исполнения. Заявка не отправлена.")
+                    center = getattr(self, "_execution_center_controller", None)
+                    if center is not None and accepted.request is not None:
+                        bridge_item = getattr(self, "_execution_bridge", None).get(accepted.request.execution_id)
+                        if bridge_item is not None and hasattr(center, "load_queue_item"):
+                            center.load_queue_item(bridge_item)
+                refresh_action()
             except Exception as exc:
                 messagebox.showerror("Центр исполнения", str(exc))
 
