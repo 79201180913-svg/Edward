@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import replace
 from typing import Callable, Optional, Protocol
 
@@ -13,6 +14,8 @@ from edward.domain.execution import (
     ExecutionResult,
     ExecutionStatus,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ExecutionAdapter(Protocol):
@@ -169,9 +172,11 @@ class ExecutionEngine:
             ExecutionStatus.SUBMITTING,
             "Отправка заявки",
         )
+        logger.info("[EXECUTION] ORDER CREATE execution_id=%s ticker=%s side=%s quantity=%s order_type=%s", request.execution_id, request.ticker, request.side, request.quantity, request.order_type)
         try:
             broker_order_id = self.adapter.submit(request)
         except Exception as exc:
+            logger.exception("[EXECUTION] ORDER CREATE FAILED execution_id=%s", request.execution_id)
             self._update_status(
                 request.execution_id,
                 ExecutionStatus.FAILED,
@@ -192,6 +197,7 @@ class ExecutionEngine:
                 error_message=str(exc),
             )
 
+        logger.info("[EXECUTION] ORDER CREATE SUCCESS execution_id=%s broker_order_id=%s", request.execution_id, broker_order_id)
         self._update_status(
             request.execution_id,
             ExecutionStatus.SUBMITTED,
