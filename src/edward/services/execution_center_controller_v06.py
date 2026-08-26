@@ -32,7 +32,9 @@ class ExecutionCenterController:
         return self.state
 
     def load_queue_item(self, item: ExecutionQueueItem) -> ExecutionCenterState:
-        """Load an already-queued execution without resetting its current status."""
+        """Load a queued execution without recursively reloading the current selection."""
+        if self.state.request is not None and self.state.request.execution_id == item.request.execution_id:
+            return self.state
         self.state = ExecutionCenterState(
             request=item.request,
             result=item.result,
