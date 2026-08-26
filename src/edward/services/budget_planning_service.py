@@ -41,6 +41,7 @@ class BudgetPlan:
     investable_cash: Decimal
     slots: int
     target_position_value: Decimal
+    currency: str = "RUB"
 
 
 class BudgetPlanningService:
@@ -76,6 +77,7 @@ class BudgetPlanningService:
             investable_cash=investable_cash,
             slots=policy.slots,
             target_position_value=target,
+            currency=str(financial.currency or "RUB").upper(),
         )
 
     @staticmethod
