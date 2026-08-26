@@ -46,6 +46,7 @@ from edward.ui.execution_center_ui_v06 import install_execution_center_ui
 from edward.ui.execution_opportunity_action_ui_v06 import install_execution_opportunity_action_ui
 from edward.services.execution_runtime_bootstrap_v06 import install_execution_runtime_bootstrap
 from edward.ui.tk_thread_safety_v06 import install_thread_safe_tk_after
+from edward.ui.tick_runtime_guard_v06 import install_tick_runtime_guard
 from edward.config.settings import Environment
 
 
@@ -105,6 +106,7 @@ install_execution_center_ui(EdwardApp)
 install_execution_opportunity_action_ui(EdwardApp)
 install_execution_runtime_bootstrap(EdwardApp)
 install_thread_safe_tk_after(EdwardApp)
+install_tick_runtime_guard(EdwardApp)
 
 
 if __name__ == "__main__":
