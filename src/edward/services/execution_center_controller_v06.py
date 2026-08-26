@@ -160,4 +160,23 @@ class ExecutionCenterController:
         callback = self.on_change
         if callback is None:
             return
-        self.dispatch(callback, self.state)
+
+        def safe_callback(state: ExecutionCenterState) -> None:
+            if self._closed or self.on_change is None:
+                return
+            try:
+                callback(state)
+            except Exception:
+                # The Tk widget may have been destroyed after dispatch/after(0)
+                # was scheduled. Detach the stale callback so later state
+                # publications do not reuse a dead widget.
+                if self.on_change is callback:
+                    self.on_change = None
+
+        try:
+            self.dispatch(safe_callback, self.state)
+        except Exception:
+            # A synchronous dispatcher may execute the callback immediately.
+            # Treat a failing callback as a stale UI callback and detach it.
+            if self.on_change is callback:
+                self.on_change = None
