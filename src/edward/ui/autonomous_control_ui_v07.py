@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import ttk
 from typing import Any, Callable
 
 from edward.domain.execution import ExecutionMode
@@ -43,11 +43,7 @@ class AutonomousControlPanel:
         self._notify()
 
     def _enabled_changed(self) -> None:
-        try:
-            self.state.set_enabled(bool(self.enabled_var.get()))
-        except ValueError as exc:
-            self.enabled_var.set(False)
-            messagebox.showwarning("Edward", str(exc))
+        self.state.set_enabled(bool(self.enabled_var.get()))
         self._refresh_controls()
         self._notify()
 
@@ -55,8 +51,10 @@ class AutonomousControlPanel:
         snapshot = self.state.snapshot()
         self.enabled_var.set(snapshot.enabled)
         if snapshot.mode is AutonomousRunMode.AUTONOMOUS:
+            self.enable_button.configure(state="normal")
             self.status_var.set("Автономный режим: исполнение " + ("ВКЛ" if snapshot.enabled else "ВЫКЛ"))
         else:
+            self.enable_button.configure(state="disabled")
             self.status_var.set("Режим анализа: заявки не отправляются")
 
     def _notify(self) -> None:
