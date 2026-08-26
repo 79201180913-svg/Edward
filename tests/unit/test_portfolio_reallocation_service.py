@@ -47,6 +47,23 @@ def test_free_slot_gets_best_buy_without_absolute_budget():
     assert buys[0].target_value == Decimal("10000")
 
 
+def test_new_allocations_never_exceed_live_investable_cash():
+    service = PortfolioReallocationService()
+    actions = service.plan(
+        budget=budget(slots=3, cash="12000", target="10000"),
+        market_opportunities=[
+            opportunity("AAA", "a", "BUY", 90, 10),
+            opportunity("BBB", "b", "BUY", 85, 10),
+            opportunity("CCC", "c", "BUY", 80, 10),
+        ],
+        portfolio_opportunities=[],
+    )
+
+    buys = [x for x in actions if x.action == "BUY"]
+    assert [x.target_value for x in buys] == [Decimal("10000"), Decimal("2000")]
+    assert sum((x.target_value for x in buys), Decimal("0")) == Decimal("12000")
+
+
 def test_full_portfolio_replaces_weaker_position_with_better_lower_risk():
     service = PortfolioReallocationService(ReallocationPolicy(replacement_score_delta=5.0))
     actions = service.plan(
