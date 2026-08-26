@@ -46,8 +46,9 @@ class PortfolioReallocationService:
     """Turn market and portfolio analysis into a slot-aware allocation plan.
 
     The service never invents an absolute budget. Position value comes from the
-    live BudgetPlan, while slot count comes from the same plan. It only produces
-    a read-only allocation plan; execution remains outside this service.
+    live BudgetPlan, while slot count comes from the same plan. It also never
+    allocates more new cash than BudgetPlan.investable_cash. Execution remains
+    outside this service.
     """
 
     def __init__(self, policy: ReallocationPolicy | None = None) -> None:
@@ -68,7 +69,7 @@ class PortfolioReallocationService:
         for item in portfolio:
             decision = _decision(item)
             if decision == SELL:
-                actions.append(self._action(item, SELL, budget.target_position_value, "Portfolio Decision требует полного выхода."))
+                actions.append(self._action(item, SELL, _target_value(item, budget.target_position_value), "Portfolio Decision требует полного выхода."))
             else:
                 held.append(item)
                 if decision in {HOLD, ADD, REDUCE}:
@@ -76,6 +77,8 @@ class PortfolioReallocationService:
 
         occupied_slots = len(held)
         free_slots = max(0, int(budget.slots) - occupied_slots)
+        remaining_cash = max(Decimal("0"), Decimal(str(budget.investable_cash)))
+        target_value = max(Decimal("0"), Decimal(str(budget.target_position_value)))
         eligible = sorted(
             (item for item in market if _decision(item) == BUY),
             key=lambda item: (_score(item), -_risk(item)),
@@ -89,11 +92,12 @@ class PortfolioReallocationService:
             uid = _uid(candidate)
             if not uid or uid in selected_uids:
                 continue
-            value = min(Decimal(str(budget.target_position_value)), Decimal(str(budget.investable_cash)))
+            value = min(target_value, remaining_cash)
             if value <= 0:
                 break
             actions.append(self._action(candidate, BUY, value, "Свободный слот портфеля и доступный cash."))
             selected_uids.add(uid)
+            remaining_cash -= value
             free_slots -= 1
 
         if free_slots == 0 and eligible:
@@ -122,8 +126,8 @@ class PortfolioReallocationService:
                     self._action(
                         candidate,
                         REPLACE,
-                        budget.target_position_value,
-                        f"Замена { _ticker(source) }: score { _score(candidate):.2f} против {_score(source):.2f}, риск {_risk(candidate):.2f} против {_risk(source):.2f}.",
+                        target_value,
+                        f"Замена {_ticker(source)}: score {_score(candidate):.2f} против {_score(source):.2f}, риск {_risk(candidate):.2f} против {_risk(source):.2f}.",
                         source_ticker=_ticker(source),
                         source_uid=source_uid,
                     )
