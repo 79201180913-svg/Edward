@@ -2,7 +2,8 @@ from decimal import Decimal
 
 import pytest
 
-from edward.domain.execution import ExecutionDecision, ExecutionRequest, ExecutionStatus
+from edward.domain.execution import ExecutionDecision, ExecutionRequest, ExecutionResult, ExecutionStatus
+from edward.services.execution_bridge_service_v06 import ExecutionQueueItem
 from edward.services.execution_center_controller_v06 import ExecutionCenterController
 from edward.services.execution_confirmation_service import ControlledExecutionService
 from edward.services.execution_engine import ExecutionEngine
@@ -69,7 +70,6 @@ def test_controller_runs_confirmed_flow():
 def test_controller_does_not_accept_two_active_requests():
     controller = ExecutionCenterController(service())
     controller.load_request(request())
-    second = request()
     second = ExecutionRequest(
         execution_id="ex-center-2",
         account_id="acc-1",
@@ -84,3 +84,19 @@ def test_controller_does_not_accept_two_active_requests():
     )
     with pytest.raises(ValueError, match="another execution is already active"):
         controller.load_request(second)
+
+
+def test_controller_restores_queued_item_without_resetting_status():
+    controller = ExecutionCenterController(service())
+    queued_request = request()
+    queued_result = ExecutionResult(
+        execution_id=queued_request.execution_id,
+        status=ExecutionStatus.CREATED,
+    )
+
+    state = controller.load_queue_item(ExecutionQueueItem(request=queued_request, result=queued_result))
+
+    assert state.request == queued_request
+    assert state.result == queued_result
+    assert state.status is ExecutionStatus.CREATED
+    assert controller.state.request == queued_request
