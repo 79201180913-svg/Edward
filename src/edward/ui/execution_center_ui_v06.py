@@ -139,6 +139,9 @@ def _open_execution_center(self: Any) -> None:
         if not selection: return
         execution_id = selection[0]; bridge = getattr(self, "_execution_bridge", None); controller = current_controller()
         if bridge is None or controller is None: return
+        current_request = getattr(controller.state, "request", None)
+        if current_request is not None and current_request.execution_id == execution_id:
+            return
         try:
             item = bridge.get(execution_id)
             if item is None: return
