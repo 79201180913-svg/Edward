@@ -10,6 +10,8 @@ from typing import Any
 
 from edward.services.autonomous_cycle_service import AutonomousCycleService
 from edward.services.autonomous_planning_service import AutonomousPlanningService
+from edward.services.autonomous_runtime_service import AutonomousRuntimeConfig, AutonomousRuntimeService
+from edward.services.autonomous_trading_runtime_facade import AutonomousTradingRuntimeFacade
 from edward.services.balance_service import BalanceService
 from edward.services.budget_planning_service import BudgetPlanningPolicy
 from edward.services.currency_service import CurrencyService
@@ -40,13 +42,7 @@ def _install_file_logging() -> Path:
 
 
 def _display_opportunity_quantity(opportunity: Any) -> int:
-    """Return order quantity for the autonomous opportunities grid.
-
-    Current position quantity is not an order quantity. In particular, a short
-    position can legitimately have a negative current quantity. For PASS/HOLD
-    and other non-actionable decisions the grid must therefore show zero rather
-    than accidentally presenting the current position quantity as an order.
-    """
+    """Return order quantity for the autonomous opportunities grid."""
     decision = str(getattr(opportunity, "decision", "") or "").upper()
     if decision not in {"BUY", "ADD", "REDUCE", "SELL"}:
         return 0
@@ -57,7 +53,7 @@ def _display_opportunity_quantity(opportunity: Any) -> int:
 
 
 def install_autonomous_ui(app_class: type) -> None:
-    """Add the v0.7 autonomous cycle and its explicit execution control to the existing GUI."""
+    """Add the v0.7 autonomous cycle and explicit execution lifecycle to the GUI."""
     if getattr(app_class, "_autonomous_ui_v07_installed", False):
         return
     app_class._autonomous_ui_v07_installed = True
@@ -117,11 +113,12 @@ def install_autonomous_ui(app_class: type) -> None:
         tree = self._tree(self.content, ("Область", "Тикер", "Решение", "Score", "Риск", "Цена", "Кол-во", "Стоимость", "Статус"), (90, 100, 100, 80, 75, 110, 80, 115, 250))
         ttk.Label(self.content, text="План перераспределения", style="CardTitle.TLabel").pack(anchor="w", pady=(10, 6))
         allocation_tree = self._tree(self.content, ("Действие", "Тикер", "Что заменяем", "Score", "Риск", "Целевая стоимость", "Причина"), (100, 100, 110, 80, 80, 130, 520))
-        ttk.Label(self.content, text="Порядок исполнения (без отправки заявок)", style="CardTitle.TLabel").pack(anchor="w", pady=(10, 6))
+        ttk.Label(self.content, text="Порядок исполнения", style="CardTitle.TLabel").pack(anchor="w", pady=(10, 6))
         execution_tree = self._tree(self.content, ("№", "Действие", "Тикер", "UID", "Целевая стоимость", "Зависит от", "Статус", "Причина"), (45, 90, 100, 220, 130, 90, 120, 420))
-        activity = tk.Text(self.content, height=6, wrap="word", state="disabled")
+        activity = tk.Text(self.content, height=7, wrap="word", state="disabled")
         activity.pack(fill="x", pady=(10, 0))
         latest_portfolio_opportunities: list[Any] = []
+        runtime_holder: dict[str, Any] = {"service": None, "facade": None, "last_status": None}
 
         def log_ui(message: str) -> None:
             def apply() -> None:
@@ -169,7 +166,7 @@ def install_autonomous_ui(app_class: type) -> None:
             if plan is None:
                 return
             for step in plan.steps:
-                execution_tree.insert("", "end", values=(step.sequence, step.action, step.ticker, step.instrument_uid, f"{step.target_value:.2f}", "—" if step.depends_on is None else step.depends_on, "Только план", step.reason))
+                execution_tree.insert("", "end", values=(step.sequence, step.action, step.ticker, step.instrument_uid, f"{step.target_value:.2f}", "—" if step.depends_on is None else step.depends_on, "План", step.reason))
 
         def render_incremental(opportunity: Any, scope: str, current: int, total: int) -> None:
             def apply() -> None:
@@ -191,7 +188,7 @@ def install_autonomous_ui(app_class: type) -> None:
                 render_allocation(result.allocation_actions)
                 render_execution_plan(result.execution_plan)
                 status_var.set(f"Завершено: рынок {len(result.market_opportunities)}, портфель {len(result.portfolio_opportunities)}, действий {len(result.allocation_actions)}, шагов {len(result.execution_plan.steps) if result.execution_plan else 0}")
-                log_ui(f"Цикл завершён: market={len(result.market_opportunities)} portfolio={len(result.portfolio_opportunities)} allocation={len(result.allocation_actions)} execution_steps={len(result.execution_plan.steps) if result.execution_plan else 0}")
+                log_ui(f"Цикл анализа завершён: market={len(result.market_opportunities)} portfolio={len(result.portfolio_opportunities)} allocation={len(result.allocation_actions)} execution_steps={len(result.execution_plan.steps) if result.execution_plan else 0}")
             self.after(0, apply)
 
         def open_portfolio() -> None:
@@ -204,13 +201,13 @@ def install_autonomous_ui(app_class: type) -> None:
             self.after(0, lambda: status_var.set(status))
             log_ui(status)
 
-        def run_cycle() -> None:
+        def run_analysis_cycle() -> None:
             try:
                 slots = int(slots_var.get())
                 reserve_pct = Decimal(str(reserve_var.get()).replace(",", "."))
                 policy = BudgetPlanningPolicy(slots=slots, reserve_pct=reserve_pct)
-                logger.info("autonomous_cycle_started account_id=%s profile=%s slots=%d reserve_pct=%s mode=%s enabled=%s", aid, profile_var.get(), slots, reserve_pct, control.mode().value, control.state.snapshot().enabled)
-                log_ui(f"Запуск автономного цикла: режим={control.mode().value}, исполнение={'ВКЛ' if control.state.snapshot().enabled else 'ВЫКЛ'}")
+                logger.info("autonomous_analysis_started account_id=%s profile=%s slots=%d reserve_pct=%s", aid, profile_var.get(), slots, reserve_pct)
+                log_ui(f"Однократный анализ: профиль={profile_var.get()}, слоты={slots}, резерв={reserve_pct}%")
                 service = AutonomousCycleService(AutonomousPlanningService(BalanceService(self.client)), OpportunitySearchService(self.client))
                 active_scope = {"value": "Рынок"}
 
@@ -226,18 +223,62 @@ def install_autonomous_ui(app_class: type) -> None:
                     log_ui("План капитала рассчитан по текущему счёту")
 
                 result = service.run(account_id=aid, policy=policy, profile=profile_var.get(), instrument_kind="SHARE", progress_callback=on_progress, result_callback=result_callback, scope_callback=scope_callback, planning_callback=planning_callback)
-                logger.info("autonomous_cycle_completed account_id=%s profile=%s market=%d portfolio=%d allocation=%d execution_steps=%d mode=%s enabled=%s", aid, profile_var.get(), len(result.market_opportunities), len(result.portfolio_opportunities), len(result.allocation_actions), len(result.execution_plan.steps) if result.execution_plan else 0, control.mode().value, control.state.snapshot().enabled)
+                logger.info("autonomous_analysis_completed account_id=%s profile=%s market=%d portfolio=%d allocation=%d execution_steps=%d", aid, profile_var.get(), len(result.market_opportunities), len(result.portfolio_opportunities), len(result.allocation_actions), len(result.execution_plan.steps) if result.execution_plan else 0)
                 render_result(result)
             except Exception as exc:
-                logger.exception("autonomous_cycle_failed account_id=%s", aid)
+                logger.exception("autonomous_analysis_failed account_id=%s", aid)
                 self.after(0, lambda: status_var.set(f"Ошибка: {type(exc).__name__}: {exc}"))
                 log_ui(f"ОШИБКА: {type(exc).__name__}: {exc}")
-                self.after(0, lambda: messagebox.showerror("Автономная торговля", str(exc)))
+                self.after(0, lambda: messagebox.showerror("Анализ рынка", str(exc)))
             finally:
                 self.after(0, lambda: start_button.configure(state="normal"))
 
-        def start() -> None:
+        def run_autonomous_once() -> None:
+            slots = int(slots_var.get())
+            reserve_pct = Decimal(str(reserve_var.get()).replace(",", "."))
+            policy = BudgetPlanningPolicy(slots=slots, reserve_pct=reserve_pct)
+            facade = runtime_holder.get("facade")
+            if facade is None:
+                facade = AutonomousTradingRuntimeFacade(
+                    self.client,
+                    account_id=aid,
+                    policy=policy,
+                    profile=profile_var.get(),
+                    instrument_kind="SHARE",
+                )
+                runtime_holder["facade"] = facade
+            log_ui("Автономный цикл: анализ → план → исполнение → проверка → защита → replan")
+            result = facade.run_cycle(max_iterations=50)
+            control_result = result.control
+            log_ui(f"Автономный цикл завершён: executed={control_result.executed} reason={control_result.reason}")
+            self.after(0, lambda: status_var.set(f"Автономный цикл: {control_result.reason}"))
+            if control_result.replanning is not None:
+                cycle = control_result.replanning
+                log_ui(f"Replan: итераций={cycle.iterations}, выполнено шагов={len(cycle.executed_steps)}")
+            if not control_result.executed and control_result.reason not in {"COMPLETED", "STOPPED"}:
+                raise RuntimeError(control_result.reason)
+
+        def _sync_runtime_status() -> None:
+            service = runtime_holder.get("service")
+            if service is not None:
+                snapshot = service.state.snapshot()
+                status = snapshot.status
+                message = snapshot.message
+                if message:
+                    control.status_var.set(f"● {status}: {message}")
+                    status_var.set(message)
+                else:
+                    control.status_var.set(f"● {status}")
+                if runtime_holder.get("last_status") != (status, message):
+                    runtime_holder["last_status"] = (status, message)
+                    logger.info("autonomous_runtime_status status=%s message=%s", status, message)
+            if self.winfo_exists():
+                self.after(500, _sync_runtime_status)
+
+        def start_analysis() -> None:
             if not aid:
+                return
+            if control.mode().value == "autonomous" and control.state.snapshot().enabled:
                 return
             try:
                 int(slots_var.get())
@@ -250,12 +291,73 @@ def install_autonomous_ui(app_class: type) -> None:
             for item in execution_tree.get_children(): execution_tree.delete(item)
             latest_portfolio_opportunities.clear()
             start_button.configure(state="disabled")
-            status_var.set("Подготовка автономного цикла...")
-            threading.Thread(target=run_cycle, daemon=True, name="edward-autonomous-cycle").start()
+            status_var.set("Подготовка анализа...")
+            threading.Thread(target=run_analysis_cycle, daemon=True, name="edward-autonomous-analysis").start()
 
-        start_button.configure(command=start)
+        def start_autonomous() -> None:
+            if control.mode().value != "autonomous":
+                messagebox.showwarning("Автономная торговля", "Сначала выберите режим «Автономная торговля».")
+                return
+            try:
+                slots = int(slots_var.get())
+                reserve_pct = Decimal(str(reserve_var.get()).replace(",", "."))
+                policy = BudgetPlanningPolicy(slots=slots, reserve_pct=reserve_pct)
+                interval_seconds = control.interval_minutes() * 60
+            except Exception:
+                messagebox.showwarning("Edward", "Проверьте количество слотов и резерв.")
+                return
+            if runtime_holder.get("service") is not None:
+                runtime_holder["service"].stop()
+            facade = AutonomousTradingRuntimeFacade(
+                self.client,
+                account_id=aid,
+                policy=policy,
+                profile=profile_var.get(),
+                instrument_kind="SHARE",
+            )
+            runtime = AutonomousRuntimeService(
+                run_cycle=run_autonomous_once,
+                state_service=control.state,
+                config=AutonomousRuntimeConfig(interval_seconds=interval_seconds),
+            )
+            runtime_holder["facade"] = facade
+            runtime_holder["service"] = runtime
+            start_button.configure(state="disabled")
+            status_var.set("Запуск автономной торговли...")
+            log_ui(f"Автономная торговля ВКЛ: интервал={control.interval_minutes()} мин")
+            runtime.start()
+
+        def pause_autonomous() -> None:
+            runtime = runtime_holder.get("service")
+            if runtime is not None:
+                runtime.pause()
+            status_var.set("Автономная торговля на паузе")
+            log_ui("Автономная торговля: ПАУЗА")
+
+        def stop_autonomous() -> None:
+            runtime = runtime_holder.get("service")
+            if runtime is not None:
+                runtime.stop()
+            runtime_holder["service"] = None
+            runtime_holder["facade"] = None
+            start_button.configure(state="normal")
+            status_var.set("Автономная торговля остановлена")
+            log_ui("Автономная торговля: СТОП")
+
+        def on_control_state(state: Any) -> None:
+            if str(getattr(state, "mode", "")) == "analysis" and runtime_holder.get("service") is not None:
+                runtime_holder["service"].stop()
+                runtime_holder["service"] = None
+                runtime_holder["facade"] = None
+
+        control.on_start = start_autonomous
+        control.on_pause = pause_autonomous
+        control.on_stop = stop_autonomous
+        control.on_state = on_control_state
+        start_button.configure(command=start_analysis)
         refresh_button.configure(command=lambda: self.show_page("autonomous"))
         log_ui(f"Лог автономного режима: {log_path}")
+        self.after(500, _sync_runtime_status)
 
     def _close(self: Any) -> None:
         original_close(self)
