@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal
 from typing import Any, Callable
 
 from edward.domain.execution import ExecutionMode
 from edward.services.account_state_refresh_service import AccountState, AccountStateRefreshService
-from edward.services.autonomous_cycle_service import AutonomousCycleService
 from edward.services.autonomous_execution_plan_service import AutonomousExecutionPlan
 from edward.services.autonomous_planning_service import AutonomousPlanningService
 from edward.services.autonomous_trading_controller import AutonomousTradingControlResult, AutonomousTradingController
@@ -23,7 +21,7 @@ class AutonomousLiveExecutionResult:
 
 
 class AutonomousLiveExecutionService:
-    """Connect the existing analysis/planning services to the controlled live cycle.
+    """Connect existing analysis/planning services to the controlled live cycle.
 
     No market-data implementation lives here. OpportunitySearchService remains
     the source of analysis results; planning/reallocation remain the source of
@@ -39,7 +37,6 @@ class AutonomousLiveExecutionService:
         reallocation: PortfolioReallocationService,
         execution_controller: AutonomousTradingController,
         execution_plan_builder: Any,
-        client: Any,
     ) -> None:
         self._state = account_state
         self._planning = planning
@@ -47,7 +44,6 @@ class AutonomousLiveExecutionService:
         self._reallocation = reallocation
         self._controller = execution_controller
         self._execution_plan_builder = execution_plan_builder
-        self._client = client
 
     def run(
         self,
@@ -61,7 +57,7 @@ class AutonomousLiveExecutionService:
         progress_callback: Callable[[str, float, int, int], None] | None = None,
     ) -> AutonomousLiveExecutionResult:
         plan_count = 0
-        scanned = 0
+        counters = {"scanned": 0}
         budget_cache: dict[int, BudgetPlan] = {}
         result_cache: dict[str, OpportunitySearchResult] = {}
 
@@ -69,7 +65,7 @@ class AutonomousLiveExecutionService:
             return self._state.refresh(account_id)
 
         def build_plan(state: AccountState) -> AutonomousExecutionPlan:
-            nonlocal plan_count, scanned
+            nonlocal plan_count
             planning = self._planning.plan(account_id, policy)
             budget_cache[id(state)] = planning.budget
 
@@ -87,7 +83,7 @@ class AutonomousLiveExecutionService:
                 progress_callback=progress_callback,
                 force_recompute=True,
             )
-            scanned += len(market) + len(portfolio)
+            counters["scanned"] += len(market) + len(portfolio)
             for item in (*market, *portfolio):
                 result_cache[item.instrument_uid] = item
 
@@ -96,9 +92,8 @@ class AutonomousLiveExecutionService:
                 market_opportunities=market,
                 portfolio_opportunities=portfolio,
             )
-            plan = self._execution_plan_builder.build(allocation)
             plan_count += 1
-            return plan
+            return self._execution_plan_builder.build(allocation)
 
         def budget_for_state(state: AccountState) -> BudgetPlan:
             cached = budget_cache.get(id(state))
@@ -120,7 +115,7 @@ class AutonomousLiveExecutionService:
                 progress_callback=progress_callback,
                 force_recompute=True,
             )
-            scanned += len(results)
+            counters["scanned"] += len(results)
             for item in results:
                 result_cache[item.instrument_uid] = item
             for item in results:
@@ -139,7 +134,7 @@ class AutonomousLiveExecutionService:
         return AutonomousLiveExecutionResult(
             control=control,
             plans_built=plan_count,
-            opportunities_scanned=scanned,
+            opportunities_scanned=counters["scanned"],
         )
 
 
