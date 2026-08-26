@@ -58,3 +58,4 @@ def test_stale_ui_callback_is_detached_after_callback_failure():
     result = controller.prepare()
     assert result.status.value == "READY"
     assert controller.state.status.value == "READY"
+    controller.close()
