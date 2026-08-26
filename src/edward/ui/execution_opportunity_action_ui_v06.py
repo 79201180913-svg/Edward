@@ -6,6 +6,27 @@ from typing import Any, Type
 
 from edward.services.execution_opportunity_registry_v06 import ExecutionOpportunityRegistry
 from edward.services.execution_queue_action_v06 import enqueue_button_text
+from edward.services.opportunity_search_service_live_v04 import LiveOpportunitySearchService
+
+
+def _install_registry_scan_hook(registry: ExecutionOpportunityRegistry) -> None:
+    """Keep execution registry synchronized with the latest Opportunities scan."""
+    LiveOpportunitySearchService._execution_registry_v06 = registry
+    if getattr(LiveOpportunitySearchService, "_execution_registry_hook_v06", False):
+        return
+
+    original_scan = LiveOpportunitySearchService.scan
+
+    def scan_with_registry(service: Any, *args: Any, **kwargs: Any):
+        results = original_scan(service, *args, **kwargs)
+        target = getattr(LiveOpportunitySearchService, "_execution_registry_v06", None)
+        if target is not None:
+            target.replace(results)
+        return results
+
+    LiveOpportunitySearchService.scan = scan_with_registry
+    LiveOpportunitySearchService._execution_registry_hook_v06 = True
+    LiveOpportunitySearchService._execution_registry_original_scan_v06 = original_scan
 
 
 def install_execution_opportunity_action_ui(app_class: Type[Any]) -> None:
@@ -19,6 +40,7 @@ def install_execution_opportunity_action_ui(app_class: Type[Any]) -> None:
         if registry is None:
             registry = ExecutionOpportunityRegistry()
             self._execution_opportunity_registry = registry
+        _install_registry_scan_hook(registry)
 
         tree = _find_tree(self.content)
         if tree is None or getattr(tree, "_execution_action_installed", False):
@@ -78,9 +100,7 @@ def install_execution_opportunity_action_ui(app_class: Type[Any]) -> None:
         tree._execution_action_installed = True
         refresh_action()
 
-        # Registry receives the current result list through the page's live service results when available.
-        original_registry = registry
-        self._execution_opportunity_registry = original_registry
+        self._execution_opportunity_registry = registry
 
     app_class._page_opportunities = wrapped_page
     app_class._execution_opportunity_action_ui_v06_installed = True
@@ -96,4 +116,4 @@ def _find_tree(widget: Any) -> Any | None:
     return None
 
 
-__all__ = ["install_execution_opportunity_action_ui"]
+__all__ = ["install_execution_opportunity_action_ui", "_install_registry_scan_hook"]
