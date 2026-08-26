@@ -24,6 +24,15 @@ class FakeConfirmation:
             error_message=None,
         )
 
+    def autonomous_submit(self, request):
+        self.submitted.append(request.execution_id)
+        return SimpleNamespace(
+            execution_id=request.execution_id,
+            status=self.submitted_status,
+            filled_quantity=request.quantity,
+            error_message=None,
+        )
+
 
 class FakeBridge:
     def __init__(self, confirmation):
@@ -48,6 +57,16 @@ class FakeRefresh:
         return self.states.pop(0)
 
 
+class FakeProtection:
+    def __init__(self, protected=True):
+        self.protected = protected
+        self.calls = []
+
+    def protect_fill(self, **kwargs):
+        self.calls.append(kwargs)
+        return SimpleNamespace(protected=self.protected, status="PROTECTED" if self.protected else "STOPPED", stop_order_id="stop-1" if self.protected else None, reason="" if self.protected else "PROTECTION_FAILED")
+
+
 def state(uid="old", quantity=10):
     return AccountState(portfolio=None, positions=[SimpleNamespace(instrument_uid=uid, quantity=quantity)], balance=None, orders=None)
 
@@ -57,7 +76,7 @@ def step(sequence, action, uid, ticker, depends_on=None):
 
 
 def result(step):
-    return SimpleNamespace(decision=step.action, execution_ready=True, instrument_uid=step.instrument_uid, ticker=step.ticker, recommended_quantity=10, price=100)
+    return SimpleNamespace(decision=step.action, execution_ready=True, instrument_uid=step.instrument_uid, ticker=step.ticker, recommended_quantity=10, price=100, trade_plan=SimpleNamespace(stop_price=Decimal("95")))
 
 
 def test_replace_sequence_stops_before_buy_when_sell_not_verified():
@@ -119,3 +138,24 @@ def test_dependency_failure_is_reported_as_stopped_phase():
     assert outcome.completed is False
     assert outcome.phase is AutonomousExecutionPhase.STOPPED
     assert outcome.steps[0].reason == "DEPENDENCY_NOT_COMPLETED:99"
+
+
+def test_buy_fill_is_protected_inside_autonomous_execution_sequence():
+    confirmation = FakeConfirmation()
+    protection = FakeProtection()
+    service = AutonomousExecutionSequenceService(
+        FakeBridge(confirmation),
+        FakeRefresh(state("new", 0), state("new", 10)),
+        protection_service=protection,
+    )
+    plan = AutonomousExecutionPlan(steps=(step(1, "BUY", "new", "NEW"),))
+
+    outcome = service.execute_confirmed_plan(
+        account_id="ACC", plan=plan, result_factory=result,
+    )
+
+    assert outcome.completed is True
+    assert outcome.steps[0].protection.protected is True
+    assert outcome.steps[0].protection.status == "PROTECTED"
+    assert outcome.events[-2].phase is AutonomousExecutionPhase.PROTECTED
+    assert protection.calls[0]["quantity"] == 10
