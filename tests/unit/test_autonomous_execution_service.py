@@ -98,3 +98,24 @@ def test_prepare_rejects_without_calling_bridge():
             result=result(execution_ready=False),
         )
     assert bridge.calls == []
+
+
+def test_prepare_step_from_fresh_result_refreshes_before_intake():
+    bridge = FakeBridge()
+    service = AutonomousExecutionService(bridge)
+    refreshed = result(price=101.5, recommended_quantity=9)
+    calls = []
+
+    def factory(planned_step):
+        calls.append(planned_step)
+        return refreshed
+
+    returned = service.prepare_step_from_fresh_result(
+        account_id="ACC",
+        step=step(),
+        result_factory=factory,
+    )
+
+    assert returned == "accepted"
+    assert calls == [step()]
+    assert bridge.calls == [("ACC", refreshed)]
