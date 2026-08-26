@@ -13,6 +13,7 @@ class FakeClient:
         self.positions = {"securities": [{"instrument_uid": "uid-1", "balance": "100"}]}
         self.portfolio = {"available_cash": {"units": "10000", "nano": 0}}
         self.max_lots = {"max_lots": 100}
+        self.max_lots_calls = 0
 
     def get_accounts(self): return {"accounts": self.accounts}
     def get_instrument(self, instrument_uid): return self.instrument
@@ -20,7 +21,9 @@ class FakeClient:
     def get_trading_status(self, instrument_id): return self.status
     def get_positions(self, account_id): return self.positions
     def get_portfolio(self, account_id): return self.portfolio
-    def get_max_lots(self, account_id, instrument_id, price): return self.max_lots
+    def get_max_lots(self, account_id, instrument_id, price):
+        self.max_lots_calls += 1
+        return self.max_lots
 
 
 def request(decision=ExecutionDecision.BUY, quantity=10, order_type="MARKET", entry_price=None):
@@ -90,3 +93,11 @@ def test_blocks_when_max_lots_are_insufficient():
     passed, reasons = LivePreTradeValidator(client).validate(request(quantity=10))
     assert passed is False
     assert "INSUFFICIENT_MAX_LOTS" in reasons
+
+
+def test_exit_does_not_call_max_lots_endpoint():
+    client = FakeClient()
+    passed, reasons = LivePreTradeValidator(client).validate(request(decision=ExecutionDecision.REDUCE, quantity=10))
+    assert passed is True
+    assert reasons == ()
+    assert client.max_lots_calls == 0
