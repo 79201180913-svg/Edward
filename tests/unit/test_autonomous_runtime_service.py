@@ -79,6 +79,34 @@ def test_cycle_error_stops_autonomous_runtime():
     runtime.stop()
 
 
+def test_long_cycle_exposes_elapsed_progress():
+    state = AutonomousRunStateService()
+    state.set_mode(AutonomousRunMode.AUTONOMOUS)
+    release = False
+
+    def long_cycle():
+        nonlocal release
+        while not release:
+            time.sleep(0.02)
+
+    runtime = AutonomousRuntimeService(
+        long_cycle,
+        state_service=state,
+        config=AutonomousRuntimeConfig(interval_seconds=60),
+    )
+
+    runtime.start()
+    _wait_for(lambda: state.snapshot().status == "EXECUTING")
+    time.sleep(1.1)
+    snapshot = state.snapshot()
+    release = True
+    runtime.stop()
+
+    assert snapshot.status == "EXECUTING"
+    assert "прошло" in snapshot.message
+    assert "сек." in snapshot.message
+
+
 def test_interval_must_be_positive():
     with pytest.raises(ValueError, match="AUTONOMOUS_INTERVAL_MUST_BE_POSITIVE"):
         AutonomousRuntimeConfig(interval_seconds=0)
