@@ -4,11 +4,16 @@ from dataclasses import dataclass
 from threading import Event, Lock, Thread
 from time import monotonic
 from typing import Callable
+import traceback
 
 from edward.services.autonomous_run_state_service import (
     AutonomousRunMode,
     AutonomousRunStateService,
 )
+
+
+def _console(message: str) -> None:
+    print(message, flush=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,10 +51,12 @@ class AutonomousRuntimeService:
             if self._thread is not None and self._thread.is_alive():
                 self._state.set_enabled(True)
                 self._state.update(status="STARTING", message="Возобновление автономного цикла")
+                _console("[AUTONOMOUS][RUNTIME] resume requested")
                 return
             self._stop.clear()
             self._state.set_enabled(True)
             self._state.update(status="STARTING", message="Запуск автономного цикла")
+            _console(f"[AUTONOMOUS][RUNTIME] starting; interval={self._config.interval_seconds:.1f}s")
             self._thread = Thread(target=self._worker, name="edward-autonomous-runtime", daemon=True)
             self._thread.start()
 
@@ -57,12 +64,14 @@ class AutonomousRuntimeService:
         with self._lock:
             self._state.set_enabled(False)
             self._state.update(status="PAUSED", message="Автономная торговля на паузе")
+            _console("[AUTONOMOUS][RUNTIME] paused")
 
     def stop(self) -> None:
         with self._lock:
             self._stop.set()
             self._state.set_enabled(False)
             self._state.update(status="STOPPED", message="Автономная торговля остановлена")
+            _console("[AUTONOMOUS][RUNTIME] stop requested")
         thread = self._thread
         if thread is not None and thread is not __import__("threading").current_thread():
             thread.join(timeout=2.0)
@@ -74,12 +83,11 @@ class AutonomousRuntimeService:
         started = monotonic()
 
         def heartbeat() -> None:
-            while not cycle_stop.wait(1.0):
+            while not cycle_stop.wait(5.0):
                 elapsed = monotonic() - started
-                self._state.update(
-                    status="EXECUTING",
-                    message=f"Выполняется автономный цикл · прошло {elapsed:.0f} сек.",
-                )
+                message = f"Выполняется автономный цикл · прошло {elapsed:.0f} сек."
+                self._state.update(status="EXECUTING", message=message)
+                _console(f"[AUTONOMOUS][HEARTBEAT] {message}")
 
         thread = Thread(target=heartbeat, name="edward-autonomous-heartbeat", daemon=True)
         thread.start()
@@ -98,21 +106,27 @@ class AutonomousRuntimeService:
 
             started = monotonic()
             self._state.update(status="EXECUTING", message="Выполняется автономный цикл · прошло 0 сек.")
+            _console("[AUTONOMOUS][RUNTIME] cycle started")
             try:
                 self._run_cycle_with_heartbeat()
             except Exception as exc:
                 self._state.set_enabled(False)
                 self._state.update(status="ERROR", message=f"{type(exc).__name__}: {exc}")
+                _console(f"[AUTONOMOUS][RUNTIME] cycle failed: {type(exc).__name__}: {exc}")
+                traceback.print_exc()
                 return
 
             if self._stop.is_set():
+                _console("[AUTONOMOUS][RUNTIME] cycle interrupted by stop")
                 return
             if not self._state.snapshot().enabled:
+                _console("[AUTONOMOUS][RUNTIME] cycle ended while runtime disabled")
                 continue
 
             elapsed = monotonic() - started
             remaining = max(0.0, self._config.interval_seconds - elapsed)
             self._state.update(status="WAITING", message=f"Следующий анализ через {remaining:.0f} сек.")
+            _console(f"[AUTONOMOUS][RUNTIME] cycle completed; elapsed={elapsed:.1f}s; next_cycle_in={remaining:.1f}s")
             if self._stop.wait(remaining):
                 return
 
