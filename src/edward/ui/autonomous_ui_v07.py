@@ -250,13 +250,31 @@ def install_autonomous_ui(app_class: type) -> None:
             log_ui("Автономный цикл: анализ → план → исполнение → проверка → защита → replan")
             result = facade.run_cycle(max_iterations=50)
             control_result = result.control
-            log_ui(f"Автономный цикл завершён: executed={control_result.executed} reason={control_result.reason}")
-            self.after(0, lambda: status_var.set(f"Автономный цикл: {control_result.reason}"))
+            reason = str(control_result.reason or "")
+            log_ui(f"Автономный цикл завершён: executed={control_result.executed} reason={reason}")
+            if reason.startswith("PROTECTION_RECONCILIATION_FAILED"):
+                log_ui("🛑 Торговля не выполнена: защита портфеля не согласована.")
+                for item in control_result.preflight_reasons:
+                    log_ui(f"  • {item}")
+                self.after(0, lambda r=reason: status_var.set(f"Торговля заблокирована: {r}"))
+            elif reason.startswith("PARTIAL_COMPLETED:"):
+                log_ui("⚠️ Часть операций завершилась ошибкой; автономный цикл продолжен.")
+                for item in reason.split(":", 1)[1].split(";"):
+                    log_ui(f"  • {item}")
+                self.after(0, lambda r=reason: status_var.set(f"Частично выполнено: {r}"))
+            elif reason.startswith("PREFLIGHT_REJECTED"):
+                log_ui("⚠️ План отклонён preflight-проверкой.")
+                for item in control_result.preflight_reasons:
+                    log_ui(f"  • {item}")
+                self.after(0, lambda r=reason: status_var.set(f"План отклонён: {r}"))
+            else:
+                self.after(0, lambda r=reason: status_var.set(f"Автономный цикл: {r}"))
             if control_result.replanning is not None:
                 cycle = control_result.replanning
-                log_ui(f"Replan: итераций={cycle.iterations}, выполнено шагов={len(cycle.executed_steps)}")
-            if not control_result.executed and control_result.reason not in {"COMPLETED", "STOPPED"}:
-                raise RuntimeError(control_result.reason)
+                log_ui(f"Replan: итераций={cycle.iterations}, выполнено шагов={len(cycle.executed_steps)}, ошибок={len(cycle.failed_steps)}")
+            # Controlled business outcomes are already represented by the
+            # control result and must not be converted into runtime exceptions.
+            # Unexpected programming/system errors still propagate normally.
 
         def _sync_runtime_status() -> None:
             service = runtime_holder.get("service")
