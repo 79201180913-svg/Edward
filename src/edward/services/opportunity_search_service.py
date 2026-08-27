@@ -279,7 +279,10 @@ class OpportunitySearchService:
                     logger.exception("[OPPORTUNITY TRADE PLAN] uid=%s ticker=%s", uid, ticker)
 
             reason = decision.reason_codes[0] if decision.reason_codes else ""
-            return OpportunitySearchResult(uid, ticker, name, market.current_price if market.current_price is not None else price, analysis.market_regime, decision.strategy_name, decision.strategy_score, decision.opportunity_score, decision_value, decision.status.value, reason, decision.explanation, position_data.quantity, risk_score, forecast.model if forecast is not None else None, forecast.confidence if forecast is not None else None, forecast_prices, forecast_up, forecast_down, forecast_low, forecast_high, trade_plan, recommended_quantity, recommended_value, recommended_weight_pct, execution_ready)
+            status = decision.status.value
+            display_status = f"{status}: {reason}" if reason else status
+            logger.info("[OPPORTUNITY DECISION] uid=%s ticker=%s price=%s strategy=%s strategy_score=%.2f opportunity_score=%.2f decision=%s status=%s reason=%s risk_score=%.2f execution_ready=%s", uid, ticker, market.current_price if market.current_price is not None else price, decision.strategy_name, decision.strategy_score, decision.opportunity_score, decision_value, status, reason, risk_score, execution_ready)
+            return OpportunitySearchResult(uid, ticker, name, market.current_price if market.current_price is not None else price, analysis.market_regime, decision.strategy_name, decision.strategy_score, decision.opportunity_score, decision_value, display_status, reason, decision.explanation, position_data.quantity, risk_score, forecast.model if forecast is not None else None, forecast.confidence if forecast is not None else None, forecast_prices, forecast_up, forecast_down, forecast_low, forecast_high, trade_plan, recommended_quantity, recommended_value, recommended_weight_pct, execution_ready)
         except Exception as exc:
             logger.exception("[OPPORTUNITY ANALYSIS ERROR] uid=%s ticker=%s", uid, ticker)
             return self._unavailable(instrument, price, position_data.quantity, f"Ошибка анализа: {exc}")
@@ -350,7 +353,9 @@ class OpportunitySearchService:
 
     @staticmethod
     def _unavailable(instrument: Any, price: float | None, quantity: float, reason: str) -> OpportunitySearchResult:
-        return OpportunitySearchResult(str(_field(instrument, "uid", _field(instrument, "instrument_uid", ""))), str(_field(instrument, "ticker", "")), str(_field(instrument, "name", "")), price, None, None, 0.0, 0.0, None, "ANALYSIS_UNAVAILABLE", "ANALYSIS_UNAVAILABLE", reason, quantity, 0.0)
+        display_status = f"ANALYSIS_UNAVAILABLE: {reason}" if reason else "ANALYSIS_UNAVAILABLE"
+        logger.warning("[OPPORTUNITY UNAVAILABLE] ticker=%s price=%s status=%s reason=%s", _field(instrument, "ticker", ""), price, "ANALYSIS_UNAVAILABLE", reason)
+        return OpportunitySearchResult(str(_field(instrument, "uid", _field(instrument, "instrument_uid", ""))), str(_field(instrument, "ticker", "")), str(_field(instrument, "name", "")), price, None, None, 0.0, 0.0, None, display_status, "ANALYSIS_UNAVAILABLE", reason, quantity, 0.0)
 
 
 def _held_positions(positions: Any) -> list[Any]:
