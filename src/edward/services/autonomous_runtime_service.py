@@ -69,6 +69,31 @@ class AutonomousRuntimeService:
         with self._lock:
             self._thread = None
 
+    def _run_cycle_with_heartbeat(self) -> None:
+        """Run one cycle while continuously exposing elapsed time to the UI."""
+        cycle_stop = Event()
+        started = monotonic()
+
+        def heartbeat() -> None:
+            while not cycle_stop.wait(1.0):
+                elapsed = monotonic() - started
+                self._state.update(
+                    status="EXECUTING",
+                    message=f"Выполняется автономный цикл · прошло {elapsed:.0f} сек.",
+                )
+
+        heartbeat_thread = Thread(
+            target=heartbeat,
+            name="edward-autonomous-heartbeat",
+            daemon=True,
+        )
+        heartbeat_thread.start()
+        try:
+            self._run_cycle()
+        finally:
+            cycle_stop.set()
+            heartbeat_thread.join(timeout=1.0)
+
     def _worker(self) -> None:
         while not self._stop.is_set():
             snapshot = self._state.snapshot()
@@ -77,9 +102,9 @@ class AutonomousRuntimeService:
                 continue
 
             started = monotonic()
-            self._state.update(status="EXECUTING", message="Выполняется автономный цикл")
+            self._state.update(status="EXECUTING", message="Выполняется автономный цикл · прошло 0 сек.")
             try:
-                self._run_cycle()
+                self._run_cycle_with_heartbeat()
             except Exception as exc:
                 self._state.set_enabled(False)
                 self._state.update(status="ERROR", message=f"{type(exc).__name__}: {exc}")
