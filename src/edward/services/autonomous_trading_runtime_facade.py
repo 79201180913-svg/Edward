@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any
+from typing import Any, Callable
 
 from edward.api.tinvest_adapter_client import TInvestAdapterClient
 from edward.domain.execution import ExecutionMode, ExecutionStatus
@@ -114,7 +114,20 @@ class AutonomousTradingRuntimeFacade:
     def controller(self) -> AutonomousTradingController:
         return self._controller
 
-    def run_cycle(self, *, max_iterations: int = 50) -> AutonomousRuntimeResult:
+    def run_cycle(
+        self,
+        *,
+        max_iterations: int = 50,
+        progress_callback: Callable[[str, float, int, int], None] | None = None,
+        result_callback: Callable[[Any, int, int], None] | None = None,
+        scope_callback: Callable[[str], None] | None = None,
+        planning_callback: Callable[[Any], None] | None = None,
+    ) -> AutonomousRuntimeResult:
+        """Run one autonomous cycle and expose analysis progress to the UI.
+
+        The callbacks are observational only: they publish already calculated
+        planning/opportunity data and never alter trading decisions.
+        """
         _console(f"[AUTONOMOUS][STAGE] cycle entered; account_id={self.account_id} profile={self.profile} max_iterations={max_iterations}")
 
         def refresh_state() -> AccountState:
@@ -130,6 +143,10 @@ class AutonomousTradingRuntimeFacade:
                 policy=self.policy,
                 profile=self.profile,
                 instrument_kind=self.instrument_kind,
+                progress_callback=progress_callback,
+                result_callback=result_callback,
+                scope_callback=scope_callback,
+                planning_callback=planning_callback,
             )
             plan = result.execution_plan or AutonomousExecutionPlan(steps=())
             _console(
