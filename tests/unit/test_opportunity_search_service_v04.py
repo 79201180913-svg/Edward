@@ -197,7 +197,8 @@ def test_unavailable_result_keeps_instrument_identity():
     )
     assert result.instrument_uid == "uid-9"
     assert result.ticker == "TEST"
-    assert result.status == "ANALYSIS_UNAVAILABLE"
+    assert result.status == "ANALYSIS_UNAVAILABLE: Недостаточно исторических данных для анализа."
+    assert result.reason == "ANALYSIS_UNAVAILABLE"
     assert result.decision is None
     assert result.quantity == 7.0
 
