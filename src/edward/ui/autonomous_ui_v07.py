@@ -119,6 +119,7 @@ def install_autonomous_ui(app_class: type) -> None:
         activity.pack(fill="x", pady=(10, 0))
         latest_portfolio_opportunities: list[Any] = []
         runtime_holder: dict[str, Any] = {"service": None, "facade": None, "last_status": None}
+        autonomous_scope = {"value": "Рынок"}
 
         def log_ui(message: str) -> None:
             def apply() -> None:
@@ -201,6 +202,28 @@ def install_autonomous_ui(app_class: type) -> None:
             self.after(0, lambda: status_var.set(status))
             log_ui(status)
 
+        def autonomous_result_callback(opportunity: Any, current: int, total: int) -> None:
+            render_incremental(opportunity, autonomous_scope["value"], current, total)
+            logger.info("autonomous_runtime_opportunity scope=%s ticker=%s current=%d total=%d", autonomous_scope["value"], getattr(opportunity, "ticker", ""), current, total)
+
+        def autonomous_scope_callback(scope: str) -> None:
+            autonomous_scope["value"] = "Рынок" if scope == "MARKET" else "Портфель"
+            log_ui(f"Автономный цикл: начат анализ {autonomous_scope['value']}")
+            logger.info("autonomous_runtime_scope scope=%s", scope)
+
+        def autonomous_planning_callback(planning: Any) -> None:
+            render_budget(planning)
+            budget = getattr(planning, "budget", None)
+            if budget is not None:
+                log_ui(
+                    f"Бюджет рассчитан: капитал={budget.account_capital}, "
+                    f"резерв={budget.reserve}, инвестиционный бюджет={budget.planning_budget}, "
+                    f"доступные деньги={budget.investable_cash}"
+                )
+            else:
+                log_ui("Бюджет рассчитан")
+            logger.info("autonomous_runtime_budget_published")
+
         def run_analysis_cycle() -> None:
             try:
                 slots = int(slots_var.get())
@@ -247,8 +270,25 @@ def install_autonomous_ui(app_class: type) -> None:
                     instrument_kind="SHARE",
                 )
                 runtime_holder["facade"] = facade
+
+            autonomous_scope["value"] = "Рынок"
+            for item in tree.get_children():
+                tree.delete(item)
+            for item in allocation_tree.get_children():
+                allocation_tree.delete(item)
+            for item in execution_tree.get_children():
+                execution_tree.delete(item)
             log_ui("Автономный цикл: анализ → план → исполнение → проверка → защита → replan")
-            result = facade.run_cycle(max_iterations=50)
+            log_ui("Результаты анализа будут отображаться по мере готовности.")
+            self.after(0, lambda: status_var.set("1/6: обновление состояния счёта..."))
+
+            result = facade.run_cycle(
+                max_iterations=50,
+                progress_callback=on_progress,
+                result_callback=autonomous_result_callback,
+                scope_callback=autonomous_scope_callback,
+                planning_callback=autonomous_planning_callback,
+            )
             control_result = result.control
             reason = str(control_result.reason or "")
             log_ui(f"Автономный цикл завершён: executed={control_result.executed} reason={reason}")
