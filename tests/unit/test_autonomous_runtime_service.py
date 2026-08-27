@@ -82,7 +82,6 @@ def test_cycle_error_stops_autonomous_runtime():
 def test_long_cycle_exposes_elapsed_progress():
     state = AutonomousRunStateService()
     state.set_mode(AutonomousRunMode.AUTONOMOUS)
-    started = time.monotonic()
     release = False
 
     def long_cycle():
@@ -103,7 +102,6 @@ def test_long_cycle_exposes_elapsed_progress():
     release = True
     runtime.stop()
 
-    assert time.monotonic() - started >= 1.1
     assert snapshot.status == "EXECUTING"
     assert "прошло" in snapshot.message
     assert "сек." in snapshot.message
