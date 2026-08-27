@@ -7,6 +7,10 @@ from edward.services.autonomous_execution_plan_service import AutonomousExecutio
 from edward.services.autonomous_execution_verification_service import ExecutionVerification
 
 
+def _console(message: str) -> None:
+    print(message, flush=True)
+
+
 @dataclass(frozen=True, slots=True)
 class AutonomousReplanningCycleResult:
     completed: bool
@@ -37,49 +41,69 @@ class AutonomousReplanningCycleService:
 
     def run(self) -> AutonomousReplanningCycleResult:
         executed: list[int] = []
+        _console(f"[AUTONOMOUS][REPLAN] loop START max_iterations={self._max_iterations}")
         state = self._refresh_state()
 
         for iteration in range(1, self._max_iterations + 1):
+            _console(f"[AUTONOMOUS][REPLAN] iteration={iteration} build plan: START")
             plan = self._build_plan(state)
+            _console(f"[AUTONOMOUS][REPLAN] iteration={iteration} plan ready steps={len(plan.steps)}")
             if not plan.steps:
+                _console(f"[AUTONOMOUS][REPLAN] iteration={iteration} no executable steps; FINISHED")
                 return AutonomousReplanningCycleResult(True, iteration, tuple(executed))
 
             step = plan.steps[0]
+            _console(
+                f"[AUTONOMOUS][EXECUTION] iteration={iteration} step={step.sequence} "
+                f"action={step.action} ticker={step.ticker} uid={step.instrument_uid} target_value={step.target_value}"
+            )
             try:
                 execution = self._execute_step(step)
+                _console(f"[AUTONOMOUS][EXECUTION] iteration={iteration} step={step.sequence} execution returned")
             except Exception as exc:
-                return AutonomousReplanningCycleResult(
-                    False, iteration, tuple(executed), f"EXECUTION_ERROR:{exc}"
-                )
+                reason = f"EXECUTION_ERROR:{exc}"
+                _console(f"[AUTONOMOUS][EXECUTION] iteration={iteration} step={step.sequence} FAILED reason={reason}")
+                return AutonomousReplanningCycleResult(False, iteration, tuple(executed), reason)
 
             try:
+                _console(f"[AUTONOMOUS][VERIFY] iteration={iteration} step={step.sequence}: refresh state START")
                 refreshed_state = self._refresh_state()
+                _console(f"[AUTONOMOUS][VERIFY] iteration={iteration} step={step.sequence}: verify START")
                 verification = self._verify_step(step, execution, refreshed_state)
-            except Exception as exc:
-                return AutonomousReplanningCycleResult(
-                    False, iteration, tuple(executed), f"VERIFICATION_ERROR:{exc}"
+                _console(
+                    f"[AUTONOMOUS][VERIFY] iteration={iteration} step={step.sequence}: "
+                    f"passed={verification.passed} reasons={';'.join(verification.reasons) if verification.reasons else 'NONE'}"
                 )
+            except Exception as exc:
+                reason = f"VERIFICATION_ERROR:{exc}"
+                _console(f"[AUTONOMOUS][VERIFY] iteration={iteration} step={step.sequence} FAILED reason={reason}")
+                return AutonomousReplanningCycleResult(False, iteration, tuple(executed), reason)
 
             if not verification.passed:
+                reason = "VERIFICATION_FAILED:" + ";".join(verification.reasons)
+                _console(f"[AUTONOMOUS][VERIFY] iteration={iteration} step={step.sequence} REJECTED reason={reason}")
                 return AutonomousReplanningCycleResult(
                     False,
                     iteration,
                     tuple(executed),
-                    "VERIFICATION_FAILED:" + ";".join(verification.reasons),
+                    reason,
                 )
 
             executed.append(int(step.sequence))
+            _console(f"[AUTONOMOUS][REPLAN] iteration={iteration} step={step.sequence} verified; rebuilding plan from refreshed state")
             # The verified refreshed state is authoritative for the next plan.
             # Do not refresh it again before rebuilding: that would introduce a
             # second state transition and could cause the next plan to be built
             # from a different account snapshot than the one just verified.
             state = refreshed_state
 
+        reason = "MAX_ITERATIONS_REACHED"
+        _console(f"[AUTONOMOUS][REPLAN] loop STOP reason={reason}")
         return AutonomousReplanningCycleResult(
             False,
             self._max_iterations,
             tuple(executed),
-            "MAX_ITERATIONS_REACHED",
+            reason,
         )
 
 
