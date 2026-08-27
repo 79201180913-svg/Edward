@@ -70,7 +70,6 @@ class AutonomousRuntimeService:
             self._thread = None
 
     def _run_cycle_with_heartbeat(self) -> None:
-        """Run one cycle while continuously exposing elapsed time to the UI."""
         cycle_stop = Event()
         started = monotonic()
 
@@ -82,17 +81,13 @@ class AutonomousRuntimeService:
                     message=f"Выполняется автономный цикл · прошло {elapsed:.0f} сек.",
                 )
 
-        heartbeat_thread = Thread(
-            target=heartbeat,
-            name="edward-autonomous-heartbeat",
-            daemon=True,
-        )
-        heartbeat_thread.start()
+        thread = Thread(target=heartbeat, name="edward-autonomous-heartbeat", daemon=True)
+        thread.start()
         try:
             self._run_cycle()
         finally:
             cycle_stop.set()
-            heartbeat_thread.join(timeout=1.0)
+            thread.join(timeout=1.0)
 
     def _worker(self) -> None:
         while not self._stop.is_set():
