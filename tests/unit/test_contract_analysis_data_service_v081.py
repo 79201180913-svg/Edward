@@ -1,7 +1,13 @@
+from datetime import datetime, timezone
+
 from edward.services.contract_analysis_data_service_v081 import ContractAnalysisDataServiceV081
 
 
 class FakeClient:
+    def __init__(self):
+        self.schedule_from = None
+        self.schedule_to = None
+
     def get_asset_fundamentals(self, instrument_id):
         return {"fundamentals": [{"roe": 15, "roic": 13, "revenue_ttm": 100, "free_cash_flow_ttm": 10, "pe_ratio_ttm": 10}]}
 
@@ -30,11 +36,14 @@ class FakeClient:
         return {"items": [{"id": 1, "title": "Test", "instrument_id": [{"instrument": {"instrument_uid": "UID"}}]}]}
 
     def get_trading_schedules(self, **kwargs):
+        self.schedule_from = kwargs.get("from_dt")
+        self.schedule_to = kwargs.get("to_dt")
         return {"exchanges": []}
 
 
 def test_collector_returns_mapped_contract_sources_and_tracks_failures():
-    result = ContractAnalysisDataServiceV081(FakeClient()).collect("UID")
+    client = FakeClient()
+    result = ContractAnalysisDataServiceV081(client).collect("UID")
 
     assert result.fundamentals["free_cash_flow"] == 10.0
     assert result.order_book["bids"][0]["price"] == 99.0
@@ -45,6 +54,12 @@ def test_collector_returns_mapped_contract_sources_and_tracks_failures():
     assert result.risk_data["dlong_client"] == 10.0
     assert result.news[0]["id"] == 1
     assert set(result.failed_sources) == set()
+    assert isinstance(client.schedule_from, datetime)
+    assert isinstance(client.schedule_to, datetime)
+    assert client.schedule_from.tzinfo is not None
+    assert client.schedule_to.tzinfo is not None
+    assert client.schedule_from >= datetime.now(timezone.utc).replace(microsecond=0) - __import__("datetime").timedelta(seconds=5)
+    assert client.schedule_to > client.schedule_from
 
 
 class FailingClient(FakeClient):
