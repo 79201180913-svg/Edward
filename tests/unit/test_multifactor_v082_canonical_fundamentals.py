@@ -1,3 +1,4 @@
+from edward.services.fundamental_analysis_service_v082 import FundamentalAnalysisServiceV082
 from edward.services.multifactor_analysis_service_v081 import MultiFactorAnalysisServiceV081
 
 
@@ -28,10 +29,14 @@ def test_v081_fundamentals_delegates_to_v082_for_mapped_snapshot():
         "dividend_regularity": 100.0,
     }
     factor = MultiFactorAnalysisServiceV081.fundamentals(snapshot)
+    canonical = FundamentalAnalysisServiceV082.analyze(snapshot)
+
     assert factor.evidence.available is True
     assert factor.evidence.reason is None
-    assert factor.evidence.strength == factor.evidence.strength
-    assert factor.quality_score == factor.evidence.strength
+    assert factor.evidence.strength == canonical.overall_score
+    assert factor.quality_score == canonical.business_quality.score
+    assert factor.growth_score == canonical.growth.score
+    assert factor.valuation_score == canonical.valuation.score
 
 
 def test_v081_fundamentals_keeps_unavailable_semantics():
