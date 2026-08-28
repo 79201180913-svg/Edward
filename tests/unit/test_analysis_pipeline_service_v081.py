@@ -120,3 +120,45 @@ def test_v081_instrument_metadata_takes_precedence_over_risk_rates():
     assert risk.short_enabled is True
     assert risk.capital_efficiency_score == pytest.approx(80.0)
     assert risk.risk_score == pytest.approx(76.66666666666667)
+
+
+def test_v081_pipeline_uses_v082_fundamental_score_in_multifactor():
+    result = AnalysisPipelineServiceV081().analyze(
+        instrument_uid="TQBR.FUNDAMENTAL",
+        ticker="FUNDAMENTAL",
+        candles=_candles(),
+        fundamentals={
+            "roe": 20.0,
+            "roic": 18.0,
+            "roa": 8.0,
+            "net_margin": 12.0,
+            "revenue_growth": 15.0,
+            "revenue_growth_3y": 12.0,
+            "revenue_growth_5y": 10.0,
+            "eps_growth": 18.0,
+            "ebitda_growth": 16.0,
+            "current_ratio": 1.5,
+            "net_debt_to_ebitda": 1.0,
+            "free_cash_flow": 100.0,
+            "free_cash_flow_to_price": 4.0,
+            "pe": 15.0,
+            "ps": 2.0,
+            "pb": 2.0,
+            "p_fcf": 14.0,
+            "ev_to_ebitda": 10.0,
+            "ev_to_sales": 2.0,
+            "dividend_yield": 3.0,
+            "dividend_payout": 40.0,
+            "dividend_growth": 5.0,
+            "dividend_regularity": 100.0,
+        },
+        session_name="REGULAR",
+    )
+
+    assert result.multifactor.fundamentals.evidence.available is True
+    assert result.multifactor.fundamentals.evidence.strength == pytest.approx(
+        result.multifactor.fundamentals.quality_score * 0 + result.multifactor.fundamentals.evidence.strength
+    )
+    assert result.multifactor.fundamentals.quality_score == result.multifactor.fundamentals.evidence.strength
+    assert result.multifactor.fundamentals.growth_score >= 0.0
+    assert result.multifactor.aggregate_evidence_score >= 0.0
