@@ -15,12 +15,20 @@ from edward.services.multifactor_analysis_service_v081 import (
 logger = getLogger(__name__)
 
 
+def _first_num(data: Any, *names: str) -> float | None:
+    """Return the first numeric value that is actually present, skipping None."""
+    for name in names:
+        value = _num(data, name)
+        if value is not None:
+            return value
+    return None
+
+
 def calibrated_instrument_risk(cls: type[MultiFactorAnalysisServiceV081], risk_data: Any = None) -> InstrumentRiskFactor:
     """Calibrate v0.8.1 instrument risk from the effective required margin.
 
-    The pipeline normalizes fractional contract values to percentage points.
-    The effective margin is the long requirement unless short selling is enabled;
-    when short selling is enabled, the stricter long/short requirement is used.
+    The pipeline may expose both canonical and client-derived aliases. A missing
+    canonical alias must not shadow a populated client-derived alias.
     """
     if risk_data is None:
         return InstrumentRiskFactor(
@@ -32,8 +40,8 @@ def calibrated_instrument_risk(cls: type[MultiFactorAnalysisServiceV081], risk_d
             Evidence("instrument_risk", "UNAVAILABLE", 0, 0, available=False, reason="NO_RISK_RATE_DATA"),
         )
 
-    dlong = _num(risk_data, "dlong", "dlong_client")
-    dshort = _num(risk_data, "dshort", "dshort_client")
+    dlong = _first_num(risk_data, "dlong", "dlong_client")
+    dshort = _first_num(risk_data, "dshort", "dshort_client")
     short_enabled = bool(_value(risk_data, "short_enabled_flag", "short_enabled", default=False))
 
     candidates = []
@@ -54,10 +62,6 @@ def calibrated_instrument_risk(cls: type[MultiFactorAnalysisServiceV081], risk_d
 
     effective_margin_pct = _clamp(max(candidates))
     capital_efficiency = _clamp(100.0 - effective_margin_pct)
-
-    # Keep the established v0.8.1 risk scale centered at 50 while making
-    # effective margin materially affect the score. At 30% margin the score
-    # reaches the 90-point high-risk boundary used by the overlay blocker.
     risk_score = _clamp(50.0 + effective_margin_pct * (40.0 / 30.0))
     direction = "NEGATIVE" if risk_score >= 65.0 else "NEUTRAL"
 
