@@ -4,12 +4,21 @@ from dataclasses import dataclass, replace
 from typing import Any, Mapping, Sequence
 
 from edward.services.analysis_pipeline_service_v081 import AnalysisPipelineServiceV081
-from edward.services.entry_quality_integration_v082 import EntryQualityIntegrationResult, EntryQualityIntegrationServiceV082
-from edward.services.fundamental_analysis_service_v082 import FundamentalAnalysisResult, FundamentalAnalysisServiceV082
+from edward.services.entry_quality_integration_v082 import (
+    EntryQualityIntegrationResult,
+    EntryQualityIntegrationServiceV082,
+)
+from edward.services.fundamental_analysis_service_v082 import (
+    FundamentalAnalysisResult,
+    FundamentalAnalysisServiceV082,
+)
 from edward.services.fundamental_factor_adapter_v082 import FundamentalFactorAdapterV082
 from edward.services.multifactor_normalization_v081 import normalize
 from edward.services.multifactor_overlay_service_v081 import MultiFactorOverlayServiceV081
-from edward.services.opportunity_adjustment_service_v082 import OpportunityAdjustmentServiceV082
+from edward.services.opportunity_adjustment_service_v082 import (
+    OpportunityAdjustmentResult,
+    OpportunityAdjustmentServiceV082,
+)
 
 ANALYSIS_PIPELINE_V082_VERSION = "0.8.2"
 
@@ -21,7 +30,7 @@ class AnalysisPipelineV082Result:
     base: Any
     fundamental: FundamentalAnalysisResult
     entry_quality: EntryQualityIntegrationResult
-    opportunity_adjustment: Any = None
+    opportunity_adjustment: OpportunityAdjustmentResult | None = None
     version: str = ANALYSIS_PIPELINE_V082_VERSION
 
     @property
@@ -49,8 +58,8 @@ class AnalysisPipelineServiceV082:
     """v0.8.2 facade reusing the stable v0.8.1 factor pipeline.
 
     Fundamentals are calculated once and adapted into the existing multifactor
-    contract. Entry quality and its opportunity adjustment are additive v0.8.2
-    layers; the existing v0.8.1 engines remain authoritative for the base result.
+    contract. Entry quality and opportunity adjustment are calculated alongside
+    that result; only real v0.8.1 opportunity contracts are adjusted.
     """
 
     def __init__(self, *, base_pipeline: AnalysisPipelineServiceV081 | None = None) -> None:
@@ -105,7 +114,14 @@ class AnalysisPipelineServiceV082:
         )
 
         opportunity_adjustment = None
-        if base_opportunity is not None:
+        if (
+            base_opportunity is not None
+            and hasattr(base_opportunity, "score")
+            and hasattr(base_opportunity, "context")
+            and hasattr(base_opportunity, "entry_signal")
+            and hasattr(base_opportunity, "market_regime_compatible")
+            and hasattr(base_opportunity, "explanation")
+        ):
             opportunity_adjustment = OpportunityAdjustmentServiceV082.apply(
                 base_opportunity,
                 fundamental=fundamental,
