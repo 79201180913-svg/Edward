@@ -16,11 +16,11 @@ logger = getLogger(__name__)
 
 
 def calibrated_instrument_risk(cls: type[MultiFactorAnalysisServiceV081], risk_data: Any = None) -> InstrumentRiskFactor:
-    """Calibrate v0.8.1 instrument risk from required margin.
+    """Calibrate v0.8.1 instrument risk from the effective required margin.
 
-    The existing pipeline normalizes fractional contract values to percentages.
-    The effective margin is the long requirement unless short selling is enabled,
-    in which case the stricter of long/short requirements is used.
+    The pipeline normalizes fractional contract values to percentage points.
+    The effective margin is the long requirement unless short selling is enabled;
+    when short selling is enabled, the stricter long/short requirement is used.
     """
     if risk_data is None:
         return InstrumentRiskFactor(
@@ -54,7 +54,11 @@ def calibrated_instrument_risk(cls: type[MultiFactorAnalysisServiceV081], risk_d
 
     effective_margin_pct = _clamp(max(candidates))
     capital_efficiency = _clamp(100.0 - effective_margin_pct)
-    risk_score = effective_margin_pct
+
+    # Keep the established v0.8.1 risk scale centered at 50 while making
+    # effective margin materially affect the score. At 30% margin the score
+    # reaches the 90-point high-risk boundary used by the overlay blocker.
+    risk_score = _clamp(50.0 + effective_margin_pct * (40.0 / 30.0))
     direction = "NEGATIVE" if risk_score >= 65.0 else "NEUTRAL"
 
     logger.info(
@@ -79,7 +83,6 @@ def calibrated_instrument_risk(cls: type[MultiFactorAnalysisServiceV081], risk_d
     )
 
 
-# Install the calibrated method only for v0.8.1 runtime usage.
 MultiFactorAnalysisServiceV081.instrument_risk = classmethod(calibrated_instrument_risk)
 
 __all__ = ["calibrated_instrument_risk"]
