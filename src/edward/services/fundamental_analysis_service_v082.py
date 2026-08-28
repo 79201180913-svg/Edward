@@ -43,6 +43,8 @@ class FundamentalAnalysisResult:
     confidence: float
     coverage: float
     status: str
+    strategy_profile: str = "medium_term"
+    group_weights: tuple[tuple[str, float], ...] = ()
     reason_codes: tuple[str, ...] = ()
     version: str = FUNDAMENTAL_ANALYSIS_VERSION
 
@@ -50,9 +52,9 @@ class FundamentalAnalysisResult:
 class FundamentalAnalysisServiceV082:
     """Structured fundamental analysis over the contract-mapped v0.8.1 data.
 
-    This service is deliberately additive. It consumes the existing mapped
-    fundamentals dictionary and does not alter the v0.8.1 pipeline or contract.
-    Missing metrics are unavailable evidence, not zero-valued metrics.
+    The service is additive to v0.8.1. It consumes the existing mapped
+    fundamentals dictionary, keeps missing metrics unavailable, and applies
+    strategy-aware group weights only inside the fundamental layer.
     """
 
     POSITIVE_METRICS = {
@@ -90,6 +92,56 @@ class FundamentalAnalysisServiceV082:
             "eps_growth", "ebitda_growth",
         ),
     }
+
+    # These are group-level defaults, not decision-engine weights. Missing
+    # groups are removed and the remaining weights are renormalized.
+    STRATEGY_WEIGHTS = {
+        "long_term": {
+            "business_quality": 0.25,
+            "growth": 0.20,
+            "cash_generation": 0.10,
+            "financial_health": 0.20,
+            "valuation": 0.20,
+            "shareholder_return": 0.05,
+            "fundamental_momentum": 0.00,
+        },
+        "medium_term": {
+            "business_quality": 0.15,
+            "growth": 0.15,
+            "cash_generation": 0.05,
+            "financial_health": 0.10,
+            "valuation": 0.10,
+            "shareholder_return": 0.05,
+            "fundamental_momentum": 0.40,
+        },
+        "speculative": {
+            "business_quality": 0.05,
+            "growth": 0.05,
+            "cash_generation": 0.05,
+            "financial_health": 0.10,
+            "valuation": 0.05,
+            "shareholder_return": 0.05,
+            "fundamental_momentum": 0.65,
+        },
+    }
+
+    PROFILE_ALIASES = {
+        "long": "long_term",
+        "longterm": "long_term",
+        "long-term": "long_term",
+        "medium": "medium_term",
+        "medium-term": "medium_term",
+        "swing": "medium_term",
+        "short": "speculative",
+        "short_term": "speculative",
+        "short-term": "speculative",
+    }
+
+    @classmethod
+    def _profile(cls, profile: str | None) -> str:
+        value = str(profile or "medium_term").strip().lower()
+        value = cls.PROFILE_ALIASES.get(value, value)
+        return value if value in cls.STRATEGY_WEIGHTS else "medium_term"
 
     @staticmethod
     def _num(snapshot: Mapping[str, Any], metric: str) -> float | None:
@@ -202,30 +254,59 @@ class FundamentalAnalysisServiceV082:
         metrics = tuple(cls._metric(snapshot, metric) for metric in cls.GROUPS["fundamental_momentum"])
         available = tuple(item for item in metrics if item.available)
         if not available:
-            return FundamentalGroupResult("fundamental_momentum", 0.0, 0.0, 0.0, metrics, ("GROUP_UNAVAILABLE",))
+            return FundamentalGroupResult(
+                "fundamental_momentum", 0.0, 0.0, 0.0, metrics,
+                ("GROUP_UNAVAILABLE",),
+            )
         values = {item.metric: item.value for item in available}
         trend_pairs = (
             (values.get("revenue_growth_5y"), values.get("revenue_growth_3y")),
             (values.get("revenue_growth_3y"), values.get("revenue_growth")),
         )
         accelerations = [short - long for long, short in trend_pairs if long is not None and short is not None]
-        acceleration_score = cls._clamp(50.0 + mean(accelerations) * 2.0) if accelerations else 50.0
+        acceleration_score = self_score = 50.0
+        if accelerations:
+            acceleration_score = cls._clamp(50.0 + mean(accelerations) * 2.0)
         base_score = mean(item.score for item in available)
         score = cls._clamp(base_score * 0.7 + acceleration_score * 0.3)
         coverage = len(available) / len(metrics) * 100.0
         confidence = cls._clamp(mean(item.confidence for item in available) * coverage / 100.0)
         reasons: list[str] = []
         if accelerations:
-            if mean(accelerations) > 2.0:
+            average_acceleration = mean(accelerations)
+            if average_acceleration > 2.0:
                 reasons.append("FUNDAMENTAL_ACCELERATION")
-            elif mean(accelerations) < -2.0:
+            elif average_acceleration < -2.0:
                 reasons.append("FUNDAMENTAL_DECELERATION")
         if coverage < 100.0:
             reasons.append("PARTIAL_DATA_COVERAGE")
-        return FundamentalGroupResult("fundamental_momentum", score, confidence, coverage, metrics, tuple(reasons))
+        return FundamentalGroupResult(
+            "fundamental_momentum", score, confidence, coverage, metrics, tuple(reasons)
+        )
 
     @classmethod
-    def analyze(cls, fundamentals: Any = None) -> FundamentalAnalysisResult:
+    def _weighted_overall(
+        cls,
+        groups: tuple[FundamentalGroupResult, ...],
+        profile: str,
+    ) -> tuple[float, float, tuple[tuple[str, float], ...]]:
+        defaults = cls.STRATEGY_WEIGHTS[profile]
+        usable = tuple(group for group in groups if group.coverage > 0 and defaults.get(group.name, 0.0) > 0)
+        if not usable:
+            return 0.0, 0.0, tuple((name, weight) for name, weight in defaults.items())
+        total_weight = sum(defaults[group.name] for group in usable)
+        normalized = tuple(
+            (group.name, defaults[group.name] / total_weight)
+            for group in usable
+        )
+        overall = sum(group.score * weight for group, (_, weight) in zip(usable, normalized))
+        confidence = sum(group.confidence * weight for group, (_, weight) in zip(usable, normalized))
+        return cls._clamp(overall), cls._clamp(confidence), normalized
+
+    @classmethod
+    def analyze(cls, fundamentals: Any = None, *, profile: str = "medium_term") -> FundamentalAnalysisResult:
+        selected_profile = cls._profile(profile)
+        weights = cls.STRATEGY_WEIGHTS[selected_profile]
         if not isinstance(fundamentals, Mapping) or not fundamentals:
             empty = tuple(
                 FundamentalGroupResult(name, 0.0, 0.0, 0.0, (), ("GROUP_UNAVAILABLE",))
@@ -244,6 +325,8 @@ class FundamentalAnalysisServiceV082:
                 confidence=0.0,
                 coverage=0.0,
                 status="UNAVAILABLE",
+                strategy_profile=selected_profile,
+                group_weights=tuple(weights.items()),
                 reason_codes=("NO_FUNDAMENTAL_DATA",),
             )
 
@@ -258,14 +341,11 @@ class FundamentalAnalysisServiceV082:
             business_quality, growth, cash_generation, financial_health,
             valuation, shareholder_return, momentum,
         )
-        available_groups = tuple(group for group in groups if group.coverage > 0)
-        overall = mean(group.score for group in available_groups) if available_groups else 0.0
+        overall, confidence, normalized_weights = cls._weighted_overall(groups, selected_profile)
         coverage = mean(group.coverage for group in groups) if groups else 0.0
-        confidence = mean(group.confidence for group in available_groups) if available_groups else 0.0
-        if coverage == 0:
+        available_count = sum(1 for group in groups if group.coverage > 0)
+        if available_count == 0:
             status = "UNAVAILABLE"
-        elif coverage < 50:
-            status = "PARTIAL"
         elif coverage < 100:
             status = "PARTIAL"
         else:
@@ -281,10 +361,12 @@ class FundamentalAnalysisServiceV082:
             valuation=valuation,
             shareholder_return=shareholder_return,
             fundamental_momentum=momentum,
-            overall_score=cls._clamp(overall),
-            confidence=cls._clamp(confidence),
+            overall_score=overall,
+            confidence=confidence,
             coverage=cls._clamp(coverage),
             status=status,
+            strategy_profile=selected_profile,
+            group_weights=normalized_weights,
             reason_codes=tuple(reasons),
         )
 
