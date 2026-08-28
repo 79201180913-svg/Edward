@@ -155,3 +155,42 @@ def test_zero_is_still_a_valid_value_without_non_applicable_context():
     metric = next(item for item in result.business_quality.metrics if item.metric == "roe")
     assert metric.available is True
     assert metric.value == 0.0
+
+
+def test_cumulative_revenue_change_is_visible_but_excluded_from_growth_score():
+    base = {
+        "revenue_growth": 25.2,
+        "revenue_growth_3y": 33.0,
+        "eps_growth": 126.9,
+    }
+    low_cumulative = FundamentalAnalysisServiceV082.analyze(
+        {**base, "revenue_change_5y": 10.0}
+    )
+    high_cumulative = FundamentalAnalysisServiceV082.analyze(
+        {**base, "revenue_change_5y": 999.0}
+    )
+
+    assert low_cumulative.growth.score == high_cumulative.growth.score
+    assert low_cumulative.growth.coverage == 60.0
+    assert "EVIDENCE_METRICS_EXCLUDED_FROM_SCORE" in low_cumulative.growth.reason_codes
+    cumulative = next(
+        metric for metric in low_cumulative.growth.metrics if metric.metric == "revenue_change_5y"
+    )
+    assert cumulative.available is True
+    assert cumulative.value == 10.0
+
+
+def test_growth_score_uses_only_normalized_growth_and_earnings_metrics():
+    result = FundamentalAnalysisServiceV082.analyze({
+        "revenue_growth": 25.2,
+        "revenue_growth_3y": 33.0,
+        "revenue_change_5y": 242.2,
+        "eps_growth": 126.9,
+    })
+    expected = (
+        FundamentalAnalysisServiceV082._metric_score("revenue_growth", 25.2)
+        + FundamentalAnalysisServiceV082._metric_score("revenue_growth_3y", 33.0)
+        + FundamentalAnalysisServiceV082._metric_score("eps_growth", 126.9)
+    ) / 3
+    assert result.growth.score == expected
+    assert result.growth.coverage == 60.0
