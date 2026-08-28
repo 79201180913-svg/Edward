@@ -126,13 +126,9 @@ class AutonomousCycleService:
         budget_for_state: Callable[[Any], Any],
         result_factory: Callable[[Any], Any],
         max_iterations: int = 50,
+        execution_event_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> AutonomousTradingControlResult:
-        """Run the live autonomous execution loop through the controlled controller.
-
-        The cycle deliberately accepts the existing planning callbacks rather than
-        implementing another market-analysis path. Each completed step invalidates
-        the previous plan and the next callback receives the verified account state.
-        """
+        """Run the live autonomous execution loop through the controlled controller."""
         if self._trading_controller is None:
             raise RuntimeError("AUTONOMOUS_TRADING_CONTROLLER_REQUIRED")
         return self._trading_controller.execute_replanned(
@@ -143,6 +139,7 @@ class AutonomousCycleService:
             budget_for_state=budget_for_state,
             result_factory=result_factory,
             max_iterations=max_iterations,
+            execution_event_callback=execution_event_callback,
         )
 
 
