@@ -13,6 +13,7 @@ from edward.services.news_overlay_service_v081 import NewsOverlayServiceV081
 
 
 def install(app_class: type[Any], client_class: type[Any]) -> None:
+    import edward.ui.analysis_ui_v04 as legacy
     import edward.ui.analysis_ui_v08_runtime as runtime
 
     if getattr(app_class, "_analysis_ui_v081_installed", False):
@@ -117,6 +118,9 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
         window.protocol("WM_DELETE_WINDOW", lambda: (setattr(runtime, "AnalysisPipelineServiceV08", original_pipeline_class), window.destroy()))
 
     runtime._open_analysis_v08 = wrapped
+    # The instrument page button calls analysis_ui_v04._open_analysis directly.
+    # Make v0.8.1 the active entrypoint so the real GUI cannot bypass the multifactor overlay.
+    legacy._open_analysis = wrapped
     app_class._analysis_ui_v081_installed = True
 
 
