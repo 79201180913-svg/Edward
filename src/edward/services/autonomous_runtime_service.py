@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from threading import Event, Lock, Thread
 from time import monotonic
-from typing import Callable
+from typing import Any, Callable
 import traceback
 
 from edward.services.autonomous_run_state_service import (
@@ -28,7 +28,7 @@ class AutonomousRuntimeConfig:
 class AutonomousRuntimeService:
     """Own the long-running autonomous lifecycle around one complete cycle callback."""
 
-    def __init__(self, run_cycle: Callable[[], None], *, state_service: AutonomousRunStateService | None = None, config: AutonomousRuntimeConfig | None = None) -> None:
+    def __init__(self, run_cycle: Callable[[], Any], *, state_service: AutonomousRunStateService | None = None, config: AutonomousRuntimeConfig | None = None) -> None:
         self._run_cycle = run_cycle
         self._state = state_service or AutonomousRunStateService()
         self._config = config or AutonomousRuntimeConfig()
@@ -78,7 +78,7 @@ class AutonomousRuntimeService:
         with self._lock:
             self._thread = None
 
-    def _run_cycle_with_heartbeat(self) -> None:
+    def _run_cycle_with_heartbeat(self) -> Any:
         cycle_stop = Event()
         started = monotonic()
 
@@ -92,10 +92,22 @@ class AutonomousRuntimeService:
         thread = Thread(target=heartbeat, name="edward-autonomous-heartbeat", daemon=True)
         thread.start()
         try:
-            self._run_cycle()
+            return self._run_cycle()
         finally:
             cycle_stop.set()
             thread.join(timeout=1.0)
+
+    @staticmethod
+    def _cycle_summary(result: Any) -> str:
+        """Extract a compact outcome from the facade/controller result for the UI state."""
+        control = getattr(result, "control", result)
+        reason = str(getattr(control, "reason", "") or "").strip()
+        executed = getattr(control, "executed", None)
+        if executed is True:
+            return f"выполнен: {reason or 'COMPLETED'}"
+        if executed is False:
+            return f"не выполнен: {reason or 'NOT_EXECUTED'}"
+        return "завершён"
 
     def _worker(self) -> None:
         while not self._stop.is_set():
@@ -108,7 +120,7 @@ class AutonomousRuntimeService:
             self._state.update(status="EXECUTING", message="Выполняется автономный цикл · прошло 0 сек.")
             _console("[AUTONOMOUS][RUNTIME] cycle started")
             try:
-                self._run_cycle_with_heartbeat()
+                result = self._run_cycle_with_heartbeat()
             except Exception as exc:
                 self._state.set_enabled(False)
                 self._state.update(status="ERROR", message=f"{type(exc).__name__}: {exc}")
@@ -125,8 +137,9 @@ class AutonomousRuntimeService:
 
             elapsed = monotonic() - started
             remaining = max(0.0, self._config.interval_seconds - elapsed)
-            self._state.update(status="WAITING", message=f"Следующий анализ через {remaining:.0f} сек.")
-            _console(f"[AUTONOMOUS][RUNTIME] cycle completed; elapsed={elapsed:.1f}s; next_cycle_in={remaining:.1f}s")
+            summary = self._cycle_summary(result)
+            self._state.update(status="WAITING", message=f"Последний цикл {summary}. Следующий анализ через {remaining:.0f} сек.")
+            _console(f"[AUTONOMOUS][RUNTIME] cycle completed; outcome={summary}; elapsed={elapsed:.1f}s; next_cycle_in={remaining:.1f}s")
             if self._stop.wait(remaining):
                 return
 
