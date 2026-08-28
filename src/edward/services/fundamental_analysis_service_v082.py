@@ -89,6 +89,18 @@ class FundamentalAnalysisServiceV082:
         ),
     }
 
+    # Keep cumulative revenue change visible as evidence, but do not score it
+    # as a second independent growth metric alongside normalized growth rates.
+    SCORE_METRICS = {
+        "growth": (
+            "revenue_growth",
+            "revenue_growth_3y",
+            "revenue_growth_5y",
+            "eps_growth",
+            "ebitda_growth",
+        ),
+    }
+
     STRATEGY_WEIGHTS = {
         "long_term": {
             "business_quality": 0.25,
@@ -131,9 +143,6 @@ class FundamentalAnalysisServiceV082:
         "short-term": "speculative",
     }
 
-    # Metrics whose standard interpretation is not appropriate for banks.
-    # The list is intentionally narrow: a zero is NOT treated as unavailable
-    # unless the instrument context explicitly identifies a bank.
     BANK_NOT_APPLICABLE = frozenset(
         {
             "roic",
@@ -272,22 +281,24 @@ class FundamentalAnalysisServiceV082:
     @classmethod
     def _group(cls, snapshot, name):
         results = tuple(cls._metric(snapshot, m) for m in cls.GROUPS[name])
-        not_applicable = tuple(x for x in results if "METRIC_NOT_APPLICABLE" in x.reason_codes)
-        applicable = tuple(x for x in results if x not in not_applicable)
+        score_metrics = set(cls.SCORE_METRICS.get(name, cls.GROUPS[name]))
+        scoring_results = tuple(x for x in results if x.metric in score_metrics)
+        not_applicable = tuple(x for x in scoring_results if "METRIC_NOT_APPLICABLE" in x.reason_codes)
+        applicable = tuple(x for x in scoring_results if x not in not_applicable)
         available = tuple(x for x in applicable if x.available)
         coverage = len(available) / len(applicable) * 100.0 if applicable else 0.0
+        excluded_from_score = tuple(x for x in results if x.metric not in score_metrics)
 
         if not applicable:
-            return FundamentalGroupResult(
-                name,
-                0.0,
-                0.0,
-                0.0,
-                results,
-                ("ALL_METRICS_NOT_APPLICABLE",),
-            )
+            reasons = ["ALL_METRICS_NOT_APPLICABLE"]
+            if excluded_from_score:
+                reasons.append("EVIDENCE_METRICS_EXCLUDED_FROM_SCORE")
+            return FundamentalGroupResult(name, 0.0, 0.0, 0.0, results, tuple(reasons))
         if not available:
-            return FundamentalGroupResult(name, 0.0, 0.0, 0.0, results, ("GROUP_UNAVAILABLE",))
+            reasons = ["GROUP_UNAVAILABLE"]
+            if excluded_from_score:
+                reasons.append("EVIDENCE_METRICS_EXCLUDED_FROM_SCORE")
+            return FundamentalGroupResult(name, 0.0, 0.0, 0.0, results, tuple(reasons))
 
         score = mean(x.score for x in available)
         reasons = []
@@ -305,19 +316,22 @@ class FundamentalAnalysisServiceV082:
             reasons.append("PARTIAL_DATA_COVERAGE")
         if not_applicable:
             reasons.append("METRICS_NOT_APPLICABLE")
+        if excluded_from_score:
+            reasons.append("EVIDENCE_METRICS_EXCLUDED_FROM_SCORE")
 
         confidence = FundamentalScoringEngineV082.clamp(
             mean(x.confidence for x in available) * coverage / 100.0
         )
         logger.info(
             "[V082 FUNDAMENTAL GROUP] name=%s score=%.2f coverage=%.2f confidence=%.2f "
-            "available=%s not_applicable=%s",
+            "available=%s not_applicable=%s excluded=%s",
             name,
             score,
             coverage,
             confidence,
             tuple(x.metric for x in available),
             tuple(x.metric for x in not_applicable),
+            tuple(x.metric for x in excluded_from_score),
         )
         return FundamentalGroupResult(
             name,
@@ -338,21 +352,11 @@ class FundamentalAnalysisServiceV082:
 
         if not applicable:
             return FundamentalGroupResult(
-                "fundamental_momentum",
-                0.0,
-                0.0,
-                0.0,
-                metrics,
-                ("ALL_METRICS_NOT_APPLICABLE",),
+                "fundamental_momentum", 0.0, 0.0, 0.0, metrics, ("ALL_METRICS_NOT_APPLICABLE",)
             )
         if not available:
             return FundamentalGroupResult(
-                "fundamental_momentum",
-                0.0,
-                0.0,
-                0.0,
-                metrics,
-                ("GROUP_UNAVAILABLE",),
+                "fundamental_momentum", 0.0, 0.0, 0.0, metrics, ("GROUP_UNAVAILABLE",)
             )
 
         g5, g3, g1 = (
@@ -391,21 +395,12 @@ class FundamentalAnalysisServiceV082:
             tuple(x.metric for x in available),
             tuple(x.metric for x in not_applicable),
         )
-        return FundamentalGroupResult(
-            "fundamental_momentum",
-            score,
-            confidence,
-            coverage,
-            metrics,
-            tuple(reasons),
-        )
+        return FundamentalGroupResult("fundamental_momentum", score, confidence, coverage, metrics, tuple(reasons))
 
     @classmethod
     def _weighted_overall(cls, groups, profile):
         defaults = cls.STRATEGY_WEIGHTS[profile]
-        usable = tuple(
-            g for g in groups if g.coverage > 0 and defaults.get(g.name, 0.0) > 0
-        )
+        usable = tuple(g for g in groups if g.coverage > 0 and defaults.get(g.name, 0.0) > 0)
         if not usable:
             return 0.0, 0.0, ()
         total = sum(defaults[g.name] for g in usable)
@@ -423,9 +418,7 @@ class FundamentalAnalysisServiceV082:
         selected = cls._profile(profile)
         if not isinstance(fundamentals, Mapping) or not fundamentals:
             empty = {
-                name: FundamentalGroupResult(
-                    name, 0.0, 0.0, 0.0, (), ("GROUP_UNAVAILABLE",)
-                )
+                name: FundamentalGroupResult(name, 0.0, 0.0, 0.0, (), ("GROUP_UNAVAILABLE",))
                 for name in cls.GROUPS
             }
             return FundamentalAnalysisResult(
