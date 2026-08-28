@@ -142,12 +142,14 @@ def install_autonomous_ui(app_class: type) -> None:
         def render_budget(planning: Any) -> None:
             budget = planning.budget
             source_currency = getattr(budget, "currency", None) or "RUB"
+
             def apply() -> None:
                 card_values["capital"].configure(text=display_money(budget.account_capital, source_currency))
                 card_values["reserve"].configure(text=display_money(budget.reserve, source_currency))
                 card_values["budget"].configure(text=display_money(budget.planning_budget, source_currency))
                 card_values["target"].configure(text=display_money(budget.target_position_value, source_currency))
                 card_values["cash"].configure(text=display_money(budget.investable_cash, source_currency))
+
             self.after(0, apply)
 
         def insert_opportunity(opportunity: Any, scope: str) -> None:
@@ -194,6 +196,7 @@ def install_autonomous_ui(app_class: type) -> None:
 
         def open_portfolio() -> None:
             open_autonomous_portfolio_window(self, self.client, aid, display_currency=str(self.display_currency.get() or "RUB"), opportunities=tuple(latest_portfolio_opportunities))
+
         portfolio_button.configure(command=open_portfolio)
 
         def on_progress(stage: str, percent: float, current: int, total: int) -> None:
@@ -224,13 +227,40 @@ def install_autonomous_ui(app_class: type) -> None:
                 log_ui("Бюджет рассчитан")
             logger.info("autonomous_runtime_budget_published")
 
+        def build_runtime_policy() -> BudgetPlanningPolicy:
+            slots = int(slots_var.get())
+            reserve_pct = Decimal(str(reserve_var.get()).replace(",", "."))
+            return BudgetPlanningPolicy(slots=slots, reserve_pct=reserve_pct)
+
+        def run_runtime_cycle() -> Any:
+            policy = build_runtime_policy()
+            facade = AutonomousTradingRuntimeFacade(
+                self.client,
+                aid,
+                policy=policy,
+                profile=profile_var.get(),
+            )
+            runtime_holder["facade"] = facade
+            logger.info(
+                "autonomous_runtime_cycle_start account_id=%s profile=%s slots=%d reserve_pct=%s",
+                aid,
+                profile_var.get(),
+                policy.slots,
+                policy.reserve_pct,
+            )
+            return facade.run_cycle(
+                max_iterations=50,
+                progress_callback=on_progress,
+                result_callback=autonomous_result_callback,
+                scope_callback=autonomous_scope_callback,
+                planning_callback=autonomous_planning_callback,
+            )
+
         def run_analysis_cycle() -> None:
             try:
-                slots = int(slots_var.get())
-                reserve_pct = Decimal(str(reserve_var.get()).replace(",", "."))
-                policy = BudgetPlanningPolicy(slots=slots, reserve_pct=reserve_pct)
-                logger.info("autonomous_analysis_started account_id=%s profile=%s slots=%d reserve_pct=%s", aid, profile_var.get(), slots, reserve_pct)
-                log_ui(f"Однократный анализ: профиль={profile_var.get()}, слоты={slots}, резерв={reserve_pct}%")
+                policy = build_runtime_policy()
+                logger.info("autonomous_analysis_started account_id=%s profile=%s slots=%d reserve_pct=%s", aid, profile_var.get(), policy.slots, policy.reserve_pct)
+                log_ui(f"Однократный анализ: профиль={profile_var.get()}, слоты={policy.slots}, резерв={policy.reserve_pct}%")
                 service = AutonomousCycleService(AutonomousPlanningService(BalanceService(self.client)), OpportunitySearchService(self.client))
                 active_scope = {"value": "Рынок"}
 
@@ -259,10 +289,8 @@ def install_autonomous_ui(app_class: type) -> None:
             try:
                 logger.info("autonomous_runtime_manual_start account_id=%s profile=%s", aid, profile_var.get())
                 log_ui(f"Запуск автономного цикла: профиль={profile_var.get()}")
-                facade = AutonomousTradingRuntimeFacade(self.client, aid, profile=profile_var.get())
-                runtime_holder["facade"] = facade
-                result = facade.run_cycle(max_iterations=50)
-                control_result = result
+                result = run_runtime_cycle()
+                control_result = getattr(result, "control", result)
                 reason = getattr(control_result, "reason", "") or ""
                 if reason.startswith("PARTIAL_COMPLETED:"):
                     log_ui("⚠️ Часть операций завершилась ошибкой; автономный цикл продолжен.")
@@ -308,16 +336,15 @@ def install_autonomous_ui(app_class: type) -> None:
             if runtime_holder.get("service") is not None:
                 return
             try:
-                facade = AutonomousTradingRuntimeFacade(self.client, aid, profile=profile_var.get())
+                build_runtime_policy()
                 interval_minutes = control.interval_minutes()
                 config = AutonomousRuntimeConfig(interval_seconds=float(interval_minutes * 60))
                 service = AutonomousRuntimeService(
-                    run_cycle=facade.run_cycle,
+                    run_cycle=run_runtime_cycle,
                     state_service=control.state,
                     config=config,
                 )
                 runtime_holder["service"] = service
-                runtime_holder["facade"] = facade
                 service.start()
                 log_ui(f"Автономный runtime запущен; цикл выполняется каждые {interval_minutes} минут.")
                 logger.info("autonomous_runtime_started account_id=%s interval=%s", aid, interval_minutes)
