@@ -119,6 +119,7 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
                     dividend_data=data.dividends,
                     insider_transactions=data.insider_transactions,
                     risk_data=data.risk_data,
+                    instrument_risk_metadata=data.instrument_risk_metadata,
                     session_name=data.session_name,
                 )
                 news_result = NewsIntelligenceServiceV081.analyze(data.news, instrument_uid=str(detail["instrument_uid"]))
