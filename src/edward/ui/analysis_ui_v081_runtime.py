@@ -31,7 +31,8 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
 
         original(app)
         windows = [
-            item for item in app.winfo_children()
+            item
+            for item in app.winfo_children()
             if isinstance(item, tk.Toplevel) and item.title().startswith("Анализ акции v0.8")
         ]
         if not windows:
@@ -39,7 +40,20 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
         window = windows[-1]
 
         panel = ttk.LabelFrame(window, text="v0.8.1 — Multi-Factor Evidence", padding=10)
-        panel.pack(fill="x", padx=16, pady=(0, 10))
+        decision_frame = next(
+            (
+                item
+                for item in window.winfo_children()
+                if isinstance(item, ttk.LabelFrame) and item.cget("text") == "Торговое решение"
+            ),
+            None,
+        )
+        panel.pack(
+            fill="x",
+            padx=16,
+            pady=(0, 10),
+            before=decision_frame,
+        )
         for column in range(5):
             panel.columnconfigure(column, weight=1)
         values = {key: tk.StringVar(value="N/A") for key in (
@@ -118,8 +132,6 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
         window.protocol("WM_DELETE_WINDOW", lambda: (setattr(runtime, "AnalysisPipelineServiceV08", original_pipeline_class), window.destroy()))
 
     runtime._open_analysis_v08 = wrapped
-    # The instrument page button calls analysis_ui_v04._open_analysis directly.
-    # Make v0.8.1 the active entrypoint so the real GUI cannot bypass the multifactor overlay.
     legacy._open_analysis = wrapped
     app_class._analysis_ui_v081_installed = True
 
