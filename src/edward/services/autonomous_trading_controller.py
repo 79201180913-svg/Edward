@@ -96,13 +96,28 @@ class AutonomousTradingController:
             return plan
 
         def execute_one(step: Any) -> Any:
-            sequence = self._execute_sequence(account_id=account_id, plan=AutonomousExecutionPlan(steps=(step,)), result_factory=result_factory, mode=mode)
-            if not sequence.steps:
-                raise RuntimeError("EXECUTION_SEQUENCE_EMPTY")
-            item = sequence.steps[0]
-            if not item.completed:
-                raise RuntimeError(item.reason or "EXECUTION_STEP_FAILED")
-            return item
+            # The plan-level gate protects the plan construction snapshot. Before
+            # the broker call, refresh and validate the exact step again so cash,
+            # slots, positions, conflicting orders and protection state are current.
+            live_state = refresh_state()
+            live_budget = budget_for_state(live_state)
+            single_step_plan = AutonomousExecutionPlan(steps=(step,))
+            allowed, reason, reasons = self._gate(
+                account_id=account_id,
+                mode=mode,
+                plan=single_step_plan,
+                budget=live_budget,
+                state=live_state,
+            )
+            if not allowed:
+                detail = ";".join(reasons) if reasons else reason
+                raise RuntimeError(f"PREFLIGHT_REJECTED:{detail}")
+            return self._execute_sequence(
+                account_id=account_id,
+                plan=single_step_plan,
+                result_factory=result_factory,
+                mode=mode,
+            ).steps[0]
 
         def verify_one(step: Any, execution: Any, state: AccountState) -> Any:
             verification = getattr(execution, "verification", None)
