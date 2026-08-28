@@ -44,12 +44,13 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
         if not windows:
             return
         window = windows[-1]
+        content = getattr(window, "_analysis_content", window)
 
-        panel = ttk.LabelFrame(window, text="v0.8.1 — Multi-Factor Evidence", padding=10)
+        panel = ttk.LabelFrame(content, text="v0.8.1 — Multi-Factor Evidence", padding=10)
         decision_frame = next(
             (
                 item
-                for item in window.winfo_children()
+                for item in content.winfo_children()
                 if isinstance(item, ttk.LabelFrame) and item.cget("text") == "Торговое решение"
             ),
             None,
@@ -84,10 +85,35 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
             detail_window = tk.Toplevel(window)
             detail_window.title("v0.8.2 — Fundamental Analysis")
             detail_window.geometry("980x680")
+            detail_window.minsize(760, 520)
             detail_window.transient(window)
             detail_window.grab_set()
 
-            header = ttk.Frame(detail_window, padding=12)
+            detail_container = ttk.Frame(detail_window)
+            detail_container.pack(fill="both", expand=True)
+            detail_container.rowconfigure(0, weight=1)
+            detail_container.columnconfigure(0, weight=1)
+
+            detail_canvas = tk.Canvas(detail_container, highlightthickness=0)
+            detail_scrollbar = ttk.Scrollbar(detail_container, orient="vertical", command=detail_canvas.yview)
+            detail_canvas.configure(yscrollcommand=detail_scrollbar.set)
+            detail_canvas.grid(row=0, column=0, sticky="nsew")
+            detail_scrollbar.grid(row=0, column=1, sticky="ns")
+
+            detail_content = ttk.Frame(detail_canvas)
+            detail_canvas_window = detail_canvas.create_window((0, 0), window=detail_content, anchor="nw")
+
+            def update_detail_scroll_region(_event: Any = None) -> None:
+                detail_canvas.configure(scrollregion=detail_canvas.bbox("all"))
+
+            def update_detail_width(event: Any) -> None:
+                detail_canvas.itemconfigure(detail_canvas_window, width=event.width)
+                update_detail_scroll_region()
+
+            detail_content.bind("<Configure>", update_detail_scroll_region)
+            detail_canvas.bind("<Configure>", update_detail_width)
+
+            header = ttk.Frame(detail_content, padding=12)
             header.pack(fill="x")
             ttk.Label(
                 header,
@@ -99,7 +125,7 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
             ).pack(anchor="w")
 
             group_table = ttk.Treeview(
-                detail_window,
+                detail_content,
                 columns=("group", "score", "coverage", "confidence"),
                 show="headings",
                 height=7,
@@ -143,7 +169,7 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
                     ),
                 )
 
-            metrics_text = tk.Text(detail_window, height=22, wrap="word")
+            metrics_text = tk.Text(detail_content, height=22, wrap="word")
             metrics_text.pack(fill="both", expand=True, padx=12, pady=(0, 12))
             lines: list[str] = []
             for group in groups:
@@ -162,7 +188,7 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
                 lines.append("")
             metrics_text.insert("1.0", "\n".join(lines))
             metrics_text.configure(state="disabled")
-            ttk.Button(detail_window, text="Закрыть", command=detail_window.destroy).pack(pady=(0, 10))
+            ttk.Button(detail_content, text="Закрыть", command=detail_window.destroy).pack(pady=(0, 10))
 
         fundamental_button = ttk.Button(panel, text="Детализация", command=open_fundamental_detail)
         fundamental_button.grid(row=3, column=0, sticky="w", padx=5, pady=(2, 0))
@@ -176,8 +202,8 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
             runtime._v082_fundamental_detail = v082_fundamental
             factors = result.multifactor
             values["fundamental"].set(
-                f"{factors.fundamentals.quality_score:.1f}"
-                if factors.fundamentals.evidence.available else "N/A"
+                f"{v082_fundamental.overall_score:.1f}"
+                if v082_fundamental.status != "UNAVAILABLE" else "N/A"
             )
             fundamental_button.configure(state="normal" if v082_fundamental.status != "UNAVAILABLE" else "disabled")
             values["micro"].set(f"{factors.microstructure.entry_quality_score:.1f}" if factors.microstructure.evidence.available else "N/A")
