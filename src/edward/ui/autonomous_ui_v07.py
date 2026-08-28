@@ -250,71 +250,47 @@ def install_autonomous_ui(app_class: type) -> None:
                 render_result(result)
             except Exception as exc:
                 logger.exception("autonomous_analysis_failed account_id=%s", aid)
-                self.after(0, lambda: status_var.set(f"Ошибка: {type(exc).__name__}: {exc}"))
-                log_ui(f"ОШИБКА: {type(exc).__name__}: {exc}")
-                self.after(0, lambda: messagebox.showerror("Анализ рынка", str(exc)))
-            finally:
-                self.after(0, lambda: start_button.configure(state="normal"))
+                log_ui(f"Ошибка анализа: {type(exc).__name__}: {exc}")
+                self.after(0, lambda e=exc: status_var.set(f"Ошибка: {e}"))
+
+        start_button.configure(command=lambda: threading.Thread(target=run_analysis_cycle, daemon=True).start())
 
         def run_autonomous_once() -> None:
-            slots = int(slots_var.get())
-            reserve_pct = Decimal(str(reserve_var.get()).replace(",", "."))
-            policy = BudgetPlanningPolicy(slots=slots, reserve_pct=reserve_pct)
-            facade = runtime_holder.get("facade")
-            if facade is None:
-                facade = AutonomousTradingRuntimeFacade(
-                    self.client,
-                    account_id=aid,
-                    policy=policy,
-                    profile=profile_var.get(),
-                    instrument_kind="SHARE",
-                )
+            try:
+                logger.info("autonomous_runtime_manual_start account_id=%s profile=%s", aid, profile_var.get())
+                log_ui(f"Запуск автономного цикла: профиль={profile_var.get()}")
+                facade = AutonomousTradingRuntimeFacade(self.client, aid, profile=profile_var.get())
                 runtime_holder["facade"] = facade
+                result = facade.run_cycle(max_iterations=50)
+                control_result = result
+                reason = getattr(control_result, "reason", "") or ""
+                if reason.startswith("PARTIAL_COMPLETED:"):
+                    log_ui("⚠️ Часть операций завершилась ошибкой; автономный цикл продолжен.")
+                    for item in reason.split(":", 1)[1].split(";"):
+                        log_ui(f"  • {item}")
+                    self.after(0, lambda r=reason: status_var.set(f"Частично выполнено: {r}"))
+                elif reason.startswith("PREFLIGHT_REJECTED"):
+                    log_ui("⚠️ План отклонён preflight-проверкой.")
+                    for item in control_result.preflight_reasons:
+                        log_ui(f"  • {item}")
+                    self.after(0, lambda r=reason: status_var.set(f"План отклонён: {r}"))
+                else:
+                    self.after(0, lambda r=reason: status_var.set(f"Автономный цикл: {r}"))
+                if control_result.replanning is not None:
+                    cycle = control_result.replanning
+                    log_ui(
+                        f"Replan: итераций={cycle.iterations}, "
+                        f"выполнено шагов={len(cycle.executed_steps)}, "
+                        f"завершён={cycle.completed}, "
+                        f"причина={cycle.stopped_reason or 'NONE'}"
+                    )
+                logger.info("autonomous_runtime_manual_completed account_id=%s reason=%s", aid, reason)
+            except Exception as exc:
+                logger.exception("autonomous_runtime_manual_failed account_id=%s", aid)
+                log_ui(f"Ошибка автономного цикла: {type(exc).__name__}: {exc}")
+                self.after(0, lambda e=exc: status_var.set(f"Ошибка автономного цикла: {e}"))
 
-            autonomous_scope["value"] = "Рынок"
-            for item in tree.get_children():
-                tree.delete(item)
-            for item in allocation_tree.get_children():
-                allocation_tree.delete(item)
-            for item in execution_tree.get_children():
-                execution_tree.delete(item)
-            log_ui("Автономный цикл: анализ → план → исполнение → проверка → защита → replan")
-            log_ui("Результаты анализа будут отображаться по мере готовности.")
-            self.after(0, lambda: status_var.set("1/6: обновление состояния счёта..."))
-
-            result = facade.run_cycle(
-                max_iterations=50,
-                progress_callback=on_progress,
-                result_callback=autonomous_result_callback,
-                scope_callback=autonomous_scope_callback,
-                planning_callback=autonomous_planning_callback,
-            )
-            control_result = result.control
-            reason = str(control_result.reason or "")
-            log_ui(f"Автономный цикл завершён: executed={control_result.executed} reason={reason}")
-            if reason.startswith("PROTECTION_RECONCILIATION_FAILED"):
-                log_ui("🛑 Торговля не выполнена: защита портфеля не согласована.")
-                for item in control_result.preflight_reasons:
-                    log_ui(f"  • {item}")
-                self.after(0, lambda r=reason: status_var.set(f"Торговля заблокирована: {r}"))
-            elif reason.startswith("PARTIAL_COMPLETED:"):
-                log_ui("⚠️ Часть операций завершилась ошибкой; автономный цикл продолжен.")
-                for item in reason.split(":", 1)[1].split(";"):
-                    log_ui(f"  • {item}")
-                self.after(0, lambda r=reason: status_var.set(f"Частично выполнено: {r}"))
-            elif reason.startswith("PREFLIGHT_REJECTED"):
-                log_ui("⚠️ План отклонён preflight-проверкой.")
-                for item in control_result.preflight_reasons:
-                    log_ui(f"  • {item}")
-                self.after(0, lambda r=reason: status_var.set(f"План отклонён: {r}"))
-            else:
-                self.after(0, lambda r=reason: status_var.set(f"Автономный цикл: {r}"))
-            if control_result.replanning is not None:
-                cycle = control_result.replanning
-                log_ui(f"Replan: итераций={cycle.iterations}, выполнено шагов={len(cycle.executed_steps)}, ошибок={len(cycle.failed_steps)}")
-            # Controlled business outcomes are already represented by the
-            # control result and must not be converted into runtime exceptions.
-            # Unexpected programming/system errors still propagate normally.
+        refresh_button.configure(command=lambda: threading.Thread(target=run_autonomous_once, daemon=True).start())
 
         def _sync_runtime_status() -> None:
             service = runtime_holder.get("service")
@@ -323,103 +299,56 @@ def install_autonomous_ui(app_class: type) -> None:
                 status = snapshot.status
                 message = snapshot.message
                 if message:
-                    control.status_var.set(f"● {status}: {message}")
-                    status_var.set(message)
+                    status_var.set(f"{status}: {message}")
                 else:
-                    control.status_var.set(f"● {status}")
-                if runtime_holder.get("last_status") != (status, message):
-                    runtime_holder["last_status"] = (status, message)
-                    logger.info("autonomous_runtime_status status=%s message=%s", status, message)
-            if self.winfo_exists():
-                self.after(500, _sync_runtime_status)
+                    status_var.set(status)
+            self.after(1000, _sync_runtime_status)
 
-        def start_analysis() -> None:
-            if not aid:
-                return
-            if control.mode().value == "autonomous" and control.state.snapshot().enabled:
-                return
-            try:
-                int(slots_var.get())
-                Decimal(str(reserve_var.get()).replace(",", "."))
-            except Exception:
-                messagebox.showwarning("Edward", "Проверьте количество слотов и резерв.")
-                return
-            for item in tree.get_children(): tree.delete(item)
-            for item in allocation_tree.get_children(): allocation_tree.delete(item)
-            for item in execution_tree.get_children(): execution_tree.delete(item)
-            latest_portfolio_opportunities.clear()
-            start_button.configure(state="disabled")
-            status_var.set("Подготовка анализа...")
-            threading.Thread(target=run_analysis_cycle, daemon=True, name="edward-autonomous-analysis").start()
-
-        def start_autonomous() -> None:
-            if control.mode().value != "autonomous":
-                messagebox.showwarning("Автономная торговля", "Сначала выберите режим «Автономная торговля».")
-                return
-            try:
-                slots = int(slots_var.get())
-                reserve_pct = Decimal(str(reserve_var.get()).replace(",", "."))
-                policy = BudgetPlanningPolicy(slots=slots, reserve_pct=reserve_pct)
-                interval_seconds = control.interval_minutes() * 60
-            except Exception:
-                messagebox.showwarning("Edward", "Проверьте количество слотов и резерв.")
-                return
+        def start_runtime() -> None:
             if runtime_holder.get("service") is not None:
-                runtime_holder["service"].stop()
-            facade = AutonomousTradingRuntimeFacade(
-                self.client,
-                account_id=aid,
-                policy=policy,
-                profile=profile_var.get(),
-                instrument_kind="SHARE",
-            )
-            runtime = AutonomousRuntimeService(
-                run_cycle=run_autonomous_once,
-                state_service=control.state,
-                config=AutonomousRuntimeConfig(interval_seconds=interval_seconds),
-            )
-            runtime_holder["facade"] = facade
-            runtime_holder["service"] = runtime
-            start_button.configure(state="disabled")
-            status_var.set("Запуск автономной торговли...")
-            log_ui(f"Автономная торговля ВКЛ: интервал={control.interval_minutes()} мин")
-            runtime.start()
+                return
+            try:
+                facade = AutonomousTradingRuntimeFacade(self.client, aid, profile=profile_var.get())
+                config = AutonomousRuntimeConfig(interval_seconds=300.0)
+                service = AutonomousRuntimeService(run_cycle=facade.run_cycle, config=config)
+                runtime_holder["service"] = service
+                runtime_holder["facade"] = facade
+                service.start()
+                log_ui("Автономный runtime запущен; цикл выполняется каждые 300 секунд.")
+                logger.info("autonomous_runtime_started account_id=%s interval=300", aid)
+                _sync_runtime_status()
+            except Exception as exc:
+                logger.exception("autonomous_runtime_start_failed account_id=%s", aid)
+                log_ui(f"Ошибка запуска runtime: {type(exc).__name__}: {exc}")
+                status_var.set(f"Ошибка запуска runtime: {exc}")
 
-        def pause_autonomous() -> None:
-            runtime = runtime_holder.get("service")
-            if runtime is not None:
-                runtime.pause()
-            status_var.set("Автономная торговля на паузе")
-            log_ui("Автономная торговля: ПАУЗА")
-
-        def stop_autonomous() -> None:
-            runtime = runtime_holder.get("service")
-            if runtime is not None:
-                runtime.stop()
-            runtime_holder["service"] = None
-            runtime_holder["facade"] = None
-            start_button.configure(state="normal")
-            status_var.set("Автономная торговля остановлена")
-            log_ui("Автономная торговля: СТОП")
-
-        def on_control_state(state: Any) -> None:
-            if str(getattr(state, "mode", "")) == "analysis" and runtime_holder.get("service") is not None:
-                runtime_holder["service"].stop()
+        def stop_runtime() -> None:
+            service = runtime_holder.get("service")
+            if service is not None:
+                service.stop()
                 runtime_holder["service"] = None
-                runtime_holder["facade"] = None
+                log_ui("Автономный runtime остановлен.")
+                logger.info("autonomous_runtime_stopped account_id=%s", aid)
 
-        control.on_start = start_autonomous
-        control.on_pause = pause_autonomous
-        control.on_stop = stop_autonomous
-        control.on_state = on_control_state
-        start_button.configure(command=start_analysis)
-        refresh_button.configure(command=lambda: self.show_page("autonomous"))
-        log_ui(f"Лог автономного режима: {log_path}")
-        self.after(500, _sync_runtime_status)
+        control.start_command = start_runtime
+        control.stop_command = stop_runtime
+        control.refresh_command = lambda: threading.Thread(target=run_autonomous_once, daemon=True).start()
+        control.log_path = str(log_path)
+        control.status_callback = lambda message: log_ui(str(message))
+
+        self._autonomous_runtime_stop = stop_runtime
+        self.content.after(100, _sync_runtime_status)
 
     def _close(self: Any) -> None:
+        stop = getattr(self, "_autonomous_runtime_stop", None)
+        if stop is not None:
+            try:
+                stop()
+            except Exception:
+                logger.exception("autonomous_runtime_stop_on_close_failed")
         original_close(self)
 
     app_class._shell = _shell
     app_class._page_autonomous = _page_autonomous
     app_class._close = _close
+    logger.info("autonomous_ui_v07_installed log_path=%s", log_path)
