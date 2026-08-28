@@ -1,9 +1,14 @@
-from types import SimpleNamespace
+from datetime import datetime, timezone
 
+from edward.services.analysis_pipeline_service_v08 import AnalysisPipelineV08Result
+from edward.services.confidence_service_v08 import ConfidenceResult
 from edward.services.decision_engine import OpportunityContext
 from edward.services.news_intelligence_service_v081 import NewsIntelligenceServiceV081
 from edward.services.news_overlay_service_v081 import NewsOverlayServiceV081
 from edward.services.opportunity_engine import OpportunityResult
+from edward.services.expected_value_engine_v08 import ExpectedValueEngine
+from edward.services.portfolio_impact_service_v08 import PortfolioImpactResult
+from edward.services.analysis_service import AnalysisResult
 
 
 def _pipeline(score=80.0):
@@ -16,22 +21,20 @@ def _pipeline(score=80.0):
         critical_risk=False,
     )
     opportunity = OpportunityResult(context, score, True, True, "base", None)
-    return SimpleNamespace(opportunity=opportunity)
+    confidence = ConfidenceResult(overall_confidence=60.0, level="Medium", strategy_confidence=60.0, forecast_confidence=60.0, regime_confidence=60.0, portfolio_confidence=60.0)
+    analysis = AnalysisResult(
+        instrument_uid="UID", ticker="TEST", profile="medium_term", risk_profile="balanced", horizon="medium",
+        market_regime="TREND_UP", recommendation="HOLD", confidence="Medium", score=score,
+        strategies=(), explanation="base", created_at=datetime.now(timezone.utc), analysis_version="0.8.0",
+    )
+    impact = PortfolioImpactResult(0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    return AnalysisPipelineV08Result(analysis, opportunity, ExpectedValueEngine.from_returns((1.0, -0.5)), impact, confidence=confidence)
 
 
 def test_priority_news_reduces_score_and_can_block_entry():
     news = NewsIntelligenceServiceV081.analyze(
-        [
-            {"id": 1, "title": "important", "priority": True, "ts": "2026-08-28T10:00:00Z"},
-            {"id": 2, "title": "important", "priority": True, "ts": "2026-08-28T11:00:00Z"},
-            {"id": 3, "title": "important", "priority": True, "ts": "2026-08-28T12:00:00Z"},
-            {"id": 4, "title": "important", "priority": True, "ts": "2026-08-28T13:00:00Z"},
-            {"id": 5, "title": "important", "priority": True, "ts": "2026-08-28T14:00:00Z"},
-            {"id": 6, "title": "important", "priority": True, "ts": "2026-08-28T15:00:00Z"},
-            {"id": 7, "title": "important", "priority": True, "ts": "2026-08-28T16:00:00Z"},
-            {"id": 8, "title": "important", "priority": True, "ts": "2026-08-28T17:00:00Z"},
-        ],
-        as_of="2026-08-28T18:00:00+00:00" if False else None,
+        [{"id": i, "title": "important", "priority": True, "ts": f"2026-08-28T{10+i:02d}:00:00Z"} for i in range(8)],
+        as_of=datetime(2026, 8, 28, 18, tzinfo=timezone.utc),
     )
 
     adjusted, overlay = NewsOverlayServiceV081.apply(_pipeline(), news)
