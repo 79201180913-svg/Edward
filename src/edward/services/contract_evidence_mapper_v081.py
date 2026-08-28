@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any, Mapping
 
 
 def _get(data: Any, *names: str, default: Any = None) -> Any:
     for name in names:
-        if isinstance(data, Mapping) and name in data:
-            return data[name]
+        if isinstance(data, Mapping):
+            if name in data:
+                return data[name]
+            continue
         if hasattr(data, name):
             return getattr(data, name)
     return default
@@ -48,7 +49,6 @@ def map_fundamentals(statistics: Any) -> dict[str, float | None]:
         "ebitda_growth": quotation_to_float(_get(statistics, "ebitda_change_five_years")),
         "net_debt_to_ebitda": quotation_to_float(_get(statistics, "net_debt_to_ebitda")),
         "current_ratio": quotation_to_float(_get(statistics, "current_ratio_mrq")),
-        # Normalize cash flow to a margin-like percentage before it reaches the generic scorer.
         "free_cash_flow": (fcf / revenue * 100.0) if fcf is not None and revenue not in (None, 0) else None,
         "pe": quotation_to_float(_get(statistics, "pe_ratio_ttm")),
         "ps": quotation_to_float(_get(statistics, "price_to_sales_ttm")),
@@ -62,9 +62,12 @@ def map_fundamentals(statistics: Any) -> dict[str, float | None]:
 
 
 def map_risk_rates(risk_response: Any) -> dict[str, Any]:
-    items = _get(risk_response, "risk_rates", "items", default=None)
-    if items is None:
-        items = risk_response if isinstance(risk_response, list) else []
+    if isinstance(risk_response, Mapping):
+        items = risk_response.get("risk_rates") or risk_response.get("instrument_risk_rates") or risk_response.get("items") or []
+    elif isinstance(risk_response, list):
+        items = risk_response
+    else:
+        items = getattr(risk_response, "risk_rates", None) or getattr(risk_response, "instrument_risk_rates", None) or getattr(risk_response, "items", None) or []
     if not items:
         return {}
     first = items[0]
