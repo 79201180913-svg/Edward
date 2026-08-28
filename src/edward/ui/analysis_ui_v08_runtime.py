@@ -117,7 +117,7 @@ def _open_analysis_v08(app: Any) -> None:
         metric_vars["forecast"].set("N/A" if pipeline_result.forecast_quality_score is None else f"{pipeline_result.forecast_quality_score:.1f}")
         regime_text = result.market_regime
         if pipeline_result.regime_confidence is not None:
-            regime_text += f" ({pipeline_result.regime_confidence:.0f}%)"
+            regime_text += f" (confidence {pipeline_result.regime_confidence:.0f}%)"
         metric_vars["regime"].set(regime_text)
         metric_vars["portfolio"].set(f"{pipeline_result.portfolio_impact.portfolio_impact_score:.1f}" if pipeline_result.portfolio_context_available else "N/A")
         metric_vars["confidence"].set((f"{confidence.overall_confidence:.1f} — {confidence.level}") if confidence is not None else "N/A")
@@ -151,10 +151,23 @@ def _open_analysis_v08(app: Any) -> None:
         reason_var.set(reason)
         explanation.configure(state="normal")
         explanation.delete("1.0", "end")
-        ev_note = "EV: недоступен — нет реализованных исходов." if not ev.available else f"EV: {ev.expected_value_pct:+.2f}% на {ev.observations} наблюдениях; Avg Win {ev.average_win_pct:+.2f}%, Avg Loss -{ev.average_loss_pct:.2f}%."
-        portfolio_note = "Portfolio Impact: N/A — портфельный контекст не передан." if not pipeline_result.portfolio_context_available else f"Portfolio Impact: {pipeline_result.portfolio_impact.portfolio_impact_score:.1f}."
-        confidence_note = f"Confidence: {confidence.overall_confidence:.1f} ({confidence.level})." if confidence is not None else "Confidence: N/A."
-        explanation.insert("1.0", pipeline_result.opportunity.explanation + "\n\n" + result.explanation + f"\n\n{ev_note} {portfolio_note} {confidence_note}")
+        evidence = pipeline_result.evidence_strategy or "N/A"
+        strategy_item = next((item for item in result.strategies if item.strategy == pipeline_result.evidence_strategy), None)
+        strategy_score = strategy_item.score if strategy_item is not None else None
+        risk_score = getattr(getattr(pipeline_result.opportunity, "risk", None), "score", None)
+        lines = [
+            f"Evidence strategy: {evidence}",
+            f"Strategy score: {strategy_score:.1f}" if strategy_score is not None else "Strategy score: N/A",
+            f"Robustness: {strategy_item.stability:.1f}" if strategy_item is not None else "Robustness: N/A",
+            f"Regime: {result.market_regime}; regime confidence: {pipeline_result.regime_confidence:.1f}%" if pipeline_result.regime_confidence is not None else f"Regime: {result.market_regime}; regime confidence: N/A",
+            f"Risk score: {risk_score:.1f}" if risk_score is not None else "Risk score: N/A",
+            f"EV: {ev.expected_value_pct:+.2f}% across {ev.observations} realized outcomes" if ev.available else "EV: N/A — no realized outcomes",
+            f"Avg Win: {ev.average_win_pct:+.2f}%; Avg Loss: -{ev.average_loss_pct:.2f}%" if ev.available else "Avg Win/Loss: N/A",
+            f"Portfolio Impact: {pipeline_result.portfolio_impact.portfolio_impact_score:.1f}" if pipeline_result.portfolio_context_available else "Portfolio Impact: N/A — portfolio context was not supplied",
+            f"Confidence: {confidence.overall_confidence:.1f} ({confidence.level})" if confidence is not None else "Confidence: N/A",
+            f"Decision: {decision.value} — {reason}",
+        ]
+        explanation.insert("1.0", "\n".join(lines))
         explanation.configure(state="disabled")
 
     def run() -> None:
