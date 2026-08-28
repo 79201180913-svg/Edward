@@ -28,6 +28,12 @@ def _console(message: str) -> None:
     print(message, flush=True)
 
 
+DEFAULT_AUTONOMOUS_POLICY = BudgetPlanningPolicy(
+    slots=5,
+    reserve_pct=Decimal("10"),
+)
+
+
 class _EnginePreTradeValidator:
     """Reuse ExecutionEngine's existing validation as the controlled pre-trade gate."""
 
@@ -60,16 +66,13 @@ class AutonomousTradingRuntimeFacade:
         client: TInvestAdapterClient,
         account_id: str,
         *,
-        policy: BudgetPlanningPolicy | None = None,
+        policy: BudgetPlanningPolicy = DEFAULT_AUTONOMOUS_POLICY,
         profile: str = "medium_term",
         instrument_kind: str = "SHARE",
     ) -> None:
         self.client = client
         self.account_id = str(account_id)
-        # Keep the facade backward-compatible with the current UI wiring.
-        # The UI defaults are 5 slots / 10% reserve; the actual budget is still
-        # calculated from the live account state by BudgetPlanningService.
-        self.policy = policy or BudgetPlanningPolicy(slots=5, reserve_pct=Decimal("10"))
+        self.policy = policy
         self.profile = profile
         self.instrument_kind = instrument_kind
 
@@ -203,4 +206,4 @@ class AutonomousTradingRuntimeFacade:
         raise RuntimeError(f"FRESH_OPPORTUNITY_NOT_FOUND:{step.instrument_uid}")
 
 
-__all__ = ["AutonomousRuntimeResult", "AutonomousTradingRuntimeFacade"]
+__all__ = ["AutonomousRuntimeResult", "AutonomousTradingRuntimeFacade", "DEFAULT_AUTONOMOUS_POLICY"]
