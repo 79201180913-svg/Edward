@@ -65,6 +65,23 @@ class ContractAnalysisDataServiceV081:
                 return value[0] if isinstance(value, list) and value else value
         return None
 
+    @classmethod
+    def _first_recursive(cls, payload: Any, *keys: str, max_depth: int = 3) -> Any:
+        """Find a named contract wrapper without changing the mapped payload shape."""
+        value = cls._first(payload, *keys)
+        if value is not None:
+            return value
+        if max_depth <= 0 or not isinstance(payload, dict):
+            return None
+        for wrapper in ("response", "data", "result", "payload"):
+            nested = cls._first(payload, wrapper)
+            if nested is None or nested is payload:
+                continue
+            value = cls._first_recursive(nested, *keys, max_depth=max_depth - 1)
+            if value is not None:
+                return value
+        return None
+
     @staticmethod
     def _many(payload: Any, *keys: str) -> list[Any]:
         if isinstance(payload, list):
@@ -169,6 +186,7 @@ class ContractAnalysisDataServiceV081:
         start = now - timedelta(days=365)
         fetched: list[str] = []
         failed: list[str] = []
+        unavailable: list[str] = []
 
         def call(name: str, fn, default=None):
             try:
@@ -191,12 +209,12 @@ class ContractAnalysisDataServiceV081:
         raw_news = call("news", lambda: self.client.get_news(1000), {})
         raw_schedules = call("trading_schedules", lambda: self.client.get_trading_schedules(from_dt=now, to_dt=now + timedelta(days=2)), {})
 
-        fundamentals_raw = self._first(raw_fundamentals, "fundamentals", "statistics")
-        reports_raw = self._many(raw_reports, "events", "reports")
-        insiders_raw = self._many(raw_insiders, "insider_deals", "insiders")
-        dividends_raw = self._many(raw_dividends, "dividends")
-        signals_raw = self._many(raw_signals, "signals")
-        news_raw = self._many(raw_news, "items", "news")
+        fundamentals_raw = self._first_recursive(raw_fundamentals, "fundamentals", "statistics", "asset_fundamentals")
+        reports_raw = self._many(self._first_recursive(raw_reports, "events", "reports") or raw_reports, "events", "reports")
+        insiders_raw = self._many(self._first_recursive(raw_insiders, "insider_deals", "insiders") or raw_insiders, "insider_deals", "insiders")
+        dividends_raw = self._many(self._first_recursive(raw_dividends, "dividends") or raw_dividends, "dividends")
+        signals_raw = self._many(self._first_recursive(raw_signals, "signals") or raw_signals, "signals")
+        news_raw = self._many(self._first_recursive(raw_news, "items", "news") or raw_news, "items", "news")
 
         instrument_candidate = self._instrument_candidate(raw_instrument)
         mapped_instrument_risk = map_instrument_risk(instrument_candidate)
@@ -221,20 +239,21 @@ class ContractAnalysisDataServiceV081:
         session_available = "trading_schedules" in fetched and session_name is not None
 
         if raw_fundamentals not in ({}, None) and mapped_fundamentals is None:
-            failed.append("fundamentals_mapping")
+            unavailable.append("fundamentals")
+            logger.warning("[V081 FUNDAMENTALS UNAVAILABLE] instrument_uid=%s raw_type=%s", instrument_uid, type(raw_fundamentals).__name__)
         if raw_risk not in ({}, None) and mapped_risk_rates is None:
-            failed.append("risk_rates_mapping")
+            unavailable.append("risk_rates")
         if raw_instrument not in ({}, None) and mapped_instrument_risk is None:
-            failed.append("instrument_mapping")
+            unavailable.append("instrument")
         schedule_items = self._many(raw_schedules, "exchanges", "schedules", "items")
         if schedule_items and session_name is None:
-            failed.append("trading_schedules_mapping")
+            unavailable.append("trading_schedules")
         if raw_reports not in ({}, None) and not reports_raw:
-            failed.append("reports_mapping")
+            unavailable.append("reports")
         if raw_insiders not in ({}, None) and not insiders_raw:
-            failed.append("insiders_mapping")
+            unavailable.append("insiders")
         if raw_news not in ({}, None) and not news_raw:
-            failed.append("news_mapping")
+            unavailable.append("news")
 
         return ContractAnalysisDataV081(
             fundamentals=mapped_fundamentals,
@@ -251,7 +270,7 @@ class ContractAnalysisDataServiceV081:
             session_available=session_available,
             fetched_sources=tuple(fetched),
             failed_sources=tuple(failed),
-            unavailable_sources=(),
+            unavailable_sources=tuple(dict.fromkeys(unavailable)),
         )
 
 
