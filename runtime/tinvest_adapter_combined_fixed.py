@@ -25,7 +25,7 @@ def _orders(self, account_id):
 def _order_state(self, account_id, order_id):
     if _adapter.ENVIRONMENT != "sandbox":
         return _adapter.message_to_dict(self._service("orders").get_order_state(account_id=str(account_id), order_id=str(order_id)))
-    return self._rest_request("SandboxService/GetSandboxOrderState", {"accountId": str(account_id), "orderId": str(order_id), "orderIdType": "ORDER_ID_TYPE_UNSPECIFIED", "priceType": "PRICE_TYPE_CURRENCY"})
+    return _adapter._rest_request("SandboxService/GetSandboxOrderState", {"accountId": str(account_id), "orderId": str(order_id), "orderIdType": "ORDER_ID_TYPE_UNSPECIFIED", "priceType": "PRICE_TYPE_CURRENCY"})
 
 
 def _create_order(self, payload):
@@ -94,5 +94,9 @@ _adapter.AdapterState.get_stop_orders = _stop_orders
 _adapter.AdapterState.cancel_stop_order = _cancel_stop_order
 
 tinvest_candles_patch.install(_adapter)
+
+import tinvest_multifactor_patch_v081
+
+tinvest_multifactor_patch_v081.install()
 
 if __name__ == "__main__": _adapter.main()
