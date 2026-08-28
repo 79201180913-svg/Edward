@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
+import logging
 
 from edward.api.tinvest_adapter_client import TInvestAdapterClient
 from edward.services.contract_evidence_mapper_v081 import (
@@ -16,6 +17,9 @@ from edward.services.contract_evidence_mapper_v081 import (
     map_signal,
     map_trades,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,7 +198,15 @@ class ContractAnalysisDataServiceV081:
         signals_raw = self._many(raw_signals, "signals")
         news_raw = self._many(raw_news, "items", "news")
 
-        mapped_instrument_risk = map_instrument_risk(self._instrument_candidate(raw_instrument))
+        instrument_candidate = self._instrument_candidate(raw_instrument)
+        mapped_instrument_risk = map_instrument_risk(instrument_candidate)
+        logger.warning(
+            "[V081 INSTRUMENT RISK METADATA] instrument_uid=%s raw_type=%s raw_keys=%s mapped=%r",
+            instrument_uid,
+            type(instrument_candidate).__name__,
+            list(instrument_candidate.keys()) if isinstance(instrument_candidate, dict) else None,
+            mapped_instrument_risk,
+        )
         mapped_fundamentals = map_fundamentals(fundamentals_raw)
         mapped_order_book = map_order_book(raw_order_book)
         mapped_risk_rates = map_risk_rates(raw_risk)
