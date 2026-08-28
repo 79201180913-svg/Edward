@@ -38,46 +38,70 @@ class MultiFactorOverlayServiceV081:
         base_score = float(pipeline.opportunity.score)
         base_confidence = float(pipeline.confidence.overall_confidence) if pipeline.confidence is not None else 0.0
 
-        positive_quality = (
-            factors.fundamentals.quality_score * 0.18
-            + factors.microstructure.entry_quality_score * 0.15
-            + (factors.volume_pressure.accumulation_score if factors.volume_pressure.evidence.available else 50.0) * 0.08
-            + factors.signals.evidence.quality * 0.10
-            + factors.dividends.evidence.quality * 0.05
-            + factors.insider.evidence.quality * 0.05
-            + factors.session.quality_score * 0.08
-            + factors.portfolio.evidence.quality * 0.08
-        ) / 0.77
-        event_penalty = factors.event_risk.event_risk_score * 0.12
-        instrument_penalty = max(0.0, factors.instrument_risk.risk_score - 50.0) * 0.10
-        conflict_penalty = factors.conflict_penalty * 0.50
-        reliability_discount = max(0.0, 60.0 - factors.aggregate_reliability_score) * 0.10
+        weighted_sources = (
+            ("fundamental", factors.fundamentals.evidence, 0.22),
+            ("microstructure", factors.microstructure.evidence, 0.18),
+            ("volume_pressure", factors.volume_pressure.evidence, 0.10),
+            ("signals", factors.signals.evidence, 0.12),
+            ("dividends", factors.dividends.evidence, 0.06),
+            ("insiders", factors.insider.evidence, 0.05),
+            ("session", factors.session.evidence, 0.08),
+            ("portfolio", factors.portfolio.evidence, 0.10),
+        )
+        available = [(name, evidence, weight) for name, evidence, weight in weighted_sources if evidence.available]
+        if available:
+            total_weight = sum(weight for _, _, weight in available)
+            support_quality = 0.0
+            for _, evidence, weight in available:
+                value = evidence.quality
+                if evidence.direction == "NEGATIVE":
+                    value = 100.0 - value
+                elif evidence.direction == "NEUTRAL":
+                    value = 50.0
+                support_quality += value * weight
+            support_quality /= total_weight
+        else:
+            support_quality = 50.0
 
-        adjustment = (positive_quality - 50.0) * 0.30 - event_penalty - instrument_penalty - conflict_penalty - reliability_discount
+        event_penalty = factors.event_risk.event_risk_score * 0.12 if factors.event_risk.evidence.available else 0.0
+        instrument_penalty = max(0.0, factors.instrument_risk.risk_score - 50.0) * 0.10 if factors.instrument_risk.evidence.available else 0.0
+        conflict_penalty = factors.conflict_penalty * 0.50
+        reliability_discount = max(0.0, 60.0 - factors.aggregate_reliability_score) * 0.10 if available else 0.0
+
+        adjustment = (support_quality - 50.0) * 0.30 - event_penalty - instrument_penalty - conflict_penalty - reliability_discount
         adjusted_score = _clamp(base_score + adjustment)
 
-        entry_quality = _clamp(
-            pipeline.opportunity.entry_signal * 100.0 * 0.45
-            + factors.microstructure.entry_quality_score * 0.35
-            + (factors.volume_pressure.accumulation_score if factors.volume_pressure.evidence.available else 50.0) * 0.10
-            + factors.session.quality_score * 0.10
-        )
-        risk_adjustment = _clamp(50.0 + (factors.instrument_risk.risk_score - 50.0) * 0.7 - factors.event_risk.event_risk_score * 0.25)
+        entry_components = [(100.0 if pipeline.opportunity.entry_signal else 35.0, 0.45)]
+        if factors.microstructure.evidence.available:
+            entry_components.append((factors.microstructure.entry_quality_score, 0.35))
+        if factors.volume_pressure.evidence.available:
+            entry_components.append((factors.volume_pressure.accumulation_score, 0.10))
+        if factors.session.evidence.available:
+            entry_components.append((factors.session.quality_score, 0.10))
+        total_entry_weight = sum(weight for _, weight in entry_components)
+        entry_quality = _clamp(sum(score * weight for score, weight in entry_components) / total_entry_weight)
 
-        confidence_delta = (factors.aggregate_reliability_score - 50.0) * 0.12 - factors.conflict_penalty * 0.50
-        if not factors.session.is_execution_allowed:
+        risk_adjustment = 50.0
+        if factors.instrument_risk.evidence.available:
+            risk_adjustment += (factors.instrument_risk.risk_score - 50.0) * 0.7
+        if factors.event_risk.evidence.available:
+            risk_adjustment -= factors.event_risk.event_risk_score * 0.25
+        risk_adjustment = _clamp(risk_adjustment)
+
+        confidence_delta = ((factors.aggregate_reliability_score - 50.0) * 0.12 if available else 0.0) - conflict_penalty
+        if factors.session.evidence.available and not factors.session.is_execution_allowed:
             confidence_delta -= 10.0
         adjusted_confidence = _clamp(base_confidence + confidence_delta)
 
         blocked = False
         block_reason = None
-        if factors.session.session == "CLEARING":
+        if factors.session.evidence.available and factors.session.session == "CLEARING":
             blocked = True
             block_reason = "TRADING_SESSION_BLOCK"
         elif factors.instrument_risk.evidence.available and factors.instrument_risk.risk_score >= 90.0:
             blocked = True
             block_reason = "INSTRUMENT_RISK_TOO_HIGH"
-        elif factors.event_risk.event_risk_score >= 95.0:
+        elif factors.event_risk.evidence.available and factors.event_risk.event_risk_score >= 95.0:
             blocked = True
             block_reason = "CORPORATE_EVENT_RISK"
 
