@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import replace
 from typing import Any
 
 from edward.services.robust_contract_analysis_data_service_v081 import RobustContractAnalysisDataServiceV081
@@ -9,6 +8,11 @@ from edward.services.robust_contract_analysis_data_service_v081 import RobustCon
 
 class SemanticRobustContractAnalysisDataServiceV081(RobustContractAnalysisDataServiceV081):
     """Classify valid empty contract collections as unavailable, not mapping errors."""
+
+    _DIRECT_FIELD_GROUPS = {
+        **RobustContractAnalysisDataServiceV081._DIRECT_FIELD_GROUPS,
+        "microstructure": {"bids", "asks", "price", "quantity"},
+    }
 
     @classmethod
     def _walk(cls, value: Any, *, max_depth: int = 12):
@@ -92,8 +96,8 @@ class SemanticRobustContractAnalysisDataServiceV081(RobustContractAnalysisDataSe
         deduped = tuple(dict.fromkeys(diagnostics))
 
         if hasattr(result, "unavailable_sources"):
-            result = replace(result, unavailable_sources=deduped)
-        result = replace(result, failed_sources=tuple(sorted(failed)))
+            result = result.__class__(**{**result.__dict__, "unavailable_sources": deduped}) if hasattr(result, "__dict__") else result
+        result = result.__class__(**{**result.__dict__, "failed_sources": tuple(sorted(failed))}) if hasattr(result, "__dict__") else result
         return result
 
 
