@@ -95,11 +95,17 @@ def _get_instrument(self, instrument_id):
             "id": instrument_id,
         },
     )
+    instrument = result.get("instrument") if isinstance(result, dict) else None
+    risk_fields = {}
+    if isinstance(instrument, dict):
+        for key in ("dlong", "dshort", "dlong_min", "dshort_min", "dlong_client", "dshort_client", "short_enabled_flag"):
+            risk_fields[key] = instrument.get(key)
     _adapter.logger.info(
-        "[INSTRUMENT LOOKUP] instrument_uid=%s found=%s keys=%s",
+        "[INSTRUMENT LOOKUP] instrument_uid=%s found=%s keys=%s risk_fields=%s",
         instrument_id,
         bool(result),
         list(result.keys()) if isinstance(result, dict) else type(result).__name__,
+        risk_fields,
     )
     return result
 
