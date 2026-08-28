@@ -39,7 +39,6 @@ class AutonomousControlPanel:
         self.mode_var = tk.StringVar(value="analysis")
         self.interval_var = tk.StringVar(value="5 мин")
         self.status_var = tk.StringVar(value="Готово")
-
         ttk.Radiobutton(self.frame, text="Только анализ", value="analysis", variable=self.mode_var, command=self._mode_changed).pack(side="left", padx=(0, 10))
         ttk.Radiobutton(self.frame, text="Автономная торговля", value="autonomous", variable=self.mode_var, command=self._mode_changed).pack(side="left", padx=(0, 12))
         ttk.Label(self.frame, text="Интервал:").pack(side="left")
@@ -53,7 +52,6 @@ class AutonomousControlPanel:
         self.stop_button = ttk.Button(self.frame, text="■ Остановить", command=self._stop_clicked)
         self.stop_button.pack(side="left", padx=(0, 12))
         ttk.Label(self.frame, textvariable=self.status_var).pack(side="left")
-
         monitor = ttk.LabelFrame(parent, text="Исполнение автономных сделок", padding=6)
         monitor.pack(fill="x", pady=(0, 10))
         columns = ("№", "Действие", "Тикер", "Статус", "Execution ID", "Причина")
@@ -63,7 +61,6 @@ class AutonomousControlPanel:
             self.execution_tree.heading(column, text=column)
             self.execution_tree.column(column, width=widths[column], anchor="w")
         self.execution_tree.pack(fill="x")
-
         self.frame.after(250, self._poll_runtime_state)
         self._refresh_controls()
 
@@ -76,6 +73,11 @@ class AutonomousControlPanel:
         global _GLOBAL_EXECUTION_EVENT_SINK
         self._status_callback = callback
         _GLOBAL_EXECUTION_EVENT_SINK = self._handle_execution_event
+        try:
+            from edward.services.autonomous_trading_runtime_facade import AutonomousTradingRuntimeFacade
+            AutonomousTradingRuntimeFacade.set_execution_event_sink(self._handle_execution_event)
+        except Exception:
+            pass
 
     def _handle_execution_event(self, event: dict[str, Any]) -> None:
         sequence = int(event.get("sequence", 0) or 0)
@@ -107,81 +109,54 @@ class AutonomousControlPanel:
         except Exception:
             pass
 
-    def pack(self, **kwargs: Any) -> None:
-        self.frame.pack(**kwargs)
-
-    def grid(self, **kwargs: Any) -> None:
-        self.frame.grid(**kwargs)
+    def pack(self, **kwargs: Any) -> None: self.frame.pack(**kwargs)
+    def grid(self, **kwargs: Any) -> None: self.frame.grid(**kwargs)
 
     def _mode_changed(self) -> None:
         mode = AutonomousRunMode.AUTONOMOUS if self.mode_var.get() == "autonomous" else AutonomousRunMode.ANALYSIS
         self.state.set_mode(mode)
-        if mode is AutonomousRunMode.ANALYSIS and self.state.snapshot().enabled:
-            self.state.set_enabled(False)
-        self._refresh_controls()
-        self._notify()
+        if mode is AutonomousRunMode.ANALYSIS and self.state.snapshot().enabled: self.state.set_enabled(False)
+        self._refresh_controls(); self._notify()
 
     def _interval_changed(self, _event: Any = None) -> None:
-        print(f"[AUTONOMOUS][UI] interval selected: {self.interval_var.get()}", flush=True)
-        self._notify()
+        print(f"[AUTONOMOUS][UI] interval selected: {self.interval_var.get()}", flush=True); self._notify()
 
     def _start_clicked(self) -> None:
         print(f"[AUTONOMOUS][UI] start button pressed; interval={self.interval_minutes()}m", flush=True)
-        self.state.set_enabled(True)
-        self._refresh_controls()
-        self._notify()
-        if self.start_command is not None:
-            self.start_command()
-        elif self.on_start is not None:
-            self.on_start()
+        self.state.set_enabled(True); self._refresh_controls(); self._notify()
+        if self.start_command is not None: self.start_command()
+        elif self.on_start is not None: self.on_start()
 
     def _pause_clicked(self) -> None:
         print("[AUTONOMOUS][UI] pause button pressed", flush=True)
-        self.state.set_enabled(False)
-        self._refresh_controls()
-        self._notify()
-        if self.pause_command is not None:
-            self.pause_command()
-        elif self.on_pause is not None:
-            self.on_pause()
+        self.state.set_enabled(False); self._refresh_controls(); self._notify()
+        if self.pause_command is not None: self.pause_command()
+        elif self.on_pause is not None: self.on_pause()
 
     def _stop_clicked(self) -> None:
         print("[AUTONOMOUS][UI] stop button pressed", flush=True)
-        self.state.set_enabled(False)
-        self._refresh_controls()
-        self._notify()
-        if self.stop_command is not None:
-            self.stop_command()
-        elif self.on_stop is not None:
-            self.on_stop()
+        self.state.set_enabled(False); self._refresh_controls(); self._notify()
+        if self.stop_command is not None: self.stop_command()
+        elif self.on_stop is not None: self.on_stop()
 
     def _refresh_controls(self) -> None:
-        snapshot = self.state.snapshot()
-        autonomous = snapshot.mode is AutonomousRunMode.AUTONOMOUS
-        enabled = bool(snapshot.enabled)
+        snapshot = self.state.snapshot(); autonomous = snapshot.mode is AutonomousRunMode.AUTONOMOUS; enabled = bool(snapshot.enabled)
         self.interval_combo.configure(state="readonly" if autonomous else "disabled")
         self.start_button.configure(state="normal" if autonomous and not enabled else "disabled")
         self.pause_button.configure(state="normal" if autonomous and enabled else "disabled")
         self.stop_button.configure(state="normal" if autonomous and enabled else "disabled")
-        if not autonomous:
-            self.status_var.set("Режим анализа: автономное исполнение выключено")
-        elif snapshot.message:
-            self.status_var.set(f"{snapshot.status}: {snapshot.message}")
-        elif enabled:
-            self.status_var.set("● АВТОНОМНАЯ ТОРГОВЛЯ РАБОТАЕТ")
-        else:
-            self.status_var.set("Автономная торговля не запущена")
+        if not autonomous: self.status_var.set("Режим анализа: автономное исполнение выключено")
+        elif snapshot.message: self.status_var.set(f"{snapshot.status}: {snapshot.message}")
+        elif enabled: self.status_var.set("● АВТОНОМНАЯ ТОРГОВЛЯ РАБОТАЕТ")
+        else: self.status_var.set("Автономная торговля не запущена")
 
     def _poll_runtime_state(self) -> None:
-        try:
-            self._refresh_controls()
+        try: self._refresh_controls()
         finally:
-            if self.frame.winfo_exists():
-                self.frame.after(250, self._poll_runtime_state)
+            if self.frame.winfo_exists(): self.frame.after(250, self._poll_runtime_state)
 
     def _notify(self) -> None:
-        if self.on_state is not None:
-            self.on_state(self.state.snapshot())
+        if self.on_state is not None: self.on_state(self.state.snapshot())
 
     def mode(self) -> ExecutionMode:
         return ExecutionMode.AUTONOMOUS if self.state.snapshot().mode is AutonomousRunMode.AUTONOMOUS else ExecutionMode.ANALYSIS_ONLY
