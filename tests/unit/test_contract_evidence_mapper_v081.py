@@ -2,6 +2,7 @@ from edward.services.contract_evidence_mapper_v081 import (
     map_dividend,
     map_fundamentals,
     map_insider,
+    map_instrument_risk,
     map_news,
     map_order_book,
     map_risk_rates,
@@ -22,6 +23,8 @@ def test_fundamentals_mapper_uses_contract_field_names_and_fcf_margin():
             "roic": 15.0,
             "net_margin_mrq": 10.0,
             "one_year_annual_revenue_growth_rate": 12.0,
+            "three_year_annual_revenue_growth_rate": 9.0,
+            "five_year_annual_revenue_growth_rate": 7.0,
             "eps_change_five_years": 30.0,
             "ebitda_change_five_years": 25.0,
             "net_debt_to_ebitda": 1.0,
@@ -40,6 +43,8 @@ def test_fundamentals_mapper_uses_contract_field_names_and_fcf_margin():
 
     assert result["net_margin"] == 10.0
     assert result["revenue_growth"] == 12.0
+    assert result["revenue_growth_3y"] == 9.0
+    assert result["revenue_growth_5y"] == 7.0
     assert result["eps_growth"] == 30.0
     assert result["free_cash_flow"] == 12.0
     assert result["pe"] == 10.0
@@ -52,6 +57,7 @@ def test_mapper_accepts_protobuf_json_camel_case():
             "roic": 15.0,
             "netMarginMrq": 10.0,
             "oneYearAnnualRevenueGrowthRate": 12.0,
+            "fiveYearAnnualRevenueGrowthRate": 7.0,
             "epsChangeFiveYears": 30.0,
             "ebitdaChangeFiveYears": 25.0,
             "netDebtToEbitda": 1.0,
@@ -64,6 +70,7 @@ def test_mapper_accepts_protobuf_json_camel_case():
     assert result is not None
     assert result["net_margin"] == 10.0
     assert result["revenue_growth"] == 12.0
+    assert result["revenue_growth_5y"] == 7.0
     assert result["free_cash_flow"] == 12.0
     assert result["pe"] == 10.0
 
@@ -84,6 +91,45 @@ def test_risk_rates_mapper_extracts_nested_contract_values():
     assert result["dlong_client"] == 12
     assert result["dshort_client"] == 20
     assert result["short_enabled"] is True
+
+
+def test_risk_rates_mapper_reads_contract_rate_arrays():
+    result = map_risk_rates(
+        {
+            "instrument_risk_rates": [
+                {
+                    "long_risk_rates": [{"risk_level_code": "RISK_LEVEL_LOW", "value": {"units": "30", "nano": 0}}],
+                    "short_risk_rates": [{"risk_level_code": "RISK_LEVEL_HIGH", "value": {"units": "55", "nano": 0}}],
+                }
+            ]
+        }
+    )
+
+    assert result["dlong"] == 30.0
+    assert result["dshort"] == 55.0
+    assert result["dlong_client"] == 30.0
+    assert result["dshort_client"] == 55.0
+    assert result["short_enabled"] is False
+
+
+def test_instrument_risk_mapper_extracts_client_rates_and_short_flag():
+    result = map_instrument_risk(
+        {
+            "instrument": {
+                "dlong_client": 0.30,
+                "dshort_client": 0.55,
+                "short_enabled_flag": True,
+            }
+        }
+    )
+
+    assert result == {
+        "dlong_client": 0.30,
+        "dshort_client": 0.55,
+        "dlong": 0.30,
+        "dshort": 0.55,
+        "short_enabled": True,
+    }
 
 
 def test_empty_risk_rates_are_unavailable():
