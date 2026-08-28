@@ -17,6 +17,13 @@ from edward.services.multifactor_diagnostics_v081 import emit_multifactor_diagno
 logger = logging.getLogger(__name__)
 
 
+def _fundamental_display_score(fundamental_detail: Any) -> float | None:
+    """Return the canonical v0.8.2 overall score for the UI Fundamental card."""
+    if fundamental_detail is None or fundamental_detail.status == "UNAVAILABLE":
+        return None
+    return float(fundamental_detail.overall_score)
+
+
 def install(app_class: type[Any], client_class: type[Any]) -> None:
     import edward.ui.analysis_ui_v04 as legacy
     import edward.ui.analysis_ui_v08_runtime as runtime
@@ -201,11 +208,9 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
             runtime._v081_last_failed_sources = failed_sources
             runtime._v082_fundamental_detail = v082_fundamental
             factors = result.multifactor
-            values["fundamental"].set(
-                f"{v082_fundamental.overall_score:.1f}"
-                if v082_fundamental.status != "UNAVAILABLE" else "N/A"
-            )
-            fundamental_button.configure(state="normal" if v082_fundamental.status != "UNAVAILABLE" else "disabled")
+            fundamental_score = _fundamental_display_score(v082_fundamental)
+            values["fundamental"].set(f"{fundamental_score:.1f}" if fundamental_score is not None else "N/A")
+            fundamental_button.configure(state="normal" if fundamental_score is not None else "disabled")
             values["micro"].set(f"{factors.microstructure.entry_quality_score:.1f}" if factors.microstructure.evidence.available else "N/A")
             values["volume"].set(f"{factors.volume_pressure.accumulation_score:.1f}" if factors.volume_pressure.evidence.available else "N/A")
             values["signals"].set(f"{factors.signals.reliability_pct:.1f}" if factors.signals.evidence.available else "N/A")
