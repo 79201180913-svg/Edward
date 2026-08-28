@@ -1,0 +1,169 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, replace
+from typing import Any, Mapping, Sequence
+
+from edward.services.analysis_pipeline_service_v081 import AnalysisPipelineServiceV081
+from edward.services.entry_quality_integration_v082 import (
+    EntryQualityIntegrationResult,
+    EntryQualityIntegrationServiceV082,
+)
+from edward.services.fundamental_analysis_service_v082 import (
+    FundamentalAnalysisResult,
+    FundamentalAnalysisServiceV082,
+)
+from edward.services.fundamental_factor_adapter_v082 import FundamentalFactorAdapterV082
+from edward.services.multifactor_normalization_v081 import normalize
+from edward.services.multifactor_overlay_service_v081 import MultiFactorOverlayServiceV081
+from edward.services.opportunity_adjustment_service_v082 import (
+    OpportunityAdjustmentResult,
+    OpportunityAdjustmentServiceV082,
+)
+
+ANALYSIS_PIPELINE_V082_VERSION = "0.8.2"
+
+
+@dataclass(frozen=True, slots=True)
+class AnalysisPipelineV082Result:
+    """v0.8.2 result: stable v0.8.1 pipeline plus structured fundamentals and entry quality."""
+
+    base: Any
+    fundamental: FundamentalAnalysisResult
+    entry_quality: EntryQualityIntegrationResult
+    opportunity_adjustment: OpportunityAdjustmentResult | None = None
+    version: str = ANALYSIS_PIPELINE_V082_VERSION
+
+    @property
+    def analysis(self):
+        return self.base.analysis
+
+    @property
+    def opportunity(self):
+        return self.base.opportunity
+
+    @property
+    def expected_value(self):
+        return self.base.expected_value
+
+    @property
+    def portfolio_impact(self):
+        return self.base.portfolio_impact
+
+    @property
+    def confidence(self):
+        return self.base.confidence
+
+
+class AnalysisPipelineServiceV082:
+    """v0.8.2 facade reusing the stable v0.8.1 factor pipeline.
+
+    Fundamentals are calculated once and adapted into the existing multifactor
+    contract. Entry quality and opportunity adjustment are calculated alongside
+    that result; only real v0.8.1 opportunity contracts are adjusted.
+    """
+
+    def __init__(self, *, base_pipeline: AnalysisPipelineServiceV081 | None = None) -> None:
+        self.base_pipeline = base_pipeline or AnalysisPipelineServiceV081()
+
+    def analyze(
+        self,
+        *,
+        instrument_uid: str,
+        ticker: str,
+        candles,
+        profile: str = "medium_term",
+        risk_profile: str = "balanced",
+        horizon: str = "medium",
+        portfolio_weights: Mapping[str, float] | None = None,
+        portfolio_returns: Mapping[str, Sequence[float]] | None = None,
+        candidate_weight: float = 0.0,
+        concentration_penalty_pct: float = 0.0,
+        fundamentals: Any = None,
+        **kwargs: Any,
+    ) -> AnalysisPipelineV082Result:
+        base_result = self.base_pipeline.analyze(
+            instrument_uid=instrument_uid,
+            ticker=ticker,
+            candles=candles,
+            profile=profile,
+            risk_profile=risk_profile,
+            horizon=horizon,
+            portfolio_weights=portfolio_weights,
+            portfolio_returns=portfolio_returns,
+            candidate_weight=candidate_weight,
+            concentration_penalty_pct=concentration_penalty_pct,
+            fundamentals=fundamentals,
+            **kwargs,
+        )
+
+        fundamental = FundamentalAnalysisServiceV082.analyze(fundamentals, profile=profile)
+        analysis = getattr(base_result, "analysis", None)
+        base_opportunity = getattr(base_result, "opportunity", None)
+        market_context = {
+            "regime": kwargs.get("regime", kwargs.get("market_regime", getattr(analysis, "market_regime", None))),
+            "regime_score": kwargs.get("regime_score"),
+            "current_signal": kwargs.get("current_signal", getattr(base_opportunity, "entry_signal", None)),
+            "microstructure_score": kwargs.get("microstructure_score"),
+            "volume_pressure_score": kwargs.get("volume_pressure_score"),
+        }
+        entry_quality = EntryQualityIntegrationServiceV082.evaluate(
+            fundamental=fundamental,
+            market=market_context,
+            profile=profile,
+            execution_allowed=kwargs.get("session_execution_allowed", True),
+        )
+
+        opportunity_adjustment = None
+        if (
+            base_opportunity is not None
+            and hasattr(base_opportunity, "score")
+            and hasattr(base_opportunity, "context")
+            and hasattr(base_opportunity, "entry_signal")
+            and hasattr(base_opportunity, "market_regime_compatible")
+            and hasattr(base_opportunity, "explanation")
+        ):
+            opportunity_adjustment = OpportunityAdjustmentServiceV082.apply(
+                base_opportunity,
+                fundamental=fundamental,
+                entry_quality=entry_quality.entry_quality,
+            )
+
+        if not hasattr(base_result, "multifactor"):
+            return AnalysisPipelineV082Result(
+                base=base_result,
+                fundamental=fundamental,
+                entry_quality=entry_quality,
+                opportunity_adjustment=opportunity_adjustment,
+            )
+
+        adapted_fundamental = FundamentalFactorAdapterV082.adapt(fundamental)
+        multifactor = replace(base_result.multifactor, fundamentals=adapted_fundamental)
+        multifactor = normalize(
+            multifactor,
+            portfolio_context_available=bool(
+                portfolio_weights
+                or portfolio_returns
+                or candidate_weight > 0
+                or kwargs.get("current_weight_pct", 0.0) > 0
+                or kwargs.get("marginal_risk_pct", 0.0) != 0
+                or kwargs.get("diversification_benefit_pct", 0.0) != 0
+            ),
+            session_available=kwargs.get("session_name") is not None,
+        )
+        adjusted, overlay = MultiFactorOverlayServiceV081.apply(base_result.base, multifactor)
+        if opportunity_adjustment is not None:
+            adjusted = replace(adjusted, opportunity=opportunity_adjustment.opportunity)
+        integrated_base = replace(base_result, base=adjusted, multifactor=multifactor, overlay=overlay)
+        return AnalysisPipelineV082Result(
+            base=integrated_base,
+            fundamental=fundamental,
+            entry_quality=entry_quality,
+            opportunity_adjustment=opportunity_adjustment,
+        )
+
+
+__all__ = [
+    "ANALYSIS_PIPELINE_V082_VERSION",
+    "AnalysisPipelineV082Result",
+    "AnalysisPipelineServiceV082",
+]

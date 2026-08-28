@@ -21,3 +21,13 @@ def test_v081_installer_replaces_active_analysis_entrypoint(monkeypatch):
 
     assert legacy._open_analysis is runtime._open_analysis_v08
     assert app_class._analysis_ui_v081_installed is True
+
+
+def test_unavailable_fundamental_group_is_displayed_as_na_not_zero():
+    group = types.SimpleNamespace(score=0.0, coverage=0.0)
+    assert target._fundamental_group_score_text(group) == "N/A"
+
+
+def test_available_fundamental_group_keeps_numeric_score():
+    group = types.SimpleNamespace(score=61.8, coverage=50.0)
+    assert target._fundamental_group_score_text(group) == "61.8"
