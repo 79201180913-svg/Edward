@@ -9,13 +9,12 @@ from edward.api.candles_client_patch import install as install_candles_client
 from edward.config.application_settings import ApplicationSettingsStore
 from edward.services.analysis_pipeline_service_v08 import AnalysisPipelineServiceV08
 from edward.services.analysis_service import AnalysisService
-from edward.services.decision_engine import DecisionEngine
+from edward.services.decision_engine import Decision, DecisionEngine
 from edward.storage.sqlite_store import SQLiteStore
 
 
 def install(app_class: type[Any], client_class: type[Any]) -> None:
     import edward.ui.analysis_ui_v04 as legacy
-
     if getattr(app_class, "_analysis_ui_v08_installed", False):
         return
     install_candles_client(client_class)
@@ -25,11 +24,9 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
 
 def _open_analysis_v08(app: Any) -> None:
     import edward.ui.analysis_ui_v04 as legacy
-
     detail = getattr(app, "instrument_detail", None)
     if not detail:
         return
-
     window = tk.Toplevel(app)
     window.title(f"Анализ акции v0.8 — {detail.get('ticker', '')}")
     window.geometry("1250x860")
@@ -62,14 +59,16 @@ def _open_analysis_v08(app: Any) -> None:
 
     metrics = ttk.LabelFrame(window, text="v0.8 — Expected Value / Forecast / Portfolio", padding=12)
     metrics.pack(fill="x", padx=16, pady=(0, 10))
-    for column in range(4):
+    for column in range(5):
         metrics.columnconfigure(column, weight=1)
-    metric_vars = {key: tk.StringVar(value="—") for key in ("ev", "prob", "loss", "dist", "forecast", "regime", "portfolio", "confidence")}
+    metric_vars = {key: tk.StringVar(value="—") for key in (
+        "ev", "prob", "avg_win", "avg_loss", "pf", "forecast", "regime", "portfolio", "confidence", "observations"
+    )}
     for index, (key, title) in enumerate((
-        ("ev", "Expected Value"), ("prob", "P(profit)"), ("loss", "Expected Loss"), ("dist", "P10 → P90"),
-        ("forecast", "Forecast Quality"), ("regime", "Regime"), ("portfolio", "Portfolio Impact"), ("confidence", "Confidence"),
+        ("ev", "Expected Value"), ("prob", "P(profit)"), ("avg_win", "Avg Win"), ("avg_loss", "Avg Loss"), ("pf", "Profit Factor"),
+        ("forecast", "Forecast Quality"), ("regime", "Regime"), ("portfolio", "Portfolio Impact"), ("confidence", "Confidence"), ("observations", "Наблюдения"),
     )):
-        row, col = divmod(index, 4)
+        row, col = divmod(index, 5)
         cell = ttk.Frame(metrics, padding=6)
         cell.grid(row=row, column=col, sticky="nsew")
         ttk.Label(cell, text=title).pack(anchor="w")
@@ -93,14 +92,6 @@ def _open_analysis_v08(app: Any) -> None:
         else:
             progress.stop()
 
-    def set_metric(key: str, value: Any, suffix: str = "") -> None:
-        if value is None:
-            metric_vars[key].set("N/A")
-        elif isinstance(value, str):
-            metric_vars[key].set(value)
-        else:
-            metric_vars[key].set(f"{value}{suffix}")
-
     def show_result(pipeline_result: Any) -> None:
         result = pipeline_result.analysis
         for row in table.get_children():
@@ -109,45 +100,61 @@ def _open_analysis_v08(app: Any) -> None:
             table.insert("", "end", values=(item.strategy, f"{item.score:.1f}", f"{item.return_pct:.2f}", f"{item.max_drawdown_pct:.2f}", f"{item.sharpe:.2f}", f"{item.stability:.1f}", item.wf_windows, "PASS" if item.quality_gate else "FAIL"))
 
         ev = pipeline_result.expected_value
+        confidence = pipeline_result.confidence
         if ev.available:
             metric_vars["ev"].set(f"{ev.expected_value_pct:+.2f}%")
             metric_vars["prob"].set(f"{ev.probability_profit_pct:.1f}%")
-            metric_vars["loss"].set(f"-{ev.expected_loss_pct:.2f}%")
-            metric_vars["dist"].set(f"{ev.p10_pct:+.2f}% → {ev.p90_pct:+.2f}%")
-            metric_vars["confidence"].set(ev.confidence)
+            metric_vars["avg_win"].set(f"+{ev.average_win_pct:.2f}%" if ev.average_win_pct else "N/A")
+            metric_vars["avg_loss"].set(f"-{ev.average_loss_pct:.2f}%" if ev.average_loss_pct else "N/A")
+            denominator = ev.probability_loss_pct * ev.average_loss_pct
+            numerator = ev.probability_profit_pct * ev.average_win_pct
+            metric_vars["pf"].set("∞" if denominator == 0 and numerator > 0 else (f"{numerator / denominator:.2f}" if denominator > 0 else "N/A"))
+            metric_vars["observations"].set(str(ev.observations))
         else:
-            reason = ev.unavailable_reason or "данных недостаточно"
-            for key in ("ev", "prob", "loss", "dist"):
+            for key in ("ev", "prob", "avg_win", "avg_loss", "pf", "observations"):
                 metric_vars[key].set("N/A")
-            metric_vars["confidence"].set("N/A")
 
-        if pipeline_result.forecast_quality_score is not None:
-            metric_vars["forecast"].set(f"{pipeline_result.forecast_quality_score:.1f}")
-        else:
-            metric_vars["forecast"].set("N/A")
-
+        metric_vars["forecast"].set("N/A" if pipeline_result.forecast_quality_score is None else f"{pipeline_result.forecast_quality_score:.1f}")
         regime_text = result.market_regime
         if pipeline_result.regime_confidence is not None:
             regime_text += f" ({pipeline_result.regime_confidence:.0f}%)"
         metric_vars["regime"].set(regime_text)
+        metric_vars["portfolio"].set(f"{pipeline_result.portfolio_impact.portfolio_impact_score:.1f}" if pipeline_result.portfolio_context_available else "N/A")
+        metric_vars["confidence"].set((f"{confidence.overall_confidence:.1f} — {confidence.level}") if confidence is not None else "N/A")
 
-        if pipeline_result.portfolio_context_available:
-            metric_vars["portfolio"].set(f"{pipeline_result.portfolio_impact.portfolio_impact_score:.1f}")
-        else:
-            metric_vars["portfolio"].set("N/A")
-
-        winner = next((item for item in result.strategies if item.quality_gate), None)
         position = legacy._position_context(app, str(detail.get("instrument_uid", "")))
-        request = legacy._build_decision_request(app, detail, result, pipeline_result.opportunity, winner, position, profile_var.get())
-        decision = DecisionEngine.evaluate(request)
-        decision_var.set(f"Решение: {decision.decision.value if decision.decision else '—'}")
-        reason_var.set(decision.explanation)
+        winner = next((item for item in result.strategies if item.quality_gate), None)
+        if not position.is_open:
+            if winner is None:
+                decision = Decision.PASS
+                reason = "Ни одна стратегия не прошла v0.8 Quality Gate; открытие новой позиции запрещено."
+            else:
+                request = legacy._build_decision_request(app, detail, result, pipeline_result.opportunity, winner, position, profile_var.get())
+                decision_result = DecisionEngine.evaluate(request)
+                decision = decision_result.decision or Decision.PASS
+                reason = decision_result.explanation
+        else:
+            if not ev.available:
+                decision = Decision.HOLD
+                reason = "EV недоступен: недостаточно реализованных исходов для обоснованного сокращения позиции."
+            elif pipeline_result.opportunity.context.critical_risk or not pipeline_result.opportunity.context.risk_ok:
+                decision = Decision.REDUCE
+                reason = "Риск позиции ухудшился; позицию следует сократить."
+            elif ev.expected_value_pct < 0:
+                decision = Decision.REDUCE
+                reason = f"Ожидаемая ценность стала отрицательной ({ev.expected_value_pct:+.2f}%); позицию следует сократить."
+            else:
+                decision = Decision.HOLD
+                reason = f"EV остается положительным ({ev.expected_value_pct:+.2f}%), поэтому один лишь Quality Gate не является основанием для REDUCE; текущая рекомендация — HOLD."
 
+        decision_var.set(f"Решение: {decision.value}")
+        reason_var.set(reason)
         explanation.configure(state="normal")
         explanation.delete("1.0", "end")
-        ev_note = "EV: недоступен — нет реализованных исходов." if not ev.available else f"EV: {ev.expected_value_pct:+.2f}% на {ev.observations} наблюдениях."
+        ev_note = "EV: недоступен — нет реализованных исходов." if not ev.available else f"EV: {ev.expected_value_pct:+.2f}% на {ev.observations} наблюдениях; Avg Win {ev.average_win_pct:+.2f}%, Avg Loss -{ev.average_loss_pct:.2f}%."
         portfolio_note = "Portfolio Impact: N/A — портфельный контекст не передан." if not pipeline_result.portfolio_context_available else f"Portfolio Impact: {pipeline_result.portfolio_impact.portfolio_impact_score:.1f}."
-        explanation.insert("1.0", pipeline_result.opportunity.explanation + "\n\n" + result.explanation + f"\n\n{ev_note} {portfolio_note}")
+        confidence_note = f"Confidence: {confidence.overall_confidence:.1f} ({confidence.level})." if confidence is not None else "Confidence: N/A."
+        explanation.insert("1.0", pipeline_result.opportunity.explanation + "\n\n" + result.explanation + f"\n\n{ev_note} {portfolio_note} {confidence_note}")
         explanation.configure(state="disabled")
 
     def run() -> None:
@@ -160,12 +167,7 @@ def _open_analysis_v08(app: Any) -> None:
                 raise RuntimeError("Исторические свечи не получены")
             status_var.set(f"v0.8 анализ: {len(candles)} свечей…")
             pipeline = AnalysisPipelineServiceV08()
-            result = pipeline.analyze(
-                instrument_uid=str(detail["instrument_uid"]),
-                ticker=str(detail.get("ticker", "")),
-                candles=candles,
-                profile=profile_var.get(),
-            )
+            result = pipeline.analyze(instrument_uid=str(detail["instrument_uid"]), ticker=str(detail.get("ticker", "")), candles=candles, profile=profile_var.get())
             settings = ApplicationSettingsStore().load()
             store = SQLiteStore(settings.storage_path)
             AnalysisService(store).save(result.analysis)
