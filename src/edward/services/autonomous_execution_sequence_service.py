@@ -104,6 +104,14 @@ class AutonomousExecutionSequenceService:
             events.append(AutonomousExecutionPhaseEvent(sequence, phase, message))
 
         for step in plan.steps:
+            if cycle_failed and first_failure is not None:
+                has_later_independent = any(
+                    later.sequence > first_failure and later.depends_on is None
+                    for later in plan.steps
+                )
+                if not has_later_independent:
+                    break
+
             if step.depends_on is not None and step.depends_on not in completed_sequences:
                 reason = f"DEPENDENCY_NOT_COMPLETED:{step.depends_on}"
                 emit(step.sequence, AutonomousExecutionPhase.STOPPED, reason)
@@ -111,12 +119,6 @@ class AutonomousExecutionSequenceService:
                 cycle_failed = True
                 if first_failure is None:
                     first_failure = step.sequence
-                has_later_independent = any(
-                    later.sequence > step.sequence and later.depends_on is None
-                    for later in plan.steps
-                )
-                if not has_later_independent:
-                    break
                 continue
 
             emit(step.sequence, AutonomousExecutionPhase.PREPARING, "Подготовка шага")
