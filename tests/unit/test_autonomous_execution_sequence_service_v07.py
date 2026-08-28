@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from types import SimpleNamespace
 
 from edward.domain.execution import ExecutionMode, ExecutionStatus
@@ -40,11 +41,25 @@ def _plan(*steps):
 
 
 def _step(sequence, action="BUY", depends_on=None):
-    return ExecutionPlanStep(sequence=sequence, action=action, ticker=f"T{sequence}", instrument_uid=f"uid-{sequence}", depends_on=depends_on)
+    return ExecutionPlanStep(
+        sequence=sequence,
+        action=action,
+        ticker=f"T{sequence}",
+        instrument_uid=f"uid-{sequence}",
+        target_value=Decimal("100.00"),
+        depends_on=depends_on,
+    )
 
 
 def _result_factory(step):
-    return SimpleNamespace(decision=step.action, execution_ready=True, instrument_uid=step.instrument_uid, ticker=step.ticker, recommended_quantity=1, price=100.0)
+    return SimpleNamespace(
+        decision=step.action,
+        execution_ready=True,
+        instrument_uid=step.instrument_uid,
+        ticker=step.ticker,
+        recommended_quantity=1,
+        price=100.0,
+    )
 
 
 def test_failed_step_does_not_stop_independent_steps():
