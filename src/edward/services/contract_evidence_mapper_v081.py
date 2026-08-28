@@ -65,7 +65,6 @@ def quotation_to_float(value: Any) -> float | None:
 def map_fundamentals(statistics: Any) -> dict[str, float | None] | None:
     if statistics is None:
         return None
-    revenue = quotation_to_float(_get(statistics, "revenue_ttm"))
     fcf_raw = quotation_to_float(_get(statistics, "free_cash_flow_ttm"))
     mapped = {
         "roe": quotation_to_float(_get(statistics, "roe")),
@@ -76,7 +75,6 @@ def map_fundamentals(statistics: Any) -> dict[str, float | None] | None:
         "ebitda_growth": quotation_to_float(_get(statistics, "ebitda_change_five_years")),
         "net_debt_to_ebitda": quotation_to_float(_get(statistics, "net_debt_to_ebitda")),
         "current_ratio": quotation_to_float(_get(statistics, "current_ratio_mrq")),
-        # Keep FCF in its original monetary scale. The factor service decides how to score it.
         "free_cash_flow": fcf_raw,
         "pe": quotation_to_float(_get(statistics, "pe_ratio_ttm")),
         "ps": quotation_to_float(_get(statistics, "price_to_sales_ttm")),
@@ -92,20 +90,38 @@ def map_fundamentals(statistics: Any) -> dict[str, float | None] | None:
     return mapped
 
 
+def _first_collection_number(value: Any) -> float | None:
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            number = quotation_to_float(item)
+            if number is not None:
+                return number
+        return None
+    return quotation_to_float(value)
+
+
 def map_risk_rates(risk_response: Any) -> dict[str, Any] | None:
     items = _collection(risk_response, "risk_rates", "instrument_risk_rates", "items")
     if not items:
         return None
     first = items[0]
-    long_rate = quotation_to_float(_get(first, "long_risk_rate", "dlong", "dlong_client"))
-    short_rate = quotation_to_float(_get(first, "short_risk_rate", "dshort", "dshort_client"))
+
+    long_rates = _get(first, "long_risk_rates", default=None)
+    short_rates = _get(first, "short_risk_rates", default=None)
+    long_rate = _first_collection_number(long_rates)
+    short_rate = _first_collection_number(short_rates)
+
+    if long_rate is None:
+        long_rate = quotation_to_float(_get(first, "long_risk_rate", "dlong", "dlong_client"))
+    if short_rate is None:
+        short_rate = quotation_to_float(_get(first, "short_risk_rate", "dshort", "dshort_client"))
+
     short_enabled = _get(first, "short_enabled_flag", "short_enabled", default=None)
     mapped = {
         "dlong": long_rate,
         "dshort": short_rate,
         "dlong_client": long_rate,
         "dshort_client": short_rate,
-        # RiskRates does not define a short-enabled field. Keep it unknown unless supplied by adapter enrichment.
         "short_enabled": bool(short_enabled) if short_enabled is not None else False,
     }
     if long_rate is None and short_rate is None:
