@@ -5,7 +5,8 @@ from logging import getLogger
 from typing import Any, Mapping, Sequence
 
 from edward.services.analysis_pipeline_service_v08 import AnalysisPipelineServiceV08, AnalysisPipelineV08Result
-from edward.services.multifactor_analysis_service_v081 import MultiFactorAnalysisServiceV081, MultiFactorResult
+from edward.services.fundamental_analysis_service_v082 import FundamentalAnalysisServiceV082
+from edward.services.multifactor_analysis_service_v081 import Evidence, MultiFactorAnalysisServiceV081, MultiFactorResult
 from edward.services.multifactor_normalization_v081 import normalize
 from edward.services.multifactor_overlay_service_v081 import MultiFactorOverlayResult, MultiFactorOverlayServiceV081
 from edward.services import multifactor_risk_calibration_v081 as _multifactor_risk_calibration_v081  # noqa: F401
@@ -56,6 +57,56 @@ def _normalize_risk_data(risk_data: Any) -> Any:
         normalized.get("short_enabled", normalized.get("short_enabled_flag")),
     )
     return normalized
+
+
+def _fundamental_factor_from_v082(result) -> Any:
+    groups = {
+        "quality_score": result.business_quality.score,
+        "growth_score": result.growth.score,
+        "valuation_score": result.valuation.score,
+        "balance_sheet_score": result.financial_health.score,
+        "cash_flow_score": result.cash_generation.score,
+        "shareholder_return_score": result.shareholder_return.score,
+        "momentum_score": result.fundamental_momentum.score,
+    }
+    score = float(result.overall_score)
+    direction = "POSITIVE" if score >= 60.0 else "NEGATIVE" if score < 40.0 else "NEUTRAL"
+    available = result.status != "UNAVAILABLE"
+    reason = result.reason_codes[0] if result.reason_codes else None
+    evidence = Evidence(
+        "fundamentals",
+        direction if available else "UNAVAILABLE",
+        score if available else 0.0,
+        float(result.confidence) if available else 0.0,
+        available=available,
+        reason=reason,
+    )
+    from edward.services.multifactor_analysis_service_v081 import FundamentalFactor
+    return FundamentalFactor(**groups, evidence=evidence)
+
+
+def _replace_fundamental_factor(multifactor: MultiFactorResult, fundamental_result) -> MultiFactorResult:
+    fundamental = _fundamental_factor_from_v082(fundamental_result)
+    evidence = [
+        fundamental.evidence,
+        multifactor.microstructure.evidence,
+        multifactor.volume_pressure.evidence,
+        multifactor.signals.evidence,
+        multifactor.event_risk.evidence,
+        multifactor.dividends.evidence,
+        multifactor.insider.evidence,
+        multifactor.session.evidence,
+        multifactor.instrument_risk.evidence,
+        multifactor.portfolio.evidence,
+    ]
+    score, reliability, conflict = MultiFactorAnalysisServiceV081.aggregate(evidence)
+    return replace(
+        multifactor,
+        fundamentals=fundamental,
+        aggregate_evidence_score=score,
+        aggregate_reliability_score=reliability,
+        conflict_penalty=conflict,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,9 +213,6 @@ class AnalysisPipelineServiceV081:
             candidate_weight=candidate_weight,
             concentration_penalty_pct=concentration_penalty_pct,
         )
-        # Instrument metadata is the contract-correct source for dlong/dshort/client
-        # and short-enabled state. Keep GetRiskRates available as a fallback for
-        # callers that do not provide instrument metadata directly.
         effective_risk_data = instrument_risk_metadata if instrument_risk_metadata is not None else risk_data
         normalized_risk_data = _normalize_risk_data(effective_risk_data)
         logger.info(
@@ -173,8 +221,10 @@ class AnalysisPipelineServiceV081:
             "instrument_metadata" if instrument_risk_metadata is not None else "risk_rates",
             normalized_risk_data,
         )
+        # v0.8.2 is now the single source of truth for the fundamental factor.
+        # Pass None into the legacy calculator so it cannot score the same data twice.
         multifactor = MultiFactorAnalysisServiceV081.analyze(
-            fundamentals=fundamentals,
+            fundamentals=None,
             order_book=order_book,
             trades=trades,
             candles=candles,
@@ -194,6 +244,36 @@ class AnalysisPipelineServiceV081:
             expected_return_impact_pct=expected_return_impact_pct,
             max_position_weight_pct=max_position_weight_pct,
             current_price=current_price,
+        )
+        fundamental_result = FundamentalAnalysisServiceV082.analyze(fundamentals, profile=profile)
+        logger.info(
+            "[V082 FUNDAMENTAL PIPELINE] instrument_uid=%s profile=%s score=%.2f confidence=%.2f coverage=%.2f status=%s "
+            "business_quality=%.2f growth=%.2f cash_generation=%.2f financial_health=%.2f valuation=%.2f shareholder_return=%.2f momentum=%.2f",
+            instrument_uid,
+            fundamental_result.strategy_profile,
+            fundamental_result.overall_score,
+            fundamental_result.confidence,
+            fundamental_result.coverage,
+            fundamental_result.status,
+            fundamental_result.business_quality.score,
+            fundamental_result.growth.score,
+            fundamental_result.cash_generation.score,
+            fundamental_result.financial_health.score,
+            fundamental_result.valuation.score,
+            fundamental_result.shareholder_return.score,
+            fundamental_result.fundamental_momentum.score,
+        )
+        multifactor = _replace_fundamental_factor(multifactor, fundamental_result)
+        logger.info(
+            "[V081 FUNDAMENTAL FACTOR] instrument_uid=%s score=%.2f reliability=%.2f available=%r reason=%r "
+            "aggregate_evidence=%.2f conflict=%.2f",
+            instrument_uid,
+            multifactor.fundamentals.evidence.strength,
+            multifactor.fundamentals.evidence.reliability,
+            multifactor.fundamentals.evidence.available,
+            multifactor.fundamentals.evidence.reason,
+            multifactor.aggregate_evidence_score,
+            multifactor.conflict_penalty,
         )
         logger.info(
             "[V081 RISK FACTOR] instrument_uid=%s dlong=%r dshort=%r short_enabled=%r "
