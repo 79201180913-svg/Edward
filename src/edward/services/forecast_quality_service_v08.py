@@ -47,6 +47,8 @@ class ForecastQualityService:
 
     The evaluator is explicitly point-in-time: every forecast is generated only
     from candles available at its origin and is compared with future candles.
+    ``min_history`` lets the evaluator adapt to the contract of the forecast
+    implementation being tested without changing its public result shape.
     """
 
     MIN_ORIGIN_OBSERVATIONS = 30
@@ -109,20 +111,25 @@ class ForecastQualityService:
         horizons: Sequence[int],
         forecast_fn: Callable[[Sequence[Candle], int], tuple[float, float]],
         calibration_bins: Sequence[float] = DEFAULT_CALIBRATION_BINS,
+        min_history: int | None = None,
     ) -> ForecastQualityResult:
         ordered = sorted(list(candles), key=lambda item: item.timestamp)
-        if len(ordered) < cls.MIN_ORIGIN_OBSERVATIONS + max(horizons, default=1):
+        normalized_horizons = sorted({int(item) for item in horizons if int(item) > 0})
+        origin_observations = min_history if min_history is not None else cls.MIN_ORIGIN_OBSERVATIONS
+        if origin_observations < 1:
+            raise ValueError("min_history must be positive")
+        if len(ordered) < origin_observations + max(normalized_horizons, default=1):
             raise ValueError("Недостаточно истории для оценки качества прогноза")
 
         point_results: list[ForecastQualityPoint] = []
         all_probability_pairs: list[tuple[float, bool]] = []
-        for horizon in sorted({int(item) for item in horizons if int(item) > 0}):
+        for horizon in normalized_horizons:
             absolute_errors: list[float] = []
             percentage_errors: list[float] = []
             directions: list[bool] = []
             downside_errors: list[float] = []
             upside_errors: list[float] = []
-            for origin_index in range(cls.MIN_ORIGIN_OBSERVATIONS - 1, len(ordered) - horizon):
+            for origin_index in range(origin_observations - 1, len(ordered) - horizon):
                 history = ordered[: origin_index + 1]
                 current = history[-1].close
                 expected_price, probability_up_pct = forecast_fn(history, horizon)
@@ -150,6 +157,8 @@ class ForecastQualityService:
 
         calibration: list[ForecastCalibrationBin] = []
         edges = tuple(float(item) for item in calibration_bins)
+        if len(edges) < 2 or any(right <= left for left, right in zip(edges, edges[1:])) or edges[0] < 0 or edges[-1] > 100:
+            raise ValueError("calibration_bins must be strictly increasing percentages from 0 to 100")
         for lower, upper in zip(edges, edges[1:]):
             members = [item for item in all_probability_pairs if lower <= item[0] < upper or (upper == 100.0 and item[0] == 100.0)]
             if not members:
@@ -183,3 +192,6 @@ class ForecastQualityService:
             ]
 
         return ForecastQualityResult(tuple(point_results), tuple(calibration), round(overall, 4))
+
+
+__all__ = ["FORECAST_QUALITY_VERSION", "ForecastQualityPoint", "ForecastCalibrationBin", "ForecastQualityResult", "ForecastQualityService"]
