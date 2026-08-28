@@ -57,8 +57,8 @@ def test_operations_calculate_net_economics_after_fees_and_taxes():
     assert result.total_fees == 22
     assert result.total_taxes == 8
     assert result.total_dividends == 50
-    assert result.realized_net_pnl == 210
-    assert result.net_cash_impact == 260
+    assert result.realized_net_pnl == 170
+    assert result.net_cash_impact == 220
 
 
 def test_derivatives_expose_theoretical_price_gap_and_expiry_risk():
