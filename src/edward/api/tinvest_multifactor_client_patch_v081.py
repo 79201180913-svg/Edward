@@ -20,7 +20,8 @@ def _iso(value: datetime | str | None) -> str | None:
 
 
 def get_asset_fundamentals(self: TInvestAdapterClient, instrument_id: str) -> dict[str, Any]:
-    return _post(self, "/analysis/fundamentals", {"instrument_id": instrument_id})
+    # Contract: GetAssetFundamentalsRequest.assets is repeated string.
+    return _post(self, "/analysis/fundamentals", {"assets": [instrument_id]})
 
 
 def get_asset_reports(self: TInvestAdapterClient, instrument_id: str, from_dt: datetime | str | None = None, to_dt: datetime | str | None = None) -> dict[str, Any]:
@@ -32,7 +33,8 @@ def get_dividends(self: TInvestAdapterClient, instrument_id: str, from_dt: datet
 
 
 def get_risk_rates(self: TInvestAdapterClient, instrument_ids: list[str]) -> dict[str, Any]:
-    return _post(self, "/analysis/risk-rates", {"instrument_ids": instrument_ids})
+    # Contract: RiskRatesRequest.instrument_id is repeated string.
+    return _post(self, "/analysis/risk-rates", {"instrument_id": list(instrument_ids)})
 
 
 def get_insider_deals(self: TInvestAdapterClient, instrument_id: str, limit: int = 100) -> dict[str, Any]:
