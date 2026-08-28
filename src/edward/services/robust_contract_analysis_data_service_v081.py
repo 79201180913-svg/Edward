@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import replace
+from logging import getLogger
 from typing import Any
 
 from edward.services.contract_analysis_data_service_v081 import ContractAnalysisDataServiceV081
@@ -11,6 +12,8 @@ from edward.services.contract_evidence_mapper_v081 import (
     map_order_book,
     map_risk_rates,
 )
+
+logger = getLogger(__name__)
 
 
 class RobustContractAnalysisDataServiceV081(ContractAnalysisDataServiceV081):
@@ -31,6 +34,7 @@ class RobustContractAnalysisDataServiceV081(ContractAnalysisDataServiceV081):
         "news": {"id", "title", "source", "priority", "ts"},
         "signals": {"signal_id", "strategy_id", "direction", "initial_price"},
         "dividends": {"yield_value", "dividend_yield", "regularity", "declared_date"},
+        "microstructure": {"bids", "asks"},
     }
 
     @classmethod
@@ -202,6 +206,55 @@ class RobustContractAnalysisDataServiceV081(ContractAnalysisDataServiceV081):
                 return [payload]
         return []
 
+    @classmethod
+    def _log_risk_item_diagnostics(cls, instrument_uid: str, raw_risk: Any, risk_items: list[Any]) -> None:
+        root_type = type(raw_risk).__name__
+        root_keys = list(raw_risk.keys()) if isinstance(raw_risk, Mapping) else []
+        logger.info(
+            "[V081 RISK ITEM DIAG] instrument_uid=%s root_type=%s root_keys=%s item_count=%d",
+            instrument_uid,
+            root_type,
+            root_keys,
+            len(risk_items),
+        )
+        for index, item in enumerate(risk_items):
+            if isinstance(item, Mapping):
+                keys = list(item.keys())
+                values_summary: dict[str, str] = {}
+                for key in keys:
+                    value = item[key]
+                    values_summary[str(key)] = f"type={type(value).__name__}; value={value!r}"
+                logger.info(
+                    "[V081 RISK ITEM] instrument_uid=%s index=%d type=mapping keys=%s values=%s",
+                    instrument_uid,
+                    index,
+                    keys,
+                    values_summary,
+                )
+                for field_group, field_names in (
+                    ("long", ("long_risk_rate", "dlong", "dlong_client", "long_margin_rate")),
+                    ("short", ("short_risk_rate", "dshort", "dshort_client", "short_margin_rate")),
+                    ("error", ("error", "error_message", "message")),
+                ):
+                    matched = cls._matching_value(item, field_names)
+                    logger.info(
+                        "[V081 RISK FIELD MATCH] instrument_uid=%s index=%d group=%s candidates=%s matched_type=%s matched_value=%r",
+                        instrument_uid,
+                        index,
+                        field_group,
+                        field_names,
+                        type(matched).__name__ if matched is not None else "None",
+                        matched,
+                    )
+            else:
+                logger.info(
+                    "[V081 RISK ITEM] instrument_uid=%s index=%d type=%s value=%r",
+                    instrument_uid,
+                    index,
+                    type(item).__name__,
+                    item,
+                )
+
     def collect(self, instrument_uid: str):
         result = super().collect(instrument_uid)
         failed = set(result.failed_sources)
@@ -232,7 +285,14 @@ class RobustContractAnalysisDataServiceV081(ContractAnalysisDataServiceV081):
         if "risk_rates" in fetched and "risk_rates_mapping" in failed:
             raw_risk = self.client.get_risk_rates([instrument_uid])
             risk_items = self._many(raw_risk, "risk_rates", "instrument_risk_rates", "items")
+            self._log_risk_item_diagnostics(instrument_uid, raw_risk, risk_items)
             mapped_risk = map_risk_rates({"risk_rates": risk_items}) if risk_items else None
+            logger.info(
+                "[V081 RISK MAP RESULT] instrument_uid=%s mapped=%r mapped_type=%s",
+                instrument_uid,
+                mapped_risk,
+                type(mapped_risk).__name__ if mapped_risk is not None else "None",
+            )
             if mapped_risk is not None:
                 failed.discard("risk_rates_mapping")
                 result = replace(result, risk_data=mapped_risk)
