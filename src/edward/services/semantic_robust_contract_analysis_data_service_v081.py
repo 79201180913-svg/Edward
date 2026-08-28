@@ -8,7 +8,7 @@ from edward.services.robust_contract_analysis_data_service_v081 import RobustCon
 
 
 class SemanticRobustContractAnalysisDataServiceV081(RobustContractAnalysisDataServiceV081):
-    """Classify valid empty contract collections as unavailable, not mapping errors."""
+    """Classify valid empty/error contract results as unavailable, not mapping errors."""
 
     _DIRECT_FIELD_GROUPS = {
         **RobustContractAnalysisDataServiceV081._DIRECT_FIELD_GROUPS,
@@ -60,6 +60,25 @@ class SemanticRobustContractAnalysisDataServiceV081(RobustContractAnalysisDataSe
                     return len(value) > 0
         return False
 
+    @classmethod
+    def _has_contract_error(cls, payload: Any, *keys: str) -> bool:
+        normalized_keys = {cls._normalize(key) for key in keys}
+        for current in cls._walk(payload):
+            if not isinstance(current, Mapping):
+                continue
+            for raw_key, value in current.items():
+                if cls._normalize(str(raw_key)) not in normalized_keys or not isinstance(value, (list, tuple)):
+                    continue
+                for item in value:
+                    if not isinstance(item, Mapping):
+                        continue
+                    error = item.get("error")
+                    if error is None:
+                        error = item.get("Error")
+                    if error is not None and str(error).strip():
+                        return True
+        return False
+
     def collect(self, instrument_uid: str):
         result = super().collect(instrument_uid)
         failed = set(result.failed_sources)
@@ -86,6 +105,9 @@ class SemanticRobustContractAnalysisDataServiceV081(RobustContractAnalysisDataSe
             except Exception:
                 continue
             if self._has_empty_collection(raw, *keys):
+                failed.discard(failure_name)
+                unavailable.add(source_name)
+            elif self._has_contract_error(raw, *keys):
                 failed.discard(failure_name)
                 unavailable.add(source_name)
             elif not self._has_nonempty_collection(raw, *keys) and isinstance(raw, (Mapping, list, tuple)) and not raw:
