@@ -210,14 +210,10 @@ def install_autonomous_ui(app_class: type) -> None:
             budget = getattr(planning, "budget", None)
             if budget is not None:
                 log_ui(f"Бюджет рассчитан: капитал={budget.account_capital}, резерв={budget.reserve}, инвестиционный бюджет={budget.planning_budget}, доступные деньги={budget.investable_cash}")
-            else:
-                log_ui("Бюджет рассчитан")
             logger.info("autonomous_runtime_budget_published")
 
         def build_runtime_policy() -> BudgetPlanningPolicy:
-            slots = int(slots_var.get())
-            reserve_pct = Decimal(str(reserve_var.get()).replace(",", "."))
-            return BudgetPlanningPolicy(slots=slots, reserve_pct=reserve_pct)
+            return BudgetPlanningPolicy(slots=int(slots_var.get()), reserve_pct=Decimal(str(reserve_var.get()).replace(",", ".")))
 
         def run_runtime_cycle() -> Any:
             policy = build_runtime_policy()
@@ -258,17 +254,9 @@ def install_autonomous_ui(app_class: type) -> None:
                 reason = getattr(control_result, "reason", "") or ""
                 if reason.startswith("PARTIAL_COMPLETED:"):
                     log_ui("⚠️ Часть операций завершилась ошибкой; автономный цикл продолжен.")
-                    for item in reason.split(":", 1)[1].split(";"):
-                        log_ui(f"  • {item}")
                 elif reason.startswith("PREFLIGHT_REJECTED"):
                     log_ui("⚠️ План отклонён preflight-проверкой.")
-                    for item in control_result.preflight_reasons:
-                        log_ui(f"  • {item}")
                 self.after(0, lambda r=reason: status_var.set(f"Автономный цикл: {r}"))
-                if control_result.replanning is not None:
-                    cycle = control_result.replanning
-                    log_ui(f"Replan: итераций={cycle.iterations}, выполнено шагов={len(cycle.executed_steps)}, завершён={cycle.completed}, причина={cycle.stopped_reason or 'NONE'}")
-                logger.info("autonomous_runtime_manual_completed account_id=%s reason=%s", aid, reason)
             except Exception as exc:
                 logger.exception("autonomous_runtime_manual_failed account_id=%s", aid)
                 log_ui(f"Ошибка автономного цикла: {type(exc).__name__}: {exc}")
@@ -280,9 +268,7 @@ def install_autonomous_ui(app_class: type) -> None:
             service = runtime_holder.get("service")
             if service is not None:
                 snapshot = service.state.snapshot()
-                status = snapshot.status
-                message = snapshot.message
-                status_var.set(f"{status}: {message}" if message else status)
+                status_var.set(f"{snapshot.status}: {snapshot.message}" if snapshot.message else snapshot.status)
             self.after(1000, _sync_runtime_status)
 
         def start_runtime() -> None:
@@ -296,7 +282,6 @@ def install_autonomous_ui(app_class: type) -> None:
                 runtime_holder["service"] = service
                 service.start()
                 log_ui(f"Автономный runtime запущен; цикл выполняется каждые {interval_minutes} минут.")
-                logger.info("autonomous_runtime_started account_id=%s interval=%s", aid, interval_minutes)
                 _sync_runtime_status()
             except Exception as exc:
                 logger.exception("autonomous_runtime_start_failed account_id=%s", aid)
@@ -312,7 +297,6 @@ def install_autonomous_ui(app_class: type) -> None:
             if service is not None:
                 service.pause()
                 log_ui("Автономный runtime поставлен на паузу.")
-                logger.info("autonomous_runtime_paused account_id=%s", aid)
 
         def stop_runtime() -> None:
             service = runtime_holder.get("service")
@@ -320,7 +304,6 @@ def install_autonomous_ui(app_class: type) -> None:
                 service.stop()
                 runtime_holder["service"] = None
                 log_ui("Автономный runtime остановлен.")
-                logger.info("autonomous_runtime_stopped account_id=%s", aid)
 
         control.start_command = start_runtime
         control.pause_command = pause_runtime
