@@ -9,7 +9,8 @@ from edward.api.candles_client_patch import install as install_candles_client
 from edward.config.application_settings import ApplicationSettingsStore
 from edward.services.analysis_pipeline_service_v08 import AnalysisPipelineServiceV08
 from edward.services.analysis_service import AnalysisService
-from edward.services.decision_engine import Decision, DecisionEngine
+from edward.services.decision_engine import Decision
+from edward.services.decision_policy_v08 import DecisionPolicyV08
 from edward.storage.sqlite_store import SQLiteStore
 
 
@@ -85,6 +86,12 @@ def _open_analysis_v08(app: Any) -> None:
     explanation.pack(fill="x", padx=16, pady=(0, 16))
     explanation.configure(state="disabled")
 
+    policy = DecisionPolicyV08(
+        buy_threshold=70.0 if profile_var.get() != "speculative" else 65.0,
+        add_threshold=75.0 if profile_var.get() != "speculative" else 70.0,
+        wait_threshold=45.0 if profile_var.get() != "speculative" else 40.0,
+    )
+
     def running(value: bool) -> None:
         start_button.configure(state="disabled" if value else "normal")
         if value:
@@ -123,38 +130,56 @@ def _open_analysis_v08(app: Any) -> None:
         metric_vars["confidence"].set((f"{confidence.overall_confidence:.1f} — {confidence.level}") if confidence is not None else "N/A")
 
         position = legacy._position_context(app, str(detail.get("instrument_uid", "")))
-        winner = next((item for item in result.strategies if item.quality_gate), None)
+        strategy_item = next((item for item in result.strategies if item.strategy == pipeline_result.evidence_strategy), None)
+        market_ok = pipeline_result.opportunity.context.market_regime_compatible
+        risk_ok = pipeline_result.opportunity.context.risk_ok
+        entry_ok = pipeline_result.opportunity.context.entry_ok
+        critical_risk = pipeline_result.opportunity.context.critical_risk
+        confidence_score = confidence.overall_confidence if confidence is not None else 0.0
+
         if not position.is_open:
-            if winner is None:
-                decision = Decision.PASS
-                reason = "Ни одна стратегия не прошла v0.8 Quality Gate; открытие новой позиции запрещено."
-            else:
-                request = legacy._build_decision_request(app, detail, result, pipeline_result.opportunity, winner, position, profile_var.get())
-                decision_result = DecisionEngine.evaluate(request)
-                decision = decision_result.decision or Decision.PASS
-                reason = decision_result.explanation
+            decision_result = policy.evaluate_new_position(
+                strategy=strategy_item,
+                expected_value=ev,
+                opportunity=pipeline_result.opportunity,
+                confidence_score=confidence_score,
+                entry_ok=entry_ok,
+                market_ok=market_ok,
+                risk_ok=risk_ok,
+                critical_risk=critical_risk,
+            )
         else:
-            if not ev.available:
-                decision = Decision.HOLD
-                reason = "EV недоступен: недостаточно реализованных исходов для обоснованного сокращения позиции."
-            elif pipeline_result.opportunity.context.critical_risk or not pipeline_result.opportunity.context.risk_ok:
-                decision = Decision.REDUCE
-                reason = "Риск позиции ухудшился; позицию следует сократить."
-            elif ev.expected_value_pct < 0:
-                decision = Decision.REDUCE
-                reason = f"Ожидаемая ценность стала отрицательной ({ev.expected_value_pct:+.2f}%); позицию следует сократить."
-            else:
-                decision = Decision.HOLD
-                reason = f"EV остается положительным ({ev.expected_value_pct:+.2f}%), поэтому один лишь Quality Gate не является основанием для REDUCE; текущая рекомендация — HOLD."
+            decision_result = policy.evaluate_existing_position(
+                strategy=strategy_item,
+                expected_value=ev,
+                opportunity=pipeline_result.opportunity,
+                confidence_score=confidence_score,
+                entry_ok=entry_ok,
+                market_ok=market_ok,
+                risk_ok=risk_ok,
+                critical_risk=critical_risk,
+                exit_signal=bool(getattr(strategy_item, "exit_signal", False)) if strategy_item is not None else False,
+            )
+        decision = decision_result.decision or Decision.PASS
+        reason = decision_result.explanation
 
         decision_var.set(f"Решение: {decision.value}")
         reason_var.set(reason)
         explanation.configure(state="normal")
         explanation.delete("1.0", "end")
         evidence = pipeline_result.evidence_strategy or "N/A"
-        strategy_item = next((item for item in result.strategies if item.strategy == pipeline_result.evidence_strategy), None)
         strategy_score = strategy_item.score if strategy_item is not None else None
         risk_score = getattr(getattr(pipeline_result.opportunity, "risk", None), "score", None)
+        ci_text = (
+            f"Historical EV 95% CI: {ev.ev_ci_low_pct:+.2f}% → {ev.ev_ci_high_pct:+.2f}%"
+            if ev.available and ev.ev_ci_low_pct is not None and ev.ev_ci_high_pct is not None
+            else "Historical EV 95% CI: N/A"
+        )
+        reliability_text = (
+            f"Edge Reliability: {ev.edge_reliability_pct:.1f}% — {ev.edge_reliability_level}"
+            if ev.available and ev.edge_reliability_pct is not None
+            else "Edge Reliability: N/A"
+        )
         lines = [
             f"Evidence strategy: {evidence}",
             f"Strategy score: {strategy_score:.1f}" if strategy_score is not None else "Strategy score: N/A",
@@ -163,6 +188,8 @@ def _open_analysis_v08(app: Any) -> None:
             f"Risk score: {risk_score:.1f}" if risk_score is not None else "Risk score: N/A",
             f"EV: {ev.expected_value_pct:+.2f}% across {ev.observations} realized outcomes" if ev.available else "EV: N/A — no realized outcomes",
             f"Avg Win: {ev.average_win_pct:+.2f}%; Avg Loss: -{ev.average_loss_pct:.2f}%" if ev.available else "Avg Win/Loss: N/A",
+            ci_text,
+            reliability_text,
             f"Portfolio Impact: {pipeline_result.portfolio_impact.portfolio_impact_score:.1f}" if pipeline_result.portfolio_context_available else "Portfolio Impact: N/A — portfolio context was not supplied",
             f"Confidence: {confidence.overall_confidence:.1f} ({confidence.level})" if confidence is not None else "Confidence: N/A",
             f"Decision: {decision.value} — {reason}",
