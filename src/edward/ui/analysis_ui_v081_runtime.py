@@ -10,6 +10,7 @@ from edward.services.analysis_pipeline_service_v081 import AnalysisPipelineServi
 from edward.services.semantic_robust_contract_analysis_data_service_v081 import SemanticRobustContractAnalysisDataServiceV081
 from edward.services.news_intelligence_service_v081 import NewsIntelligenceServiceV081
 from edward.services.news_overlay_service_v081 import NewsOverlayServiceV081
+from edward.services.multifactor_diagnostics_v081 import emit_multifactor_diagnostics
 
 
 def install(app_class: type[Any], client_class: type[Any]) -> None:
@@ -123,6 +124,11 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
                 news_result = NewsIntelligenceServiceV081.analyze(data.news, instrument_uid=str(detail["instrument_uid"]))
                 adjusted_base, news_overlay = NewsOverlayServiceV081.apply(pipeline.base, news_result)
                 pipeline = replace(pipeline, base=adjusted_base)
+                emit_multifactor_diagnostics(
+                    instrument_uid=str(detail["instrument_uid"]),
+                    data=data,
+                    result=pipeline,
+                )
                 show_v081(pipeline, news_result, data.failed_sources)
                 return pipeline
 
