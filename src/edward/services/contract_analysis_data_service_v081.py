@@ -9,6 +9,7 @@ from edward.services.contract_evidence_mapper_v081 import (
     map_dividend,
     map_fundamentals,
     map_insider,
+    map_instrument_risk,
     map_news,
     map_order_book,
     map_risk_rates,
@@ -26,6 +27,7 @@ class ContractAnalysisDataV081:
     dividends: Any = None
     insider_transactions: tuple[Any, ...] = ()
     risk_data: Any = None
+    instrument_risk_metadata: Any = None
     reports: tuple[Any, ...] = ()
     news: tuple[Any, ...] = ()
     session_name: str | None = None
@@ -141,6 +143,18 @@ class ContractAnalysisDataServiceV081:
                         return name
         return None
 
+    @staticmethod
+    def _instrument_candidate(payload: Any) -> Any:
+        if not isinstance(payload, dict):
+            return payload
+        for key in ("instrument", "instruments", "response", "data", "result"):
+            value = payload.get(key)
+            if isinstance(value, dict):
+                return value
+            if isinstance(value, list) and value:
+                return value[0]
+        return payload
+
     def collect(self, instrument_uid: str) -> ContractAnalysisDataV081:
         now = datetime.now(timezone.utc)
         start = now - timedelta(days=365)
@@ -156,6 +170,7 @@ class ContractAnalysisDataServiceV081:
                 failed.append(name)
                 return default
 
+        raw_instrument = call("instrument", lambda: self.client.get_instrument(instrument_uid), {})
         raw_fundamentals = call("fundamentals", lambda: self.client.get_asset_fundamentals(instrument_uid), {})
         raw_order_book = call("order_book", lambda: self.client.get_order_book(instrument_uid, 10), {})
         raw_trades = call("last_trades", lambda: self.client.get_last_trades(instrument_uid, start, now), {})
@@ -165,19 +180,16 @@ class ContractAnalysisDataServiceV081:
         raw_risk = call("risk_rates", lambda: self.client.get_risk_rates([instrument_uid]), {})
         raw_reports = call("reports", lambda: self.client.get_asset_reports(instrument_uid, start, now + timedelta(days=90)), {})
         raw_news = call("news", lambda: self.client.get_news(1000), {})
-        raw_schedules = call(
-            "trading_schedules",
-            lambda: self.client.get_trading_schedules(from_dt=now, to_dt=now + timedelta(days=2)),
-            {},
-        )
+        raw_schedules = call("trading_schedules", lambda: self.client.get_trading_schedules(from_dt=now, to_dt=now + timedelta(days=2)), {})
 
         fundamentals_raw = self._first(raw_fundamentals, "fundamentals", "statistics")
-        reports_raw = self._many(raw_reports, "events")
-        insiders_raw = self._many(raw_insiders, "insider_deals")
+        reports_raw = self._many(raw_reports, "events", "reports")
+        insiders_raw = self._many(raw_insiders, "insider_deals", "insiders")
         dividends_raw = self._many(raw_dividends, "dividends")
         signals_raw = self._many(raw_signals, "signals")
         news_raw = self._many(raw_news, "items", "news")
 
+        mapped_instrument_risk = map_instrument_risk(self._instrument_candidate(raw_instrument))
         mapped_fundamentals = map_fundamentals(fundamentals_raw)
         mapped_order_book = map_order_book(raw_order_book)
         mapped_risk = map_risk_rates(raw_risk)
@@ -186,11 +198,7 @@ class ContractAnalysisDataServiceV081:
             item for item in mapped_news
             if not item.get("instrument_id")
             or str(instrument_uid) in {str(value) for value in (item.get("instrument_id") or []) if isinstance(value, str)}
-            or any(
-                isinstance(link, dict)
-                and str(instrument_uid) == str(((link.get("instrument") or {}).get("instrument_uid")))
-                for link in (item.get("instrument_id") or ())
-            )
+            or any(isinstance(link, dict) and str(instrument_uid) == str(((link.get("instrument") or {}).get("instrument_uid"))) for link in (item.get("instrument_id") or ()))
         )
         session_name = self._current_session(raw_schedules, now)
         session_available = "trading_schedules" in fetched and session_name is not None
@@ -199,6 +207,8 @@ class ContractAnalysisDataServiceV081:
             failed.append("fundamentals_mapping")
         if raw_risk not in ({}, None) and mapped_risk is None:
             failed.append("risk_rates_mapping")
+        if raw_instrument not in ({}, None) and mapped_instrument_risk is None:
+            failed.append("instrument_mapping")
         schedule_items = self._many(raw_schedules, "exchanges", "schedules", "items")
         if schedule_items and session_name is None:
             failed.append("trading_schedules_mapping")
@@ -217,6 +227,7 @@ class ContractAnalysisDataServiceV081:
             dividends=map_dividend(dividends_raw[0]) if dividends_raw else None,
             insider_transactions=tuple(map_insider(item) for item in insiders_raw),
             risk_data=mapped_risk,
+            instrument_risk_metadata=mapped_instrument_risk,
             reports=tuple(self._map_report(item) for item in reports_raw),
             news=relevant_news,
             session_name=session_name if session_available else None,
