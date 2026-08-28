@@ -14,8 +14,8 @@ class FakeSequence:
     def execute_confirmed_plan(self, **kwargs):
         self.calls.append(kwargs)
         step = kwargs["plan"].steps[0]
-        execution = type("Execution", (), {"verification": type("Verification", (), {"passed": True, "reasons": ()})()})()
-        result = type("StepResult", (), {"completed": True, "reason": "", "verification": execution.verification})()
+        verification = type("Verification", (), {"passed": True, "reasons": ()})()
+        result = type("StepResult", (), {"completed": True, "reason": "", "verification": verification})()
         return type("Sequence", (), {"completed": True, "stopped_at": None, "steps": (result,)})()
 
 
@@ -75,7 +75,7 @@ def test_enabled_autonomous_mode_stops_on_preflight_rejection():
 
 def test_replanned_cycle_rechecks_preflight_against_live_state_before_execution():
     sequence = FakeSequence(); controller = AutonomousTradingController(sequence); controller.enable()
-    # One iteration observes: initial state, fresh pre-execution state, and post-fill verification state.
+    # One iteration observes initial state, execution state, and post-fill verification state.
     states = [state(), state(), state()]; budgets = [budget(), budget()]; refresh_calls = []
     def refresh_state():
         refresh_calls.append(len(refresh_calls) + 1); return states.pop(0)
