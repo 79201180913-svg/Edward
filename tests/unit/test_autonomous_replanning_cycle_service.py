@@ -91,13 +91,15 @@ def test_stops_after_max_iterations():
 
 def test_emits_execution_status_events():
     events = []
+    plans = iter([make_plan(1, "old"), AutonomousExecutionPlan(steps=())])
     result = AutonomousReplanningCycleService(
         refresh_state=lambda: "state",
-        build_plan=lambda state: make_plan(1, "old"),
+        build_plan=lambda state: next(plans),
         execute_step=lambda step: SimpleNamespace(execution_id="exec-1", status="FILLED"),
         verify_step=lambda step, execution, state: passed_verification(),
         execution_event_callback=events.append,
     ).run()
     assert result.completed is True
+    assert result.iterations == 2
     assert [event["status"] for event in events] == ["PLAN", "SUBMITTING", "SUBMITTED", "VERIFYING", "EXECUTED"]
     assert events[2]["execution_id"] == "exec-1"
