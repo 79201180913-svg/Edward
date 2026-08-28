@@ -63,3 +63,27 @@ def test_contract_risk_error_is_unavailable_not_mapping_failure():
 
     assert result.risk_data is None
     assert "risk_rates_mapping" not in result.failed_sources
+
+
+class NestedRiskRateClient(EmptyCollectionsClient):
+    def get_risk_rates(self, instrument_ids):
+        return {
+            "instrument_risk_rates": [
+                {
+                    "instrument_uid": instrument_ids[0],
+                    "long_risk_rate": {"value": 0.30},
+                    "short_risk_rate": {"value": 0.55},
+                }
+            ]
+        }
+
+
+def test_nested_contract_risk_rates_are_mapped_during_semantic_retry():
+    result = SemanticRobustContractAnalysisDataServiceV081(NestedRiskRateClient()).collect("UID")
+
+    assert "risk_rates_mapping" not in result.failed_sources
+    assert result.risk_data is not None
+    assert result.risk_data["dlong"] == 0.30
+    assert result.risk_data["dshort"] == 0.55
+    assert result.risk_data["dlong_client"] == 0.30
+    assert result.risk_data["dshort_client"] == 0.55
