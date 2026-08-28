@@ -61,6 +61,45 @@ class ContractAnalysisDataServiceV081:
                 return value
         return []
 
+    @staticmethod
+    def _parse_dt(value: Any) -> datetime | None:
+        if isinstance(value, datetime):
+            return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        if isinstance(value, str):
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+            except ValueError:
+                return None
+        return None
+
+    @classmethod
+    def _current_session(cls, payload: Any, now: datetime) -> str | None:
+        exchanges = cls._many(payload, "exchanges", "schedules", "items")
+        for exchange in exchanges:
+            for day in cls._many(exchange, "days"):
+                date = cls._parse_dt(day.get("date")) if isinstance(day, dict) else None
+                if date is not None and date.date() != now.date():
+                    continue
+                if isinstance(day, dict) and not day.get("is_trading_day", True):
+                    return "UNKNOWN"
+                if not isinstance(day, dict):
+                    continue
+                ranges = (
+                    ("CLEARING", "clearing_start_time", "clearing_end_time"),
+                    ("PREMARKET", "premarket_start_time", "premarket_end_time"),
+                    ("OPENING_AUCTION", "opening_auction_start_time", "opening_auction_end_time"),
+                    ("CLOSING_AUCTION", "closing_auction_start_time", "closing_auction_end_time"),
+                    ("EVENING", "evening_start_time", "evening_end_time"),
+                    ("REGULAR", "start_time", "end_time"),
+                )
+                for name, start_key, end_key in ranges:
+                    start = cls._parse_dt(day.get(start_key))
+                    end = cls._parse_dt(day.get(end_key))
+                    if start is not None and end is not None and start <= now <= end:
+                        return name
+        return None
+
     def collect(self, instrument_uid: str) -> ContractAnalysisDataV081:
         now = datetime.now(timezone.utc)
         start = now - timedelta(days=365)
@@ -85,6 +124,7 @@ class ContractAnalysisDataServiceV081:
         raw_risk = call("risk_rates", lambda: self.client.get_risk_rates([instrument_uid]), {})
         raw_reports = call("reports", lambda: self.client.get_asset_reports(instrument_uid, start, now + timedelta(days=90)), {})
         raw_news = call("news", lambda: self.client.get_news(1000), {})
+        raw_schedules = call("trading_schedules", lambda: self.client.get_trading_schedules(from_dt=now - timedelta(days=1), to_dt=now + timedelta(days=1)), {})
 
         fundamentals_raw = self._first(raw_fundamentals, "fundamentals", "statistics")
         order_book_raw = raw_order_book if raw_order_book else None
@@ -96,11 +136,17 @@ class ContractAnalysisDataServiceV081:
         news_raw = [item for item in self._many(raw_news, "items", "news")]
 
         mapped_news = tuple(map_news(item) for item in news_raw)
-        relevant_news = tuple(item for item in mapped_news if not item.get("instrument_id") or any(
-            str(instrument_uid) == str(ref.get("instrument_uid"))
-            for link in (item.get("instrument_id") or ())
-            for ref in ((link.get("instrument") or {}),) if isinstance(link, dict)
-        ))
+        relevant_news = tuple(
+            item for item in mapped_news
+            if not item.get("instrument_id")
+            or str(instrument_uid) in {str(value) for value in (item.get("instrument_id") or []) if isinstance(value, str)}
+            or any(
+                isinstance(link, dict)
+                and str(instrument_uid) == str(((link.get("instrument") or {}).get("instrument_uid")))
+                for link in (item.get("instrument_id") or ())
+            )
+        )
+
         return ContractAnalysisDataV081(
             fundamentals=map_fundamentals(fundamentals_raw) if fundamentals_raw is not None else None,
             order_book=map_order_book(order_book_raw) if order_book_raw else None,
@@ -111,7 +157,7 @@ class ContractAnalysisDataServiceV081:
             risk_data=map_risk_rates(raw_risk),
             reports=tuple(reports_raw),
             news=relevant_news,
-            session_name=None,
+            session_name=self._current_session(raw_schedules, now),
             fetched_sources=tuple(fetched),
             failed_sources=tuple(failed),
         )
