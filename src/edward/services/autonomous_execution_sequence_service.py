@@ -60,22 +60,47 @@ class AutonomousExecutionSequenceResult:
 
 
 class AutonomousExecutionSequenceService:
-    """Execute autonomous steps one-by-one and protect new positions after fill.
+    """Execute autonomous steps one-by-one, wait for broker completion and protect fills.
 
     A failed individual step is recorded and the sequence continues with the
     next independent step. A dependent step is skipped when its prerequisite
-    did not complete. The whole cycle is only marked completed when every
-    planned step completed successfully.
+    did not complete. Broker SUBMITTED/PARTIALLY_FILLED states are not treated
+    as successful fills: the bridge polls until a terminal broker state or
+    cancels the order on timeout. The whole cycle is only marked completed when
+    every planned step completed successfully.
     """
 
-    def __init__(self, bridge: ExecutionBridgeService, state_refresh: AccountStateRefreshService, *, step_service: AutonomousExecutionService | None = None, verifier: AutonomousExecutionVerificationService | None = None, protection_service: AutonomousProtectionService | None = None) -> None:
+    def __init__(
+        self,
+        bridge: ExecutionBridgeService,
+        state_refresh: AccountStateRefreshService,
+        *,
+        step_service: AutonomousExecutionService | None = None,
+        verifier: AutonomousExecutionVerificationService | None = None,
+        protection_service: AutonomousProtectionService | None = None,
+        execution_timeout_seconds: float = 30.0,
+        execution_poll_interval_seconds: float = 1.0,
+    ) -> None:
+        if execution_timeout_seconds < 0:
+            raise ValueError("execution_timeout_seconds must be non-negative")
+        if execution_poll_interval_seconds <= 0:
+            raise ValueError("execution_poll_interval_seconds must be positive")
         self._bridge = bridge
         self._refresh = state_refresh
         self._steps = step_service or AutonomousExecutionService(bridge)
         self._verifier = verifier or AutonomousExecutionVerificationService()
         self._protection = protection_service
+        self._execution_timeout_seconds = execution_timeout_seconds
+        self._execution_poll_interval_seconds = execution_poll_interval_seconds
 
-    def execute_confirmed_plan(self, *, account_id: str, plan: AutonomousExecutionPlan, result_factory: Callable[[ExecutionPlanStep], Any], mode: ExecutionMode = ExecutionMode.USER_CONFIRMATION) -> AutonomousExecutionSequenceResult:
+    def execute_confirmed_plan(
+        self,
+        *,
+        account_id: str,
+        plan: AutonomousExecutionPlan,
+        result_factory: Callable[[ExecutionPlanStep], Any],
+        mode: ExecutionMode = ExecutionMode.USER_CONFIRMATION,
+    ) -> AutonomousExecutionSequenceResult:
         results: list[AutonomousExecutionStepResult] = []
         completed_sequences: set[int] = set()
         events: list[AutonomousExecutionPhaseEvent] = []
@@ -139,6 +164,22 @@ class AutonomousExecutionSequenceService:
                     if waiting.status is not ExecutionStatus.WAITING_CONFIRMATION:
                         raise ValueError(f"CONFIRMATION_NOT_READY:{waiting.status}")
                     submitted = self._bridge.intake.confirmation_service.confirm_and_submit(intake.request)
+
+                if submitted.status not in {
+                    ExecutionStatus.SUBMITTED,
+                    ExecutionStatus.PARTIALLY_FILLED,
+                    ExecutionStatus.FILLED,
+                    ExecutionStatus.RECONCILED,
+                }:
+                    raise RuntimeError(submitted.error_message or f"EXECUTION_STATUS:{submitted.status}")
+
+                if submitted.status in {ExecutionStatus.SUBMITTED, ExecutionStatus.PARTIALLY_FILLED}:
+                    emit(step.sequence, AutonomousExecutionPhase.EXECUTING, "Ожидание исполнения брокером")
+                    submitted = self._bridge.wait_for_terminal(
+                        execution_id,
+                        timeout_seconds=self._execution_timeout_seconds,
+                        poll_interval_seconds=self._execution_poll_interval_seconds,
+                    )
             except Exception as exc:
                 reason = str(exc)
                 emit(step.sequence, AutonomousExecutionPhase.FAILED, reason)
@@ -148,7 +189,7 @@ class AutonomousExecutionSequenceService:
                     first_failure = step.sequence
                 continue
 
-            if submitted.status not in {ExecutionStatus.SUBMITTED, ExecutionStatus.PARTIALLY_FILLED, ExecutionStatus.FILLED, ExecutionStatus.RECONCILED}:
+            if submitted.status not in {ExecutionStatus.FILLED, ExecutionStatus.RECONCILED}:
                 reason = submitted.error_message or f"EXECUTION_STATUS:{submitted.status}"
                 emit(step.sequence, AutonomousExecutionPhase.FAILED, reason)
                 results.append(AutonomousExecutionStepResult(step, execution_id, submitted.status, None, False, AutonomousExecutionPhase.FAILED, reason))
@@ -161,7 +202,12 @@ class AutonomousExecutionSequenceService:
             try:
                 after_state = self._refresh.refresh(account_id)
                 expected_quantity = int(submitted.filled_quantity)
-                verification = self._verifier.verify(step=step, state=after_state, expected_quantity=expected_quantity, before_quantity=before_quantity)
+                verification = self._verifier.verify(
+                    step=step,
+                    state=after_state,
+                    expected_quantity=expected_quantity,
+                    before_quantity=before_quantity,
+                )
             except Exception as exc:
                 reason = f"VERIFICATION_FAILED:{exc}"
                 emit(step.sequence, AutonomousExecutionPhase.FAILED, reason)
@@ -184,7 +230,12 @@ class AutonomousExecutionSequenceService:
             if self._protection is not None and step.action in {"BUY", "ADD"}:
                 emit(step.sequence, AutonomousExecutionPhase.PROTECTED, "Создание защитного Stop Loss")
                 try:
-                    protection = self._protection.protect_fill(account_id=account_id, instrument_uid=step.instrument_uid, quantity=expected_quantity, result=result)
+                    protection = self._protection.protect_fill(
+                        account_id=account_id,
+                        instrument_uid=step.instrument_uid,
+                        quantity=expected_quantity,
+                        result=result,
+                    )
                 except Exception as exc:
                     reason = f"PROTECTION_FAILED:{exc}"
                     emit(step.sequence, AutonomousExecutionPhase.FAILED, reason)
