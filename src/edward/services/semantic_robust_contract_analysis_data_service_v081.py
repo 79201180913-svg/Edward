@@ -5,6 +5,7 @@ from dataclasses import replace
 import logging
 from typing import Any
 
+from edward.services.contract_evidence_mapper_v081 import map_risk_rates
 from edward.services.robust_contract_analysis_data_service_v081 import RobustContractAnalysisDataServiceV081
 
 
@@ -215,6 +216,30 @@ class SemanticRobustContractAnalysisDataServiceV081(RobustContractAnalysisDataSe
                     instrument_uid,
                     self._risk_debug_summary(raw),
                 )
+                risk_items = self._many(raw, *keys)
+                logger.warning(
+                    "[V081 RISK MAP INPUT] instrument_uid=%s item_count=%d items=%r",
+                    instrument_uid,
+                    len(risk_items),
+                    risk_items,
+                )
+                mapped_risk = map_risk_rates({"risk_rates": risk_items}) if risk_items else None
+                logger.warning(
+                    "[V081 RISK MAP RESULT] instrument_uid=%s mapped=%r mapped_type=%s",
+                    instrument_uid,
+                    mapped_risk,
+                    type(mapped_risk).__name__ if mapped_risk is not None else "None",
+                )
+                if mapped_risk is not None:
+                    failed.discard(failure_name)
+                    result = replace(result, risk_data=mapped_risk)
+                    logger.warning(
+                        "[V081 SEMANTIC -> MAPPED] source=%s removed_failure=%s risk_data=%r",
+                        source_name,
+                        failure_name,
+                        mapped_risk,
+                    )
+                    continue
 
             empty = self._has_empty_collection(raw, *keys)
             nonempty = self._has_nonempty_collection(raw, *keys)
