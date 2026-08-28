@@ -82,7 +82,16 @@ class AutonomousTradingRuntimeFacade:
     def controller(self) -> AutonomousTradingController:
         return self._controller
 
-    def run_cycle(self, *, max_iterations: int = 50, progress_callback: Callable[[str, float, int, int], None] | None = None, result_callback: Callable[[Any, int, int], None] | None = None, scope_callback: Callable[[str], None] | None = None, planning_callback: Callable[[Any], None] | None = None) -> AutonomousRuntimeResult:
+    def run_cycle(
+        self,
+        *,
+        max_iterations: int = 50,
+        progress_callback: Callable[[str, float, int, int], None] | None = None,
+        result_callback: Callable[[Any, int, int], None] | None = None,
+        scope_callback: Callable[[str], None] | None = None,
+        planning_callback: Callable[[Any], None] | None = None,
+        cycle_result_callback: Callable[[Any], None] | None = None,
+    ) -> AutonomousRuntimeResult:
         _console(f"[AUTONOMOUS][STAGE] cycle entered; account_id={self.account_id} profile={self.profile} max_iterations={max_iterations}")
 
         def refresh_state() -> AccountState:
@@ -93,7 +102,19 @@ class AutonomousTradingRuntimeFacade:
 
         def build_plan(state: AccountState) -> AutonomousExecutionPlan:
             _console("[AUTONOMOUS][STAGE] 2/6 analysis + capital planning: START")
-            result = self._cycle.run(account_id=self.account_id, policy=self.policy, profile=self.profile, instrument_kind=self.instrument_kind, progress_callback=progress_callback, result_callback=result_callback, scope_callback=scope_callback, planning_callback=planning_callback, account_state=state)
+            result = self._cycle.run(
+                account_id=self.account_id,
+                policy=self.policy,
+                profile=self.profile,
+                instrument_kind=self.instrument_kind,
+                progress_callback=progress_callback,
+                result_callback=result_callback,
+                scope_callback=scope_callback,
+                planning_callback=planning_callback,
+                account_state=state,
+            )
+            if cycle_result_callback is not None:
+                cycle_result_callback(result)
             plan = result.execution_plan or AutonomousExecutionPlan(steps=())
             _console(f"[AUTONOMOUS][STAGE] 2/6 analysis + capital planning: DONE market={len(result.market_opportunities)} portfolio={len(result.portfolio_opportunities)} allocation={len(result.allocation_actions)} execution_steps={len(plan.steps)}")
             return plan
