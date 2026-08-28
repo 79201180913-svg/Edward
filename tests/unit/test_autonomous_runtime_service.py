@@ -1,4 +1,5 @@
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -105,6 +106,44 @@ def test_long_cycle_exposes_elapsed_progress():
     assert snapshot.status == "EXECUTING"
     assert "прошло" in snapshot.message
     assert "сек." in snapshot.message
+
+
+def test_completed_facade_result_is_published_before_waiting():
+    state = AutonomousRunStateService()
+    state.set_mode(AutonomousRunMode.AUTONOMOUS)
+    result = SimpleNamespace(control=SimpleNamespace(executed=True, reason="COMPLETED"))
+    runtime = AutonomousRuntimeService(
+        lambda: result,
+        state_service=state,
+        config=AutonomousRuntimeConfig(interval_seconds=60),
+    )
+
+    runtime.start()
+    _wait_for(lambda: state.snapshot().status == "WAITING")
+    snapshot = state.snapshot()
+    runtime.stop()
+
+    assert "Последний цикл выполнен: COMPLETED." in snapshot.message
+    assert "Следующий анализ через" in snapshot.message
+
+
+def test_rejected_cycle_remains_enabled_and_exposes_reason():
+    state = AutonomousRunStateService()
+    state.set_mode(AutonomousRunMode.AUTONOMOUS)
+    result = SimpleNamespace(control=SimpleNamespace(executed=False, reason="PREFLIGHT_REJECTED:LIMIT"))
+    runtime = AutonomousRuntimeService(
+        lambda: result,
+        state_service=state,
+        config=AutonomousRuntimeConfig(interval_seconds=60),
+    )
+
+    runtime.start()
+    _wait_for(lambda: state.snapshot().status == "WAITING")
+    snapshot = state.snapshot()
+    runtime.stop()
+
+    assert snapshot.enabled is True
+    assert "Последний цикл не выполнен: PREFLIGHT_REJECTED:LIMIT." in snapshot.message
 
 
 def test_interval_must_be_positive():
