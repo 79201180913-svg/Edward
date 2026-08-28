@@ -5,12 +5,14 @@ from typing import Iterable, Mapping, Sequence
 
 from edward.services.analysis_service import AnalysisResult, Candle
 from edward.services.analysis_service_v08 import AnalysisServiceV08
-from edward.services.confidence_service_v08 import ConfidenceResult, ConfidenceService
+from edward.services.confidence_calibration_v08 import calculate_confidence
+from edward.services.confidence_service_v08 import ConfidenceResult
 from edward.services.expected_value_engine_v08 import ExpectedValueEngine, ExpectedValueResult
 from edward.services.forecast_quality_adapter_v08 import ForecastQualityAdapterV08
 from edward.services.opportunity_engine import OpportunityResult
 from edward.services.opportunity_engine_v08 import OpportunityEngineV08
 from edward.services.portfolio_impact_service_v08 import PortfolioImpactResult, PortfolioImpactService
+from edward.services.regime_confidence_v08 import cap_regime_confidence
 from edward.services.regime_engine_v08 import RegimeEngine
 from edward.services.research_backtest_service_v08 import ResearchBacktestService
 
@@ -44,16 +46,13 @@ class AnalysisPipelineServiceV08:
     def _empty_portfolio() -> PortfolioImpactResult:
         return PortfolioImpactResult(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
-    @staticmethod
-    def _no_strategy_confidence(regime_confidence: float | None, forecast_quality_score: float | None) -> ConfidenceResult:
-        return ConfidenceService.calculate(strategy_quality=0.0, forecast_quality=forecast_quality_score or 0.0, regime_confidence=regime_confidence or 0.0, portfolio_confidence=0.0)
-
     def analyze(self, *, instrument_uid: str, ticker: str, candles: Iterable[Candle], profile: str = "medium_term", risk_profile: str = "balanced", horizon: str = "medium", portfolio_weights: Mapping[str, float] | None = None, portfolio_returns: Mapping[str, Sequence[float]] | None = None, candidate_weight: float = 0.0, concentration_penalty_pct: float = 0.0) -> AnalysisPipelineV08Result:
         ordered = sorted(list(candles), key=lambda item: item.timestamp)
         analysis = self.analysis_service.analyze(instrument_uid=instrument_uid, ticker=ticker, candles=ordered, profile=profile, risk_profile=risk_profile, horizon=horizon)
         evidence_strategy_result = max(analysis.strategies, key=lambda item: item.score) if analysis.strategies else None
         evidence_strategy = evidence_strategy_result.strategy if evidence_strategy_result else None
-        regime_result = RegimeEngine.classify(ordered)
+        raw_regime = RegimeEngine.classify(ordered)
+        regime_confidence = cap_regime_confidence(raw_regime.confidence)
         forecast_quality_score = None
         try:
             forecast_quality_score = self.forecast_quality.evaluate(candles=ordered, horizons=(1, 5, 20)).overall_quality_score
@@ -63,9 +62,9 @@ class AnalysisPipelineServiceV08:
         if evidence_strategy_result is None:
             ev = ExpectedValueEngine.from_returns(())
             impact = self._empty_portfolio()
-            confidence = self._no_strategy_confidence(regime_result.confidence, forecast_quality_score)
+            confidence = calculate_confidence(strategy_quality=0.0, forecast_quality=forecast_quality_score or 0.0, regime_confidence=regime_confidence, portfolio_confidence=0.0, observations=0)
             opportunity = OpportunityEngineV08.evaluate(analysis=analysis, candles=ordered, strategy_result=None, expected_value=ev, portfolio_impact=impact, confidence_score=confidence.overall_confidence)
-            return AnalysisPipelineV08Result(analysis, opportunity, ev, impact, forecast_quality_score, regime_result.confidence, None, False, confidence)
+            return AnalysisPipelineV08Result(analysis, opportunity, ev, impact, forecast_quality_score, regime_confidence, None, False, confidence)
 
         backtest = ResearchBacktestService.run_simple_strategy(candles=ordered, strategy=evidence_strategy_result.strategy, parameters=evidence_strategy_result.parameters, costs=self.analysis_service.costs)
         ev = ExpectedValueEngine.from_trades(backtest.trades_detail)
@@ -77,8 +76,8 @@ class AnalysisPipelineServiceV08:
             asset_returns[candidate_id] = self._returns(ordered)
         impact = (PortfolioImpactService.calculate(weights=weights, asset_returns=asset_returns, candidate_id=candidate_id, candidate_weight=candidate_weight, candidate_expected_return_pct=ev.expected_value_pct, concentration_penalty_pct=concentration_penalty_pct) if portfolio_context_available and (candidate_weight > 0 or weights) else self._empty_portfolio())
         portfolio_confidence = 0.0 if not portfolio_context_available else max(0.0, min(100.0, 70.0 + impact.diversification_benefit_pct * 5.0 - max(0.0, impact.marginal_risk_pct) * 5.0))
-        confidence = ConfidenceService.calculate(strategy_quality=evidence_strategy_result.stability, forecast_quality=forecast_quality_score or 0.0, regime_confidence=regime_result.confidence, portfolio_confidence=portfolio_confidence, uncertainty_width_pct=ev.uncertainty_width_pct if ev.available else None)
+        confidence = calculate_confidence(strategy_quality=evidence_strategy_result.stability, forecast_quality=forecast_quality_score or 0.0, regime_confidence=regime_confidence, portfolio_confidence=portfolio_confidence, observations=ev.observations if ev.available else 0, uncertainty_width_pct=ev.uncertainty_width_pct if ev.available else None)
         opportunity = OpportunityEngineV08.evaluate(analysis=analysis, candles=ordered, strategy_result=evidence_strategy_result, expected_value=ev, portfolio_impact=impact, robustness_score=evidence_strategy_result.stability, forecast_quality_score=forecast_quality_score, confidence_score=confidence.overall_confidence)
-        return AnalysisPipelineV08Result(analysis, opportunity, ev, impact, forecast_quality_score, regime_result.confidence, evidence_strategy, portfolio_context_available, confidence)
+        return AnalysisPipelineV08Result(analysis, opportunity, ev, impact, forecast_quality_score, regime_confidence, evidence_strategy, portfolio_context_available, confidence)
 
 __all__ = ["ANALYSIS_PIPELINE_V08_VERSION", "AnalysisPipelineV08Result", "AnalysisPipelineServiceV08"]
