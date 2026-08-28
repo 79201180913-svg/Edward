@@ -32,7 +32,17 @@ def calculate_confidence(
     else:
         factor = 1.0
     score = max(0.0, min(100.0, score * factor))
-    level = "High" if score >= 75.0 else "Medium" if score >= 60.0 else "Low"
+
+    # Small samples cannot support Medium/High confidence, regardless of
+    # component scores. This is a hard evidential ceiling, not a penalty.
+    if observations < 50:
+        level = "Low"
+        score = min(score, 59.99)
+    elif observations < 100:
+        level = "High" if score >= 75.0 else "Medium" if score >= 60.0 else "Low"
+    else:
+        level = "High" if score >= 75.0 else "Medium" if score >= 60.0 else "Low"
+
     return ConfidenceResult(*values, round(score, 4), level)
 
 
