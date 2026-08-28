@@ -4,7 +4,7 @@ from edward.services.analysis_pipeline_service_v08 import AnalysisPipelineV08Res
 from edward.services.analysis_pipeline_service_v081 import AnalysisPipelineServiceV081, AnalysisPipelineV081Result
 
 
-def _candles(count=120):
+def _candles(count=320):
     start = datetime(2026, 1, 1, tzinfo=timezone.utc)
     return [
         type("CandleLike", (), {
