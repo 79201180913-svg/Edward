@@ -5,18 +5,27 @@ from dataclasses import replace
 from typing import Any
 
 from edward.services.contract_analysis_data_service_v081 import ContractAnalysisDataServiceV081
-from edward.services.contract_evidence_mapper_v081 import map_order_book, map_risk_rates
+from edward.services.contract_evidence_mapper_v081 import (
+    map_fundamentals,
+    map_insider,
+    map_order_book,
+    map_risk_rates,
+)
 
 
 class RobustContractAnalysisDataServiceV081(ContractAnalysisDataServiceV081):
-    """v0.8.1 collector with recursive and direct contract-response discovery."""
+    """v0.8.1 collector with recursive contract-response discovery."""
 
     _DIRECT_FIELD_GROUPS = {
         "fundamentals": {
             "roe", "roic", "net_margin_mrq", "revenue_ttm", "free_cash_flow_ttm",
             "pe_ratio_ttm", "eps_change_five_years", "net_debt_to_ebitda",
+            "one_year_annual_revenue_growth_rate", "current_ratio_mrq",
         },
-        "risk_rates": {"long_risk_rate", "short_risk_rate", "dlong", "dshort", "dlong_client", "dshort_client"},
+        "risk_rates": {
+            "long_risk_rate", "short_risk_rate", "dlong", "dshort",
+            "dlong_client", "dshort_client",
+        },
         "reports": {"report_date", "period_year", "period_num", "period_type"},
         "insiders": {"quantity", "direction", "investor_position", "percentage"},
         "news": {"id", "title", "source", "priority", "ts"},
@@ -25,7 +34,7 @@ class RobustContractAnalysisDataServiceV081(ContractAnalysisDataServiceV081):
     }
 
     @classmethod
-    def _walk(cls, value: Any, *, max_depth: int = 8):
+    def _walk(cls, value: Any, *, max_depth: int = 12):
         seen: set[int] = set()
         stack: list[tuple[Any, int]] = [(value, 0)]
         while stack:
@@ -52,11 +61,16 @@ class RobustContractAnalysisDataServiceV081(ContractAnalysisDataServiceV081):
         return name.replace("_", "").lower()
 
     @classmethod
+    def _looks_like_direct_object(cls, mapping: Mapping[str, Any], group: str) -> bool:
+        normalized = {cls._normalize(str(key)) for key in mapping}
+        required = {cls._normalize(key) for key in cls._DIRECT_FIELD_GROUPS[group]}
+        return bool(normalized & required)
+
+    @classmethod
     def _matching_value(cls, mapping: Mapping[str, Any], key_names: tuple[str, ...]) -> Any:
         normalized = {cls._normalize(str(key)): key for key in mapping}
         for name in key_names:
-            direct_names = (name, name.replace("_", ""))
-            for candidate in direct_names:
+            for candidate in (name, name.replace("_", "")):
                 if candidate in mapping:
                     return mapping[candidate]
             actual = normalized.get(cls._normalize(name))
@@ -65,18 +79,8 @@ class RobustContractAnalysisDataServiceV081(ContractAnalysisDataServiceV081):
         return None
 
     @classmethod
-    def _looks_like_direct_object(cls, mapping: Mapping[str, Any], groups: tuple[str, ...]) -> bool:
-        normalized = {cls._normalize(str(key)) for key in mapping}
-        for group in groups:
-            required = {cls._normalize(key) for key in cls._DIRECT_FIELD_GROUPS[group]}
-            if normalized & required:
-                return True
-        return False
-
-    @classmethod
     def _groups_for_keys(cls, keys: tuple[str, ...]) -> tuple[str, ...]:
         normalized = {cls._normalize(key) for key in keys}
-        groups: list[str] = []
         aliases = {
             "fundamentals": "fundamentals",
             "statistics": "fundamentals",
@@ -90,7 +94,10 @@ class RobustContractAnalysisDataServiceV081(ContractAnalysisDataServiceV081):
             "news": "news",
             "signals": "signals",
             "dividends": "dividends",
+            "bids": "microstructure",
+            "asks": "microstructure",
         }
+        groups: list[str] = []
         for name, group in aliases.items():
             if name in normalized and group not in groups:
                 groups.append(group)
@@ -99,6 +106,14 @@ class RobustContractAnalysisDataServiceV081(ContractAnalysisDataServiceV081):
     @classmethod
     def _first(cls, payload: Any, *keys: str) -> Any:
         groups = cls._groups_for_keys(tuple(keys))
+        # Find a concrete contract record before considering an envelope.
+        for current in cls._walk(payload):
+            if not isinstance(current, Mapping):
+                continue
+            for group in groups:
+                if cls._looks_like_direct_object(current, group):
+                    return current
+
         for current in cls._walk(payload):
             if not isinstance(current, Mapping):
                 continue
@@ -106,19 +121,27 @@ class RobustContractAnalysisDataServiceV081(ContractAnalysisDataServiceV081):
             if value is None:
                 continue
             if isinstance(value, list):
-                return value[0] if value else None
-            if isinstance(value, Mapping):
-                if not groups or cls._looks_like_direct_object(value, groups):
+                for item in value:
+                    if isinstance(item, Mapping):
+                        for group in groups:
+                            if cls._looks_like_direct_object(item, group):
+                                return item
+                if value:
+                    return value[0]
+            elif isinstance(value, Mapping):
+                for nested in cls._walk(value, max_depth=8):
+                    if isinstance(nested, Mapping) and any(
+                        cls._looks_like_direct_object(nested, group) for group in groups
+                    ):
+                        return nested
+                if not groups:
                     return value
-                # The matched key is an envelope; continue walking into it.
-                continue
-            return value
-        if isinstance(payload, Mapping) and groups and cls._looks_like_direct_object(payload, groups):
-            return payload
+            else:
+                return value
         return None
 
     @classmethod
-    def _extract_list(cls, value: Any, *, max_depth: int = 6) -> list[Any]:
+    def _extract_list(cls, value: Any, *, max_depth: int = 8) -> list[Any]:
         if isinstance(value, list):
             return value
         if not isinstance(value, Mapping):
@@ -146,6 +169,8 @@ class RobustContractAnalysisDataServiceV081(ContractAnalysisDataServiceV081):
         if isinstance(payload, list):
             return payload
         target_names = {cls._normalize(name) for name in keys}
+        groups = cls._groups_for_keys(tuple(keys))
+
         for current in cls._walk(payload):
             if not isinstance(current, Mapping):
                 continue
@@ -155,17 +180,54 @@ class RobustContractAnalysisDataServiceV081(ContractAnalysisDataServiceV081):
                 extracted = cls._extract_list(value)
                 if extracted:
                     return extracted
-                if isinstance(value, Mapping) and cls._looks_like_direct_object(value, cls._groups_for_keys(tuple(keys))):
+                if isinstance(value, Mapping) and groups and any(
+                    cls._looks_like_direct_object(value, group) for group in groups
+                ):
                     return [value]
-        groups = cls._groups_for_keys(tuple(keys))
-        if isinstance(payload, Mapping) and groups and cls._looks_like_direct_object(payload, groups):
-            return [payload]
+
+        if groups:
+            for current in cls._walk(payload):
+                if not isinstance(current, (list, tuple)) or not current:
+                    continue
+                mappings = [item for item in current if isinstance(item, Mapping)]
+                if mappings and any(
+                    cls._looks_like_direct_object(item, group)
+                    for item in mappings
+                    for group in groups
+                ):
+                    return list(current)
+            if isinstance(payload, Mapping) and any(
+                cls._looks_like_direct_object(payload, group) for group in groups
+            ):
+                return [payload]
         return []
 
     def collect(self, instrument_uid: str):
         result = super().collect(instrument_uid)
         failed = set(result.failed_sources)
         fetched = set(result.fetched_sources)
+
+        if "fundamentals" in fetched and "fundamentals_mapping" in failed:
+            raw = self.client.get_asset_fundamentals(instrument_uid)
+            candidate = self._first(raw, "fundamentals", "statistics")
+            mapped = map_fundamentals(candidate)
+            if mapped is not None:
+                failed.discard("fundamentals_mapping")
+                result = replace(result, fundamentals=mapped)
+
+        if "insiders" in fetched and "insiders_mapping" in failed:
+            raw = self.client.get_insider_deals(instrument_uid, 100)
+            items = self._many(raw, "insider_deals", "insiders")
+            if items:
+                failed.discard("insiders_mapping")
+                result = replace(result, insider_transactions=tuple(map_insider(item) for item in items))
+
+        if "reports" in fetched and "reports_mapping" in failed:
+            raw = self.client.get_asset_reports(instrument_uid, None, None)
+            items = self._many(raw, "events", "reports")
+            if items:
+                failed.discard("reports_mapping")
+                result = replace(result, reports=tuple(self._map_report(item) for item in items))
 
         if "risk_rates" in fetched and "risk_rates_mapping" in failed:
             raw_risk = self.client.get_risk_rates([instrument_uid])
