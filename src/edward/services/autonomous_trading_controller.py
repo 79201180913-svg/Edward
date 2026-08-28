@@ -72,7 +72,7 @@ class AutonomousTradingController:
         sequence = self._execute_sequence(account_id=account_id, plan=plan, result_factory=result_factory, mode=mode, initial_state=state)
         return AutonomousTradingControlResult(mode=mode, executed=sequence.completed, reason="COMPLETED" if sequence.completed else f"STOPPED_AT:{sequence.stopped_at}", phase=getattr(sequence, "phase", AutonomousExecutionPhase.STOPPED), sequence=sequence, events=getattr(sequence, "events", ()))
 
-    def execute_replanned(self, *, account_id: str, mode: ExecutionMode, refresh_state: Callable[[], AccountState], build_plan: Callable[[AccountState], AutonomousExecutionPlan], budget_for_state: Callable[[AccountState], BudgetPlan], result_factory: Callable[[Any], Any], max_iterations: int = 50) -> AutonomousTradingControlResult:
+    def execute_replanned(self, *, account_id: str, mode: ExecutionMode, refresh_state: Callable[[], AccountState], build_plan: Callable[[AccountState], AutonomousExecutionPlan], budget_for_state: Callable[[AccountState], BudgetPlan], result_factory: Callable[[Any], Any], max_iterations: int = 50, execution_event_callback: Callable[[dict[str, Any]], None] | None = None) -> AutonomousTradingControlResult:
         if mode is not ExecutionMode.AUTONOMOUS: return AutonomousTradingControlResult(mode=mode, executed=False, reason="AUTONOMOUS_MODE_REQUIRED")
         if not self._enabled: return AutonomousTradingControlResult(mode=mode, executed=False, reason="AUTONOMOUS_TRADING_DISABLED")
         preflight_reasons: list[str] = []; cycle_error: list[str] = []
@@ -102,7 +102,7 @@ class AutonomousTradingController:
             if verification is None: raise RuntimeError("VERIFICATION_RESULT_MISSING")
             return verification
 
-        cycle = AutonomousReplanningCycleService(refresh_state=refresh_state, build_plan=build_checked_plan, execute_step=execute_one, verify_step=verify_one, max_iterations=max_iterations).run()
+        cycle = AutonomousReplanningCycleService(refresh_state=refresh_state, build_plan=build_checked_plan, execute_step=execute_one, verify_step=verify_one, max_iterations=max_iterations, execution_event_callback=execution_event_callback).run()
         if cycle_error: reason = "EXECUTION_ERROR:" + cycle_error[-1]
         elif cycle.completed: reason = "COMPLETED"
         else: reason = cycle.stopped_reason or "STOPPED"
