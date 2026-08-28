@@ -74,19 +74,72 @@ class RobustContractAnalysisDataServiceV081(ContractAnalysisDataServiceV081):
         return False
 
     @classmethod
+    def _groups_for_keys(cls, keys: tuple[str, ...]) -> tuple[str, ...]:
+        normalized = {cls._normalize(key) for key in keys}
+        groups: list[str] = []
+        aliases = {
+            "fundamentals": "fundamentals",
+            "statistics": "fundamentals",
+            "riskrates": "risk_rates",
+            "instrumentriskrates": "risk_rates",
+            "events": "reports",
+            "reports": "reports",
+            "insiderdeals": "insiders",
+            "insiders": "insiders",
+            "items": "news",
+            "news": "news",
+            "signals": "signals",
+            "dividends": "dividends",
+        }
+        for name, group in aliases.items():
+            if name in normalized and group not in groups:
+                groups.append(group)
+        return tuple(groups)
+
+    @classmethod
     def _first(cls, payload: Any, *keys: str) -> Any:
+        groups = cls._groups_for_keys(tuple(keys))
         for current in cls._walk(payload):
-            if isinstance(current, Mapping):
-                value = cls._matching_value(current, keys)
-                if value is not None:
-                    if isinstance(value, list):
-                        return value[0] if value else None
+            if not isinstance(current, Mapping):
+                continue
+            value = cls._matching_value(current, tuple(keys))
+            if value is None:
+                continue
+            if isinstance(value, list):
+                return value[0] if value else None
+            if isinstance(value, Mapping):
+                if not groups or cls._looks_like_direct_object(value, groups):
                     return value
-        # Some adapter responses are already the contract object itself rather than
-        # an object under `statistics`/`fundamentals`. Detect those directly.
-        if isinstance(payload, Mapping) and cls._looks_like_direct_object(payload, ("fundamentals",)):
+                # The matched key is an envelope; continue walking into it.
+                continue
+            return value
+        if isinstance(payload, Mapping) and groups and cls._looks_like_direct_object(payload, groups):
             return payload
         return None
+
+    @classmethod
+    def _extract_list(cls, value: Any, *, max_depth: int = 6) -> list[Any]:
+        if isinstance(value, list):
+            return value
+        if not isinstance(value, Mapping):
+            return []
+        stack: list[tuple[Any, int]] = [(value, 0)]
+        seen: set[int] = set()
+        while stack:
+            current, depth = stack.pop()
+            if depth > max_depth or current is None:
+                continue
+            if isinstance(current, (Mapping, list, tuple)):
+                identity = id(current)
+                if identity in seen:
+                    continue
+                seen.add(identity)
+            if isinstance(current, list):
+                return current
+            if isinstance(current, Mapping):
+                for child in reversed(list(current.values())):
+                    stack.append((child, depth + 1))
+        return []
 
     @classmethod
     def _many(cls, payload: Any, *keys: str) -> list[Any]:
@@ -97,24 +150,16 @@ class RobustContractAnalysisDataServiceV081(ContractAnalysisDataServiceV081):
             if not isinstance(current, Mapping):
                 continue
             for raw_key, value in current.items():
-                if cls._normalize(str(raw_key)) in target_names and isinstance(value, list):
-                    return value
-        if isinstance(payload, Mapping):
-            group_map = {
-                "risk_rates": ("risk_rates",),
-                "instrument_risk_rates": ("risk_rates",),
-                "events": ("reports",),
-                "insider_deals": ("insiders",),
-                "items": ("news",),
-                "news": ("news",),
-                "signals": ("signals",),
-                "dividends": ("dividends",),
-            }
-            groups: set[str] = set()
-            for key in keys:
-                groups.update(group_map.get(key, ()))
-            if groups and cls._looks_like_direct_object(payload, tuple(groups)):
-                return [payload]
+                if cls._normalize(str(raw_key)) not in target_names:
+                    continue
+                extracted = cls._extract_list(value)
+                if extracted:
+                    return extracted
+                if isinstance(value, Mapping) and cls._looks_like_direct_object(value, cls._groups_for_keys(tuple(keys))):
+                    return [value]
+        groups = cls._groups_for_keys(tuple(keys))
+        if isinstance(payload, Mapping) and groups and cls._looks_like_direct_object(payload, groups):
+            return [payload]
         return []
 
     def collect(self, instrument_uid: str):
