@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import threading
 import tkinter as tk
-from tkinter import ttk
+from dataclasses import replace
 from typing import Any
+from tkinter import ttk
 
 from edward.api.tinvest_multifactor_client_patch_v081 import install as install_client_patch
 from edward.services.analysis_pipeline_service_v081 import AnalysisPipelineServiceV081
@@ -18,7 +18,6 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
     if getattr(app_class, "_analysis_ui_v081_installed", False):
         return
     install_client_patch()
-    runtime._open_analysis_v08_original = runtime._open_analysis_v08
     original = runtime._open_analysis_v08
 
     def wrapped(app: Any) -> None:
@@ -42,23 +41,13 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
         panel.pack(fill="x", padx=16, pady=(0, 10))
         for column in range(5):
             panel.columnconfigure(column, weight=1)
-        values = {
-            key: tk.StringVar(value="N/A")
-            for key in (
-                "fundamental", "micro", "volume", "signals", "events",
-                "news", "insider", "session", "instrument_risk", "evidence",
-            )
-        }
+        values = {key: tk.StringVar(value="N/A") for key in (
+            "fundamental", "micro", "volume", "signals", "events", "news", "insider", "session", "instrument_risk", "evidence"
+        )}
         labels = (
-            ("fundamental", "Fundamental"),
-            ("micro", "Microstructure"),
-            ("volume", "Volume Pressure"),
-            ("signals", "T-Invest Signals"),
-            ("events", "Event Risk"),
-            ("news", "News Risk"),
-            ("insider", "Insider"),
-            ("session", "Session"),
-            ("instrument_risk", "Instrument Risk"),
+            ("fundamental", "Fundamental"), ("micro", "Microstructure"), ("volume", "Volume Pressure"),
+            ("signals", "T-Invest Signals"), ("events", "Event Risk"), ("news", "News Risk"),
+            ("insider", "Insider"), ("session", "Session"), ("instrument_risk", "Instrument Risk"),
             ("evidence", "Evidence Reliability"),
         )
         for index, (key, title) in enumerate(labels):
@@ -119,13 +108,13 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
                     session_name=data.session_name,
                 )
                 news_result = NewsIntelligenceServiceV081.analyze(data.news, instrument_uid=str(detail["instrument_uid"]))
-                pipeline.base, _ = NewsOverlayServiceV081.apply(pipeline.base, news_result)
+                adjusted_base, news_overlay = NewsOverlayServiceV081.apply(pipeline.base, news_result)
+                pipeline = replace(pipeline, base=adjusted_base)
                 show_v081(pipeline, news_result, data.failed_sources)
                 return pipeline
 
         runtime.AnalysisPipelineServiceV08 = PipelineBridge
         window.protocol("WM_DELETE_WINDOW", lambda: (setattr(runtime, "AnalysisPipelineServiceV08", original_pipeline_class), window.destroy()))
-        window.after(100, lambda: None)
 
     runtime._open_analysis_v08 = wrapped
     app_class._analysis_ui_v081_installed = True
