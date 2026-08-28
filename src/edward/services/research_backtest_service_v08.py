@@ -70,13 +70,7 @@ class ResearchBacktestResult:
 
 
 class ResearchBacktestService:
-    """Execution-consistent, cost-aware strategy research backtest.
-
-    Signals are evaluated using information available through candle ``i-1``.
-    Entry/exit executes at candle ``i`` open. Costs are paid once per side.
-    Equity is marked from the actual executed entry/exit path, so trade metrics
-    and drawdown use the same economic model.
-    """
+    """Execution-consistent, cost-aware strategy research backtest."""
 
     @staticmethod
     def _returns(candles: Sequence[Candle]) -> list[float]:
@@ -107,8 +101,7 @@ class ResearchBacktestService:
     def _sortino(returns: Sequence[float], annualization: float = 252.0) -> float:
         if len(returns) < 2:
             return 0.0
-        downside = [min(0.0, value) for value in returns]
-        denominator = sqrt(mean(value * value for value in downside))
+        denominator = sqrt(mean(min(0.0, value) ** 2 for value in returns))
         return 0.0 if denominator == 0 else mean(returns) / denominator * sqrt(annualization)
 
     @classmethod
@@ -149,9 +142,7 @@ class ResearchBacktestService:
                 in_position = False
                 return
             gross_factor = exit_price / entry_price
-            net_factor = gross_factor * (1.0 - one_side) / max(1.0 - one_side, 1e-12)
-            # Equity has already absorbed the entry cost and mark-to-market P/L.
-            # Only the exit-side cost is applied here.
+            net_factor = gross_factor * (1.0 - one_side) / max(1.0 + one_side, 1e-12)
             equity_value *= 1.0 - one_side
             trades.append(
                 BacktestTrade(
@@ -169,46 +160,42 @@ class ResearchBacktestService:
             turnover_sides += 1
 
         for index in range(1, len(candles)):
-            previous_signal = bool(signal_fn(candles, index - 1))
+            signal = bool(signal_fn(candles, index - 1))
             current = candles[index]
 
-            if previous_signal and not in_position:
+            if signal and not in_position:
                 enter(current)
-                # The entry candle is not marked from the previous close because
-                # the strategy did not own the asset before the executable open.
                 equity.append(equity_value)
                 period_returns.append(0.0)
                 continue
 
-            if not previous_signal and in_position:
+            if not signal and in_position:
+                before_exit = equity_value
                 exit(current, current.open)
-                current_return = equity_value / max(equity[-1], 1e-12) - 1.0
+                period_returns.append(equity_value / max(before_exit, 1e-12) - 1.0)
                 equity.append(equity_value)
-                period_returns.append(current_return)
                 continue
 
             if in_position:
                 previous_mark = mark_price
                 current_close = float(current.close)
-                if previous_mark > 0:
-                    period_return = current_close / previous_mark - 1.0
-                    equity_value *= 1.0 + period_return
-                    period_returns.append(period_return)
-                    exposure_periods += 1
-                    mark_price = current_close
-                else:
-                    period_returns.append(0.0)
+                period_return = current_close / max(previous_mark, 1e-12) - 1.0
+                equity_value *= 1.0 + period_return
+                period_returns.append(period_return)
+                exposure_periods += 1
+                mark_price = current_close
             else:
                 period_returns.append(0.0)
             equity.append(equity_value)
 
         if in_position:
             last = candles[-1]
+            before_exit = equity_value
             exit(last, last.close)
-            final_return = equity_value / max(equity[-1], 1e-12) - 1.0
+            period_returns.append(equity_value / max(before_exit, 1e-12) - 1.0)
             equity.append(equity_value)
-            period_returns.append(final_return)
 
+        exposure_pct = exposure_periods / max(1, len(candles) - 1) * 100.0
         return trades, equity, period_returns, float(turnover_sides)
 
     @classmethod
@@ -231,23 +218,15 @@ class ResearchBacktestService:
 
         model = costs or BacktestCostModel()
         trades, equity, strategy_returns, turnover_sides = cls._simulate_positions(ordered, signal_fn, model)
-        benchmark_returns = cls._returns(ordered)
         benchmark = 1.0
-        for value in benchmark_returns:
+        for value in cls._returns(ordered):
             benchmark *= 1.0 + value
 
         gross_factor = 1.0
-        net_factor = 1.0
         for trade in trades:
             gross_factor *= 1.0 + trade.gross_return_pct / 100.0
-            net_factor *= 1.0 + trade.net_return_pct / 100.0
-
         gross_return = gross_factor - 1.0
         net_return = equity[-1] - 1.0
-        # The explicit net trade factor is a consistency diagnostic; equity is
-        # authoritative because it includes mark-to-market path and costs.
-        _ = net_factor
-
         drawdown = cls._max_drawdown(equity)
         sharpe = cls._sharpe(strategy_returns)
         sortino = cls._sortino(strategy_returns)
