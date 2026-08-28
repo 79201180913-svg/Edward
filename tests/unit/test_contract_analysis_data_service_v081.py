@@ -8,6 +8,16 @@ class FakeClient:
         self.schedule_from = None
         self.schedule_to = None
 
+    def get_instrument(self, instrument_id):
+        return {
+            "instrument": {
+                "instrument_uid": instrument_id,
+                "dlong_client": 0.30,
+                "dshort_client": 0.55,
+                "short_enabled_flag": True,
+            }
+        }
+
     def get_asset_fundamentals(self, instrument_id):
         return {"fundamentals": [{"roe": 15, "roic": 13, "revenue_ttm": 100, "free_cash_flow_ttm": 10, "pe_ratio_ttm": 10}]}
 
@@ -52,6 +62,9 @@ def test_collector_returns_mapped_contract_sources_and_tracks_failures():
     assert result.dividends["dividend_yield"] == 4.0
     assert result.insider_transactions[0]["quantity"] == 10.0
     assert result.risk_data["dlong_client"] == 10.0
+    assert result.instrument_risk_metadata["dlong_client"] == 0.30
+    assert result.instrument_risk_metadata["dshort_client"] == 0.55
+    assert result.instrument_risk_metadata["short_enabled"] is True
     assert result.news[0]["id"] == 1
     assert result.session_name is None
     assert result.session_available is False
@@ -62,6 +75,20 @@ def test_collector_returns_mapped_contract_sources_and_tracks_failures():
     assert client.schedule_to.tzinfo is not None
     assert client.schedule_from >= datetime.now(timezone.utc) - timedelta(seconds=5)
     assert client.schedule_to > client.schedule_from
+
+
+def test_collector_uses_instrument_metadata_when_risk_rates_are_empty():
+    class NoRiskRatesClient(FakeClient):
+        def get_risk_rates(self, instrument_ids):
+            return {"instrument_risk_rates": [{"long_risk_rates": [], "short_risk_rates": []}]}
+
+    result = ContractAnalysisDataServiceV081(NoRiskRatesClient()).collect("UID")
+
+    assert result.risk_data is not None
+    assert result.risk_data["dlong_client"] == 0.30
+    assert result.risk_data["dshort_client"] == 0.55
+    assert result.risk_data["short_enabled"] is True
+    assert "risk_rates_mapping" not in result.failed_sources
 
 
 def test_collector_accepts_camel_case_contract_wrappers():
