@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+from edward.services.analysis_pipeline_service_v08 import AnalysisPipelineV08Result
 from edward.services.decision_engine import OpportunityContext
 from edward.services.multifactor_analysis_service_v081 import MultiFactorAnalysisServiceV081
 from edward.services.multifactor_overlay_service_v081 import MultiFactorOverlayServiceV081, PointInTimeGuardV081
@@ -25,7 +26,13 @@ def _pipeline(score=60.0, confidence=40.0, entry_signal=True):
         risk=None,
     )
     confidence_result = SimpleNamespace(overall_confidence=confidence)
-    return SimpleNamespace(opportunity=opportunity, confidence=confidence_result)
+    return AnalysisPipelineV08Result(
+        analysis=None,
+        opportunity=opportunity,
+        expected_value=None,
+        portfolio_impact=None,
+        confidence=confidence_result,
+    )
 
 
 def test_multifactor_overlay_can_raise_score_for_strong_supporting_evidence():
