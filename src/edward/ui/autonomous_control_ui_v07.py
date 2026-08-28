@@ -29,6 +29,9 @@ class AutonomousControlPanel:
         self.on_start = on_start
         self.on_pause = on_pause
         self.on_stop = on_stop
+        self.start_command: Callable[[], None] | None = None
+        self.pause_command: Callable[[], None] | None = None
+        self.stop_command: Callable[[], None] | None = None
         self.frame = ttk.LabelFrame(parent, text="Режим автономной торговли", padding=10)
         self.mode_var = tk.StringVar(value="analysis")
         self.interval_var = tk.StringVar(value="5 мин")
@@ -103,21 +106,27 @@ class AutonomousControlPanel:
         self.state.set_enabled(True)
         self._refresh_controls()
         self._notify()
-        if self.on_start is not None:
+        if self.start_command is not None:
+            self.start_command()
+        elif self.on_start is not None:
             self.on_start()
 
     def _pause_clicked(self) -> None:
         self.state.set_enabled(False)
         self._refresh_controls()
         self._notify()
-        if self.on_pause is not None:
+        if self.pause_command is not None:
+            self.pause_command()
+        elif self.on_pause is not None:
             self.on_pause()
 
     def _stop_clicked(self) -> None:
         self.state.set_enabled(False)
         self._refresh_controls()
         self._notify()
-        if self.on_stop is not None:
+        if self.stop_command is not None:
+            self.stop_command()
+        elif self.on_stop is not None:
             self.on_stop()
 
     def _refresh_controls(self) -> None:
