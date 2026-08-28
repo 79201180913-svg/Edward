@@ -6,9 +6,11 @@ from typing import Any
 import tinvest_adapter as adapter
 
 
-def _ts(value: datetime | None) -> str | None:
+def _ts(value: datetime | str | None) -> str | None:
     if value is None:
         return None
+    if isinstance(value, str):
+        return value
     normalized = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
     return normalized.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -17,7 +19,7 @@ def _get_asset_fundamentals(self, instrument_id: str):
     return self._rest_request("InstrumentsService/GetAssetFundamentals", {"assets": [str(instrument_id)]})
 
 
-def _get_asset_reports(self, instrument_id: str, from_dt: datetime | None = None, to_dt: datetime | None = None):
+def _get_asset_reports(self, instrument_id: str, from_dt: datetime | str | None = None, to_dt: datetime | str | None = None):
     payload: dict[str, Any] = {"instrumentId": str(instrument_id)}
     if from_dt is not None:
         payload["from"] = _ts(from_dt)
@@ -26,7 +28,7 @@ def _get_asset_reports(self, instrument_id: str, from_dt: datetime | None = None
     return self._rest_request("InstrumentsService/GetAssetReports", payload)
 
 
-def _get_dividends(self, instrument_id: str, from_dt: datetime | None = None, to_dt: datetime | None = None):
+def _get_dividends(self, instrument_id: str, from_dt: datetime | str | None = None, to_dt: datetime | str | None = None):
     payload: dict[str, Any] = {"instrumentId": str(instrument_id)}
     if from_dt is not None:
         payload["from"] = _ts(from_dt)
@@ -47,7 +49,7 @@ def _get_order_book(self, instrument_id: str, depth: int = 10):
     return self._rest_request("MarketDataService/GetOrderBook", {"instrumentId": str(instrument_id), "depth": max(1, min(int(depth), 50))})
 
 
-def _get_last_trades(self, instrument_id: str, from_dt: datetime | None = None, to_dt: datetime | None = None):
+def _get_last_trades(self, instrument_id: str, from_dt: datetime | str | None = None, to_dt: datetime | str | None = None):
     end = to_dt or datetime.now(timezone.utc)
     start = from_dt or end - timedelta(hours=1)
     return self._rest_request("MarketDataService/GetLastTrades", {"instrumentId": str(instrument_id), "from": _ts(start), "to": _ts(end), "tradeSource": "TRADE_SOURCE_ALL"})
@@ -57,7 +59,7 @@ def _get_market_values(self, instrument_ids: list[str], values: list[str]):
     return self._rest_request("MarketDataService/GetMarketValues", {"instrumentId": [str(value) for value in instrument_ids], "values": [str(value) for value in values]})
 
 
-def _get_signals(self, instrument_uid: str | None = None, strategy_id: str | None = None, from_dt: datetime | None = None, to_dt: datetime | None = None, active: str = "SIGNAL_STATE_ALL"):
+def _get_signals(self, instrument_uid: str | None = None, strategy_id: str | None = None, from_dt: datetime | str | None = None, to_dt: datetime | str | None = None, active: str = "SIGNAL_STATE_ALL"):
     payload: dict[str, Any] = {"active": active}
     if instrument_uid:
         payload["instrumentUid"] = str(instrument_uid)
@@ -81,7 +83,7 @@ def _get_news(self, limit: int = 1000, cursor: int | None = None):
     return self._rest_request("InstrumentsService/News", payload)
 
 
-def _get_trading_schedules(self, exchange: str | None = None, from_dt: datetime | None = None, to_dt: datetime | None = None):
+def _get_trading_schedules(self, exchange: str | None = None, from_dt: datetime | str | None = None, to_dt: datetime | str | None = None):
     payload: dict[str, Any] = {}
     if exchange:
         payload["exchange"] = str(exchange)
