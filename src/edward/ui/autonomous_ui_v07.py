@@ -255,14 +255,27 @@ def install_autonomous_ui(app_class: type) -> None:
 
         start_button.configure(command=lambda: threading.Thread(target=run_analysis_cycle, daemon=True).start())
 
+        def build_runtime_callbacks(policy: BudgetPlanningPolicy) -> dict[str, Any]:
+            """Bind the long-running runtime to the same live UI publishers as manual analysis."""
+            return {
+                "progress_callback": on_progress,
+                "result_callback": autonomous_result_callback,
+                "scope_callback": autonomous_scope_callback,
+                "planning_callback": autonomous_planning_callback,
+                "cycle_result_callback": render_result,
+            }
+
         def run_autonomous_once() -> None:
             try:
-                logger.info("autonomous_runtime_manual_start account_id=%s profile=%s", aid, profile_var.get())
-                log_ui(f"Запуск автономного цикла: профиль={profile_var.get()}")
-                facade = AutonomousTradingRuntimeFacade(self.client, aid, profile=profile_var.get())
+                slots = int(slots_var.get())
+                reserve_pct = Decimal(str(reserve_var.get()).replace(",", "."))
+                policy = BudgetPlanningPolicy(slots=slots, reserve_pct=reserve_pct)
+                logger.info("autonomous_runtime_manual_start account_id=%s profile=%s slots=%d reserve_pct=%s", aid, profile_var.get(), slots, reserve_pct)
+                log_ui(f"Запуск автономного цикла: профиль={profile_var.get()}, слоты={slots}, резерв={reserve_pct}%")
+                facade = AutonomousTradingRuntimeFacade(self.client, aid, policy=policy, profile=profile_var.get())
                 runtime_holder["facade"] = facade
-                result = facade.run_cycle(max_iterations=50)
-                control_result = result
+                result = facade.run_cycle(max_iterations=50, **build_runtime_callbacks(policy))
+                control_result = result.control
                 reason = getattr(control_result, "reason", "") or ""
                 if reason.startswith("PARTIAL_COMPLETED:"):
                     log_ui("⚠️ Часть операций завершилась ошибкой; автономный цикл продолжен.")
@@ -308,11 +321,15 @@ def install_autonomous_ui(app_class: type) -> None:
             if runtime_holder.get("service") is not None:
                 return
             try:
-                facade = AutonomousTradingRuntimeFacade(self.client, aid, profile=profile_var.get())
+                slots = int(slots_var.get())
+                reserve_pct = Decimal(str(reserve_var.get()).replace(",", "."))
+                policy = BudgetPlanningPolicy(slots=slots, reserve_pct=reserve_pct)
+                facade = AutonomousTradingRuntimeFacade(self.client, aid, policy=policy, profile=profile_var.get())
                 interval_minutes = control.interval_minutes()
                 config = AutonomousRuntimeConfig(interval_seconds=float(interval_minutes * 60))
+                callbacks = build_runtime_callbacks(policy)
                 service = AutonomousRuntimeService(
-                    run_cycle=facade.run_cycle,
+                    run_cycle=lambda: facade.run_cycle(max_iterations=50, **callbacks),
                     state_service=control.state,
                     config=config,
                 )
@@ -320,7 +337,7 @@ def install_autonomous_ui(app_class: type) -> None:
                 runtime_holder["facade"] = facade
                 service.start()
                 log_ui(f"Автономный runtime запущен; цикл выполняется каждые {interval_minutes} минут.")
-                logger.info("autonomous_runtime_started account_id=%s interval=%s", aid, interval_minutes)
+                logger.info("autonomous_runtime_started account_id=%s interval=%s slots=%s reserve_pct=%s", aid, interval_minutes, slots, reserve_pct)
                 _sync_runtime_status()
             except Exception as exc:
                 logger.exception("autonomous_runtime_start_failed account_id=%s", aid)
@@ -369,3 +386,6 @@ def install_autonomous_ui(app_class: type) -> None:
     app_class._page_autonomous = _page_autonomous
     app_class._close = _close
     logger.info("autonomous_ui_v07_installed log_path=%s", log_path)
+
+
+__all__ = ["install_autonomous_ui"]
