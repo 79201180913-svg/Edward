@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import sqrt
 from statistics import mean, pstdev
 from typing import Sequence
 
@@ -29,6 +28,8 @@ class ExpectedValueResult:
     uncertainty_width_pct: float
     observations: int
     confidence: str
+    available: bool = True
+    unavailable_reason: str | None = None
     version: str = EXPECTED_VALUE_VERSION
 
 
@@ -52,7 +53,11 @@ class ExpectedValueEngine:
     def from_trades(cls, trades: Sequence[BacktestTrade]) -> ExpectedValueResult:
         outcomes = [float(trade.net_return_pct) for trade in trades]
         if not outcomes:
-            return ExpectedValueResult(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0, "Low")
+            return ExpectedValueResult(
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0,
+                "Low", False, "NO_REALIZED_OUTCOMES",
+            )
 
         wins = [value for value in outcomes if value > 0]
         losses = [value for value in outcomes if value < 0]
