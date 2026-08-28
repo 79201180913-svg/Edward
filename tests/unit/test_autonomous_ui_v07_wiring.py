@@ -11,6 +11,7 @@ def test_autonomous_runtime_wires_live_budget_callbacks():
     assert "progress_callback=on_progress" in source
     assert "result_callback=autonomous_result_callback" in source
     assert "scope_callback=autonomous_scope_callback" in source
+    assert "planning_callback=run_runtime_cycle" not in source
     assert "planning_callback=autonomous_planning_callback" in source
     assert "run_cycle=run_runtime_cycle" in source
 
