@@ -45,6 +45,29 @@ def test_fundamentals_mapper_uses_contract_field_names_and_fcf_margin():
     assert result["pe"] == 10.0
 
 
+def test_mapper_accepts_protobuf_json_camel_case():
+    result = map_fundamentals(
+        {
+            "roe": 18.0,
+            "roic": 15.0,
+            "netMarginMrq": 10.0,
+            "oneYearAnnualRevenueGrowthRate": 12.0,
+            "epsChangeFiveYears": 30.0,
+            "ebitdaChangeFiveYears": 25.0,
+            "netDebtToEbitda": 1.0,
+            "currentRatioMrq": 1.8,
+            "revenueTtm": {"units": "100", "nano": 0},
+            "freeCashFlowTtm": {"units": "12", "nano": 0},
+            "peRatioTtm": 10.0,
+        }
+    )
+    assert result is not None
+    assert result["net_margin"] == 10.0
+    assert result["revenue_growth"] == 12.0
+    assert result["free_cash_flow"] == 12.0
+    assert result["pe"] == 10.0
+
+
 def test_risk_rates_mapper_extracts_nested_contract_values():
     result = map_risk_rates(
         {
@@ -61,6 +84,10 @@ def test_risk_rates_mapper_extracts_nested_contract_values():
     assert result["dlong_client"] == 12
     assert result["dshort_client"] == 20
     assert result["short_enabled"] is True
+
+
+def test_empty_risk_rates_are_unavailable():
+    assert map_risk_rates({"instrument_risk_rates": []}) is None
 
 
 def test_market_data_mappers_normalize_prices_and_quantities():
