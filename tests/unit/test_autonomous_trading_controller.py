@@ -75,13 +75,14 @@ def test_enabled_autonomous_mode_stops_on_preflight_rejection():
 
 def test_replanned_cycle_rechecks_preflight_against_live_state_before_execution():
     sequence = FakeSequence(); controller = AutonomousTradingController(sequence); controller.enable()
-    states = [state(), state()]; budgets = [budget(), budget()]; refresh_calls = []
+    # One iteration observes: initial state, fresh pre-execution state, and post-fill verification state.
+    states = [state(), state(), state()]; budgets = [budget(), budget()]; refresh_calls = []
     def refresh_state():
         refresh_calls.append(len(refresh_calls) + 1); return states.pop(0)
     result = controller.execute_replanned(account_id="ACC", mode=ExecutionMode.AUTONOMOUS, refresh_state=refresh_state, build_plan=lambda _state: plan(uid="new"), budget_for_state=lambda _state: budgets.pop(0), result_factory=lambda step: step, max_iterations=1)
     assert result.executed is True
     assert result.reason == "MAX_ITERATIONS_REACHED"
-    assert len(refresh_calls) == 2
+    assert len(refresh_calls) == 3
     assert len(sequence.calls) == 1
 
 
