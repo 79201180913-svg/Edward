@@ -49,6 +49,12 @@ class AutonomousRuntimeResult:
 
 
 class AutonomousTradingRuntimeFacade:
+    _execution_event_sink: Callable[[dict[str, Any]], None] | None = None
+
+    @classmethod
+    def set_execution_event_sink(cls, callback: Callable[[dict[str, Any]], None] | None) -> None:
+        cls._execution_event_sink = callback
+
     def __init__(self, client: TInvestAdapterClient, account_id: str, *, policy: BudgetPlanningPolicy = DEFAULT_AUTONOMOUS_POLICY, profile: str = "medium_term", instrument_kind: str = "SHARE") -> None:
         self.client = client
         self.account_id = str(account_id)
@@ -93,6 +99,7 @@ class AutonomousTradingRuntimeFacade:
         cycle_result_callback: Callable[[Any], None] | None = None,
         execution_event_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> AutonomousRuntimeResult:
+        execution_event_callback = execution_event_callback or type(self)._execution_event_sink
         _console(f"[AUTONOMOUS][STAGE] cycle entered; account_id={self.account_id} profile={self.profile} max_iterations={max_iterations}")
 
         def refresh_state() -> AccountState:
@@ -103,17 +110,7 @@ class AutonomousTradingRuntimeFacade:
 
         def build_plan(state: AccountState) -> AutonomousExecutionPlan:
             _console("[AUTONOMOUS][STAGE] 2/6 analysis + capital planning: START")
-            result = self._cycle.run(
-                account_id=self.account_id,
-                policy=self.policy,
-                profile=self.profile,
-                instrument_kind=self.instrument_kind,
-                progress_callback=progress_callback,
-                result_callback=result_callback,
-                scope_callback=scope_callback,
-                planning_callback=planning_callback,
-                account_state=state,
-            )
+            result = self._cycle.run(account_id=self.account_id, policy=self.policy, profile=self.profile, instrument_kind=self.instrument_kind, progress_callback=progress_callback, result_callback=result_callback, scope_callback=scope_callback, planning_callback=planning_callback, account_state=state)
             if cycle_result_callback is not None:
                 cycle_result_callback(result)
             plan = result.execution_plan or AutonomousExecutionPlan(steps=())
@@ -122,12 +119,7 @@ class AutonomousTradingRuntimeFacade:
 
         def budget_for_state(state: AccountState) -> BudgetPlan:
             _console("[AUTONOMOUS][STAGE] budget recalculation: START")
-            budget = self._planning.plan_from_state(
-                self.account_id,
-                self.policy,
-                positions=state.positions,
-                portfolio=state.portfolio,
-            ).budget
+            budget = self._planning.plan_from_state(self.account_id, self.policy, positions=state.positions, portfolio=state.portfolio).budget
             _console(f"[AUTONOMOUS][STAGE] budget recalculation: DONE currency={budget.currency} planning_budget={budget.planning_budget}")
             return budget
 
@@ -136,16 +128,7 @@ class AutonomousTradingRuntimeFacade:
             return self._fresh_opportunity(step)
 
         _console("[AUTONOMOUS][STAGE] 3/6 execution/replanning loop: START")
-        control = self._cycle.execute_replanned(
-            account_id=self.account_id,
-            mode=ExecutionMode.AUTONOMOUS,
-            refresh_state=refresh_state,
-            build_plan=build_plan,
-            budget_for_state=budget_for_state,
-            result_factory=result_factory,
-            max_iterations=max_iterations,
-            execution_event_callback=execution_event_callback,
-        )
+        control = self._cycle.execute_replanned(account_id=self.account_id, mode=ExecutionMode.AUTONOMOUS, refresh_state=refresh_state, build_plan=build_plan, budget_for_state=budget_for_state, result_factory=result_factory, max_iterations=max_iterations, execution_event_callback=execution_event_callback)
         _console(f"[AUTONOMOUS][STAGE] 3/6 execution/replanning loop: DONE executed={control.executed} reason={control.reason or 'NONE'}")
         _console("[AUTONOMOUS][STAGE] cycle exited")
         return AutonomousRuntimeResult(control=control)
