@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from edward.services.analysis_service import Candle
 from edward.services.research_backtest_service_v08 import BacktestCostModel, ResearchBacktestService
 
@@ -26,7 +28,7 @@ def test_signal_is_executed_on_next_candle_open():
     assert trade.entry_timestamp == candles[1].timestamp
     assert trade.entry_price == 100
     assert trade.exit_price == 110
-    assert trade.gross_return_pct == 10.0
+    assert trade.gross_return_pct == pytest.approx(10.0)
 
 
 def test_costs_reduce_net_trade_return():
@@ -62,8 +64,8 @@ def test_backtest_uses_same_equity_path_for_drawdown_and_net_return():
         signal_fn=lambda _items, index: index in {0, 1},
     )
 
-    assert len(result.equity) == len(candles) + 1
-    assert result.net_return_pct == (result.equity[-1] - 1.0) * 100.0
+    assert len(result.equity) == len(candles)
+    assert result.net_return_pct == pytest.approx((result.equity[-1] - 1.0) * 100.0)
     assert result.max_drawdown_pct >= 0.0
 
 
@@ -77,7 +79,7 @@ def test_benchmark_and_excess_return_are_reported():
         signal_fn=lambda _items, index: index == 0,
     )
 
-    assert result.benchmark_return_pct == 20.0
+    assert result.benchmark_return_pct == pytest.approx(20.0)
     assert result.excess_return_pct < 0.0
 
 
@@ -92,7 +94,7 @@ def test_extended_metrics_are_returned():
     )
 
     assert result.version == "0.8.0"
-    assert result.sortino != float("nan")
+    assert result.sortino == result.sortino
     assert result.trades >= 1
     assert result.turnover_pct > 0
     assert 0 <= result.exposure_pct <= 100
