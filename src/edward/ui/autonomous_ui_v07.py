@@ -42,7 +42,6 @@ def _install_file_logging() -> Path:
 
 
 def _display_opportunity_quantity(opportunity: Any) -> int:
-    """Return order quantity for the autonomous opportunities grid."""
     decision = str(getattr(opportunity, "decision", "") or "").upper()
     if decision not in {"BUY", "ADD", "REDUCE", "SELL"}:
         return 0
@@ -53,7 +52,6 @@ def _display_opportunity_quantity(opportunity: Any) -> int:
 
 
 def install_autonomous_ui(app_class: type) -> None:
-    """Add the v0.7 autonomous cycle and explicit execution lifecycle to the GUI."""
     if getattr(app_class, "_autonomous_ui_v07_installed", False):
         return
     app_class._autonomous_ui_v07_installed = True
@@ -72,10 +70,8 @@ def install_autonomous_ui(app_class: type) -> None:
         aid = self._require_account()
         if not aid:
             return
-
         control = AutonomousControlPanel(self.content)
         control.pack(fill="x", pady=(0, 12))
-
         controls = ttk.Frame(self.content)
         controls.pack(fill="x", pady=(0, 12))
         ttk.Label(controls, text="Профиль:").pack(side="left")
@@ -93,7 +89,6 @@ def install_autonomous_ui(app_class: type) -> None:
         portfolio_button.pack(side="left", padx=(0, 8))
         refresh_button = ttk.Button(controls, text="Обновить")
         refresh_button.pack(side="left")
-
         status_var = tk.StringVar(value="Готово")
         ttk.Label(self.content, textvariable=status_var).pack(anchor="w", pady=(0, 8))
         cards = ttk.Frame(self.content)
@@ -108,7 +103,6 @@ def install_autonomous_ui(app_class: type) -> None:
             value = ttk.Label(frame, text="—", style="CardValue.TLabel")
             value.pack(anchor="w", pady=(7, 0))
             card_values[key] = value
-
         ttk.Label(self.content, text="Возможности рынка и портфеля", style="CardTitle.TLabel").pack(anchor="w", pady=(4, 6))
         tree = self._tree(self.content, ("Область", "Тикер", "Решение", "Score", "Риск", "Цена", "Кол-во", "Стоимость", "Статус"), (90, 100, 100, 80, 75, 110, 80, 115, 250))
         ttk.Label(self.content, text="План перераспределения", style="CardTitle.TLabel").pack(anchor="w", pady=(10, 6))
@@ -118,7 +112,7 @@ def install_autonomous_ui(app_class: type) -> None:
         activity = tk.Text(self.content, height=7, wrap="word", state="disabled")
         activity.pack(fill="x", pady=(10, 0))
         latest_portfolio_opportunities: list[Any] = []
-        runtime_holder: dict[str, Any] = {"service": None, "facade": None, "last_status": None}
+        runtime_holder: dict[str, Any] = {"service": None, "facade": None}
         autonomous_scope = {"value": "Рынок"}
 
         def log_ui(message: str) -> None:
@@ -142,14 +136,12 @@ def install_autonomous_ui(app_class: type) -> None:
         def render_budget(planning: Any) -> None:
             budget = planning.budget
             source_currency = getattr(budget, "currency", None) or "RUB"
-
             def apply() -> None:
                 card_values["capital"].configure(text=display_money(budget.account_capital, source_currency))
                 card_values["reserve"].configure(text=display_money(budget.reserve, source_currency))
                 card_values["budget"].configure(text=display_money(budget.planning_budget, source_currency))
                 card_values["target"].configure(text=display_money(budget.target_position_value, source_currency))
                 card_values["cash"].configure(text=display_money(budget.investable_cash, source_currency))
-
             self.after(0, apply)
 
         def insert_opportunity(opportunity: Any, scope: str) -> None:
@@ -196,7 +188,6 @@ def install_autonomous_ui(app_class: type) -> None:
 
         def open_portfolio() -> None:
             open_autonomous_portfolio_window(self, self.client, aid, display_currency=str(self.display_currency.get() or "RUB"), opportunities=tuple(latest_portfolio_opportunities))
-
         portfolio_button.configure(command=open_portfolio)
 
         def on_progress(stage: str, percent: float, current: int, total: int) -> None:
@@ -218,11 +209,7 @@ def install_autonomous_ui(app_class: type) -> None:
             render_budget(planning)
             budget = getattr(planning, "budget", None)
             if budget is not None:
-                log_ui(
-                    f"Бюджет рассчитан: капитал={budget.account_capital}, "
-                    f"резерв={budget.reserve}, инвестиционный бюджет={budget.planning_budget}, "
-                    f"доступные деньги={budget.investable_cash}"
-                )
+                log_ui(f"Бюджет рассчитан: капитал={budget.account_capital}, резерв={budget.reserve}, инвестиционный бюджет={budget.planning_budget}, доступные деньги={budget.investable_cash}")
             else:
                 log_ui("Бюджет рассчитан")
             logger.info("autonomous_runtime_budget_published")
@@ -234,27 +221,9 @@ def install_autonomous_ui(app_class: type) -> None:
 
         def run_runtime_cycle() -> Any:
             policy = build_runtime_policy()
-            facade = AutonomousTradingRuntimeFacade(
-                self.client,
-                aid,
-                policy=policy,
-                profile=profile_var.get(),
-            )
+            facade = AutonomousTradingRuntimeFacade(self.client, aid, policy=policy, profile=profile_var.get())
             runtime_holder["facade"] = facade
-            logger.info(
-                "autonomous_runtime_cycle_start account_id=%s profile=%s slots=%d reserve_pct=%s",
-                aid,
-                profile_var.get(),
-                policy.slots,
-                policy.reserve_pct,
-            )
-            return facade.run_cycle(
-                max_iterations=50,
-                progress_callback=on_progress,
-                result_callback=autonomous_result_callback,
-                scope_callback=autonomous_scope_callback,
-                planning_callback=autonomous_planning_callback,
-            )
+            return facade.run_cycle(max_iterations=50, progress_callback=on_progress, result_callback=autonomous_result_callback, scope_callback=autonomous_scope_callback, planning_callback=autonomous_planning_callback)
 
         def run_analysis_cycle() -> None:
             try:
@@ -263,20 +232,15 @@ def install_autonomous_ui(app_class: type) -> None:
                 log_ui(f"Однократный анализ: профиль={profile_var.get()}, слоты={policy.slots}, резерв={policy.reserve_pct}%")
                 service = AutonomousCycleService(AutonomousPlanningService(BalanceService(self.client)), OpportunitySearchService(self.client))
                 active_scope = {"value": "Рынок"}
-
                 def result_callback(opportunity: Any, current: int, total: int) -> None:
                     render_incremental(opportunity, active_scope["value"], current, total)
-
                 def scope_callback(scope: str) -> None:
                     active_scope["value"] = "Рынок" if scope == "MARKET" else "Портфель"
                     log_ui(f"Начат анализ: {active_scope['value']}")
-
                 def planning_callback(planning: Any) -> None:
                     render_budget(planning)
                     log_ui("План капитала рассчитан по текущему счёту")
-
                 result = service.run(account_id=aid, policy=policy, profile=profile_var.get(), instrument_kind="SHARE", progress_callback=on_progress, result_callback=result_callback, scope_callback=scope_callback, planning_callback=planning_callback)
-                logger.info("autonomous_analysis_completed account_id=%s profile=%s market=%d portfolio=%d allocation=%d execution_steps=%d", aid, profile_var.get(), len(result.market_opportunities), len(result.portfolio_opportunities), len(result.allocation_actions), len(result.execution_plan.steps) if result.execution_plan else 0)
                 render_result(result)
             except Exception as exc:
                 logger.exception("autonomous_analysis_failed account_id=%s", aid)
@@ -296,22 +260,14 @@ def install_autonomous_ui(app_class: type) -> None:
                     log_ui("⚠️ Часть операций завершилась ошибкой; автономный цикл продолжен.")
                     for item in reason.split(":", 1)[1].split(";"):
                         log_ui(f"  • {item}")
-                    self.after(0, lambda r=reason: status_var.set(f"Частично выполнено: {r}"))
                 elif reason.startswith("PREFLIGHT_REJECTED"):
                     log_ui("⚠️ План отклонён preflight-проверкой.")
                     for item in control_result.preflight_reasons:
                         log_ui(f"  • {item}")
-                    self.after(0, lambda r=reason: status_var.set(f"План отклонён: {r}"))
-                else:
-                    self.after(0, lambda r=reason: status_var.set(f"Автономный цикл: {r}"))
+                self.after(0, lambda r=reason: status_var.set(f"Автономный цикл: {r}"))
                 if control_result.replanning is not None:
                     cycle = control_result.replanning
-                    log_ui(
-                        f"Replan: итераций={cycle.iterations}, "
-                        f"выполнено шагов={len(cycle.executed_steps)}, "
-                        f"завершён={cycle.completed}, "
-                        f"причина={cycle.stopped_reason or 'NONE'}"
-                    )
+                    log_ui(f"Replan: итераций={cycle.iterations}, выполнено шагов={len(cycle.executed_steps)}, завершён={cycle.completed}, причина={cycle.stopped_reason or 'NONE'}")
                 logger.info("autonomous_runtime_manual_completed account_id=%s reason=%s", aid, reason)
             except Exception as exc:
                 logger.exception("autonomous_runtime_manual_failed account_id=%s", aid)
@@ -326,10 +282,7 @@ def install_autonomous_ui(app_class: type) -> None:
                 snapshot = service.state.snapshot()
                 status = snapshot.status
                 message = snapshot.message
-                if message:
-                    status_var.set(f"{status}: {message}")
-                else:
-                    status_var.set(status)
+                status_var.set(f"{status}: {message}" if message else status)
             self.after(1000, _sync_runtime_status)
 
         def start_runtime() -> None:
@@ -339,11 +292,7 @@ def install_autonomous_ui(app_class: type) -> None:
                 build_runtime_policy()
                 interval_minutes = control.interval_minutes()
                 config = AutonomousRuntimeConfig(interval_seconds=float(interval_minutes * 60))
-                service = AutonomousRuntimeService(
-                    run_cycle=run_runtime_cycle,
-                    state_service=control.state,
-                    config=config,
-                )
+                service = AutonomousRuntimeService(run_cycle=run_runtime_cycle, state_service=control.state, config=config)
                 runtime_holder["service"] = service
                 service.start()
                 log_ui(f"Автономный runtime запущен; цикл выполняется каждые {interval_minutes} минут.")
@@ -379,7 +328,6 @@ def install_autonomous_ui(app_class: type) -> None:
         control.refresh_command = lambda: threading.Thread(target=run_autonomous_once, daemon=True).start()
         control.log_path = str(log_path)
         control.status_callback = lambda message: log_ui(str(message))
-
         self._autonomous_runtime_stop = stop_runtime
         self.content.after(100, _sync_runtime_status)
 
