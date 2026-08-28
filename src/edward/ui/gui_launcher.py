@@ -41,6 +41,7 @@ from edward.ui.settings_page_v04 import install_settings_page
 from edward.ui.analysis_ui_v04 import install_analysis_ui
 from edward.ui.analysis_ui_v08_runtime import install as install_analysis_ui_v08
 from edward.ui.ev_reliability_ui_patch_v08 import install as install_ev_reliability_ui_v08
+from edward.ui.analysis_ui_v081_runtime import install as install_analysis_ui_v081
 from edward.ui.decision_context_ui_v04 import install_decision_context_ui
 from edward.ui.analysis_ui_consistency_v04 import install_analysis_ui_consistency
 from edward.ui.opportunity_search_ui_v04 import install_opportunity_search_ui
@@ -104,6 +105,7 @@ install_settings_page(EdwardApp)
 install_analysis_ui(EdwardApp, TInvestAdapterClient)
 install_analysis_ui_v08(EdwardApp, TInvestAdapterClient)
 install_ev_reliability_ui_v08()
+install_analysis_ui_v081(EdwardApp, TInvestAdapterClient)
 install_analysis_ui_consistency()
 install_decision_context_ui(EdwardApp)
 install_opportunity_search_ui(EdwardApp)
