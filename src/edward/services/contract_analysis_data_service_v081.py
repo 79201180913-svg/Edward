@@ -157,16 +157,8 @@ class ContractAnalysisDataServiceV081:
 
     @staticmethod
     def _merge_risk_data(risk_rates: Any, instrument_risk: Any) -> Any:
-        merged: dict[str, Any] = {}
-        if isinstance(risk_rates, dict):
-            merged.update(risk_rates)
-        if isinstance(instrument_risk, dict):
-            # Instrument metadata is authoritative for client-specific margin requirements
-            # and short availability; risk-rates remains the fallback source.
-            for key, value in instrument_risk.items():
-                if value is not None:
-                    merged[key] = value
-        return merged or None
+        """Compatibility hook: keep GetRiskRates isolated from Instrument metadata."""
+        return risk_rates
 
     def collect(self, instrument_uid: str) -> ContractAnalysisDataV081:
         now = datetime.now(timezone.utc)
@@ -183,11 +175,7 @@ class ContractAnalysisDataServiceV081:
                 failed.append(name)
                 return default
 
-        raw_instrument = call(
-            "instrument",
-            lambda: self.client.get_instrument(instrument_uid),
-            {},
-        ) if hasattr(self.client, "get_instrument") else {}
+        raw_instrument = call("instrument", lambda: self.client.get_instrument(instrument_uid), {}) if hasattr(self.client, "get_instrument") else {}
         raw_fundamentals = call("fundamentals", lambda: self.client.get_asset_fundamentals(instrument_uid), {})
         raw_order_book = call("order_book", lambda: self.client.get_order_book(instrument_uid, 10), {})
         raw_trades = call("last_trades", lambda: self.client.get_last_trades(instrument_uid, start, now), {})
@@ -210,7 +198,6 @@ class ContractAnalysisDataServiceV081:
         mapped_fundamentals = map_fundamentals(fundamentals_raw)
         mapped_order_book = map_order_book(raw_order_book)
         mapped_risk_rates = map_risk_rates(raw_risk)
-        merged_risk = self._merge_risk_data(mapped_risk_rates, mapped_instrument_risk)
         mapped_news = tuple(map_news(item) for item in news_raw)
         relevant_news = tuple(
             item for item in mapped_news
@@ -223,7 +210,7 @@ class ContractAnalysisDataServiceV081:
 
         if raw_fundamentals not in ({}, None) and mapped_fundamentals is None:
             failed.append("fundamentals_mapping")
-        if raw_risk not in ({}, None) and mapped_risk_rates is None and mapped_instrument_risk is None:
+        if raw_risk not in ({}, None) and mapped_risk_rates is None:
             failed.append("risk_rates_mapping")
         if raw_instrument not in ({}, None) and mapped_instrument_risk is None:
             failed.append("instrument_mapping")
@@ -244,7 +231,7 @@ class ContractAnalysisDataServiceV081:
             signals=tuple(map_signal(item) for item in signals_raw),
             dividends=map_dividend(dividends_raw[0]) if dividends_raw else None,
             insider_transactions=tuple(map_insider(item) for item in insiders_raw),
-            risk_data=merged_risk,
+            risk_data=mapped_risk_rates,
             instrument_risk_metadata=mapped_instrument_risk,
             reports=tuple(self._map_report(item) for item in reports_raw),
             news=relevant_news,
