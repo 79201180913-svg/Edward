@@ -111,6 +111,12 @@ class AutonomousExecutionSequenceService:
                 cycle_failed = True
                 if first_failure is None:
                     first_failure = step.sequence
+                has_later_independent = any(
+                    later.sequence > step.sequence and later.depends_on is None
+                    for later in plan.steps
+                )
+                if not has_later_independent:
+                    break
                 continue
 
             emit(step.sequence, AutonomousExecutionPhase.PREPARING, "Подготовка шага")
