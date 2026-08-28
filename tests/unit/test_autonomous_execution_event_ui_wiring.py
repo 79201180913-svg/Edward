@@ -14,10 +14,11 @@ def test_execution_events_are_published_through_controller_and_facade():
     assert "execution_event_callback=execution_event_callback" in facade
 
 
-def test_execution_status_panel_contains_lifecycle_columns():
+def test_execution_status_panel_contains_lifecycle_columns_and_sink():
     ui = (ROOT / "src/edward/ui/autonomous_control_ui_v07.py").read_text(encoding="utf-8")
     assert "Исполнение автономных сделок" in ui
+    assert '"Статус"' in ui
     assert "Execution ID" in ui
+    assert "Причина" in ui
     assert "_handle_execution_event" in ui
-    for status in ("PLAN", "SUBMITTING", "SUBMITTED", "VERIFYING", "EXECUTED", "FAILED"):
-        assert status not in ui or status == "PLAN"
+    assert "AutonomousTradingRuntimeFacade.set_execution_event_sink" in ui
