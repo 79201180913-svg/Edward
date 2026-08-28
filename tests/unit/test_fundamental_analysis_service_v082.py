@@ -57,3 +57,47 @@ def test_input_is_not_mutated():
     original = dict(snapshot)
     FundamentalAnalysisServiceV082.analyze(snapshot)
     assert snapshot == original
+
+
+def test_strategy_profile_is_exposed_and_weights_are_normalized():
+    snapshot = {"roe": 20.0, "revenue_growth": 10.0, "pe": 20.0}
+    result = FundamentalAnalysisServiceV082.analyze(snapshot, profile="long_term")
+    assert result.strategy_profile == "long_term"
+    assert result.group_weights
+    assert abs(sum(weight for _, weight in result.group_weights) - 1.0) < 1e-9
+
+
+def test_long_term_and_speculative_profiles_weight_fundamentals_differently():
+    snapshot = {
+        "roe": 20.0, "roic": 20.0, "roa": 10.0, "net_margin": 12.0,
+        "revenue_growth": 30.0, "revenue_growth_3y": 15.0, "revenue_growth_5y": 5.0,
+        "eps_growth": 25.0, "ebitda_growth": 20.0,
+        "current_ratio": 1.5, "net_debt_to_ebitda": 1.0,
+        "free_cash_flow": 100.0, "free_cash_flow_to_price": 4.0,
+        "pe": 20.0, "ps": 3.0, "pb": 3.0, "p_fcf": 18.0,
+        "ev_to_ebitda": 14.0, "ev_to_sales": 3.0,
+        "dividend_yield": 2.0, "dividend_payout": 40.0,
+        "dividend_growth": 5.0, "dividend_regularity": 100.0,
+    }
+    long_term = FundamentalAnalysisServiceV082.analyze(snapshot, profile="long_term")
+    speculative = FundamentalAnalysisServiceV082.analyze(snapshot, profile="speculative")
+    long_weights = dict(long_term.group_weights)
+    speculative_weights = dict(speculative.group_weights)
+    assert long_weights["business_quality"] > speculative_weights["business_quality"]
+    assert speculative_weights["fundamental_momentum"] > long_weights["fundamental_momentum"]
+    assert long_term.overall_score != speculative.overall_score
+
+
+def test_missing_weighted_group_is_renormalized_not_treated_as_zero_score():
+    snapshot = {"roe": 25.0, "roic": 22.0, "roa": 12.0, "net_margin": 14.0}
+    result = FundamentalAnalysisServiceV082.analyze(snapshot, profile="long_term")
+    weights = dict(result.group_weights)
+    assert "business_quality" in weights
+    assert "valuation" not in weights
+    assert abs(sum(weights.values()) - 1.0) < 1e-9
+    assert result.overall_score > 50.0
+
+
+def test_profile_aliases_are_supported():
+    result = FundamentalAnalysisServiceV082.analyze({"roe": 20.0}, profile="long-term")
+    assert result.strategy_profile == "long_term"
