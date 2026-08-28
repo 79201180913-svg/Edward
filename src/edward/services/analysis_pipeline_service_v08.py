@@ -52,6 +52,20 @@ class AnalysisPipelineServiceV08:
     def _empty_portfolio() -> PortfolioImpactResult:
         return PortfolioImpactResult(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
+    @staticmethod
+    def _portfolio_confidence(impact: PortfolioImpactResult, available: bool) -> float:
+        if not available:
+            return 0.0
+        return max(
+            0.0,
+            min(
+                100.0,
+                70.0
+                + impact.diversification_benefit_pct * 5.0
+                - max(0.0, impact.marginal_risk_pct) * 5.0,
+            ),
+        )
+
     def analyze(
         self,
         *,
@@ -81,7 +95,10 @@ class AnalysisPipelineServiceV08:
         regime_confidence = cap_regime_confidence(raw_regime.confidence)
         forecast_quality_score = None
         try:
-            forecast_quality_score = self.forecast_quality.evaluate(candles=ordered, horizons=(1, 5, 20)).overall_quality_score
+            forecast_quality_score = self.forecast_quality.evaluate(
+                candles=ordered,
+                horizons=(1, 5, 20),
+            ).overall_quality_score
         except ValueError:
             pass
 
@@ -104,8 +121,15 @@ class AnalysisPipelineServiceV08:
                 confidence_score=confidence.overall_confidence,
             )
             return AnalysisPipelineV08Result(
-                analysis, opportunity, ev, impact,
-                forecast_quality_score, regime_confidence, None, False, confidence,
+                analysis,
+                opportunity,
+                ev,
+                impact,
+                forecast_quality_score,
+                regime_confidence,
+                None,
+                False,
+                confidence,
             )
 
         backtest = ResearchBacktestService.run_simple_strategy(
@@ -133,6 +157,7 @@ class AnalysisPipelineServiceV08:
             if portfolio_context_available and (candidate_weight > 0 or weights)
             else self._empty_portfolio()
         )
+        portfolio_confidence = self._portfolio_confidence(impact, portfolio_context_available)
         edge_reliability = ev.edge_reliability_pct if ev.available and ev.edge_reliability_pct is not None else 0.0
         strategy_confidence_component = min(evidence_strategy_result.stability, edge_reliability)
         confidence = calculate_confidence(
@@ -154,9 +179,15 @@ class AnalysisPipelineServiceV08:
             confidence_score=confidence.overall_confidence,
         )
         return AnalysisPipelineV08Result(
-            analysis, opportunity, ev, impact,
-            forecast_quality_score, regime_confidence, evidence_strategy,
-            portfolio_context_available, confidence,
+            analysis,
+            opportunity,
+            ev,
+            impact,
+            forecast_quality_score,
+            regime_confidence,
+            evidence_strategy,
+            portfolio_context_available,
+            confidence,
         )
 
 
