@@ -22,7 +22,7 @@ ANALYSIS_PIPELINE_V082_VERSION = "0.8.2"
 class AnalysisPipelineV082Result:
     """v0.8.2 result: v0.8.1 pipeline with the structured fundamental layer wired in."""
 
-    base: AnalysisPipelineV081Result
+    base: Any
     fundamental: FundamentalAnalysisResult
     version: str = ANALYSIS_PIPELINE_V082_VERSION
 
@@ -50,11 +50,12 @@ class AnalysisPipelineV082Result:
 class AnalysisPipelineServiceV082:
     """v0.8.2 facade reusing the stable v0.8.1 factor pipeline.
 
-    The v0.8.1 pipeline remains the source for every non-fundamental factor.
-    The structured v0.8.2 fundamental result is adapted to the existing
-    FundamentalFactor contract and replaces only that factor before the existing
-    normalization/overlay stage is re-applied. This prevents double-counting
-    fundamentals while preserving the v0.8.1 public contracts.
+    The structured fundamental result is calculated for every caller. When the
+    supplied base result exposes the v0.8.1 multifactor contract, only its
+    fundamentals factor is replaced and the existing normalization/overlay is
+    re-applied. Lightweight test doubles and compatible alternate base results
+    that do not expose multifactor are returned unchanged apart from the added
+    structured fundamental result.
     """
 
     def __init__(self, *, base_pipeline: AnalysisPipelineServiceV081 | None = None) -> None:
@@ -92,11 +93,10 @@ class AnalysisPipelineServiceV082:
         )
 
         fundamental = FundamentalAnalysisServiceV082.analyze(fundamentals, profile=profile)
-        adapted_fundamental = FundamentalFactorAdapterV082.adapt(fundamental)
+        if not hasattr(base_result, "multifactor"):
+            return AnalysisPipelineV082Result(base=base_result, fundamental=fundamental)
 
-        # Reuse every v0.8.1 factor except fundamentals. We intentionally start
-        # overlay recalculation from the original v0.8 result held by the v0.8.1
-        # facade, so the old already-adjusted overlay is never compounded twice.
+        adapted_fundamental = FundamentalFactorAdapterV082.adapt(fundamental)
         multifactor = replace(base_result.multifactor, fundamentals=adapted_fundamental)
         multifactor = normalize(
             multifactor,
