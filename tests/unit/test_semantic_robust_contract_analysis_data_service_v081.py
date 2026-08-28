@@ -44,3 +44,22 @@ def test_empty_valid_contract_collections_are_not_reported_as_mapping_failures()
     assert result.risk_data is None
     assert result.reports == ()
     assert result.insider_transactions == ()
+
+
+class ErrorRiskClient(EmptyCollectionsClient):
+    def get_risk_rates(self, instrument_ids):
+        return {
+            "instrument_risk_rates": [
+                {
+                    "instrument_uid": instrument_ids[0],
+                    "error": "Risk rates are unavailable for this instrument",
+                }
+            ]
+        }
+
+
+def test_contract_risk_error_is_unavailable_not_mapping_failure():
+    result = SemanticRobustContractAnalysisDataServiceV081(ErrorRiskClient()).collect("UID")
+
+    assert result.risk_data is None
+    assert "risk_rates_mapping" not in result.failed_sources
