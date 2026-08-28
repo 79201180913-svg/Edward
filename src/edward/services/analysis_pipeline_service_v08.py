@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Iterable, Mapping, Sequence
 
 from edward.services.analysis_service import AnalysisResult, Candle
 from edward.services.analysis_service_v08 import AnalysisServiceV08
@@ -10,6 +10,8 @@ from edward.services.forecast_quality_adapter_v08 import ForecastQualityAdapterV
 from edward.services.opportunity_engine import OpportunityResult
 from edward.services.opportunity_engine_v08 import OpportunityEngineV08
 from edward.services.portfolio_impact_service_v08 import PortfolioImpactResult, PortfolioImpactService
+from edward.services.regime_engine_v08 import RegimeEngine
+from edward.services.research_backtest_service_v08 import ResearchBacktestService
 
 
 ANALYSIS_PIPELINE_V08_VERSION = "0.8.0"
@@ -21,6 +23,10 @@ class AnalysisPipelineV08Result:
     opportunity: OpportunityResult
     expected_value: ExpectedValueResult
     portfolio_impact: PortfolioImpactResult
+    forecast_quality_score: float | None = None
+    regime_confidence: float | None = None
+    evidence_strategy: str | None = None
+    portfolio_context_available: bool = False
     version: str = ANALYSIS_PIPELINE_V08_VERSION
 
 
@@ -41,7 +47,7 @@ class AnalysisPipelineServiceV08:
 
     @staticmethod
     def _empty_portfolio() -> PortfolioImpactResult:
-        return PortfolioImpactResult(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 50.0)
+        return PortfolioImpactResult(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
     def analyze(
         self,
@@ -66,8 +72,18 @@ class AnalysisPipelineServiceV08:
             risk_profile=risk_profile,
             horizon=horizon,
         )
-        winner = next((item for item in analysis.strategies if item.strategy == analysis.recommendation), None)
-        if winner is None:
+        evidence_strategy_result = max(analysis.strategies, key=lambda item: item.score) if analysis.strategies else None
+        evidence_strategy = evidence_strategy_result.strategy if evidence_strategy_result else None
+        regime_result = RegimeEngine.classify(ordered)
+
+        forecast_quality_score: float | None = None
+        try:
+            quality = self.forecast_quality.evaluate(candles=ordered, horizons=(1, 5, 20))
+            forecast_quality_score = quality.overall_quality_score
+        except ValueError:
+            forecast_quality_score = None
+
+        if evidence_strategy_result is None:
             ev = ExpectedValueEngine.from_returns(())
             impact = self._empty_portfolio()
             opportunity = OpportunityEngineV08.evaluate(
@@ -77,30 +93,22 @@ class AnalysisPipelineServiceV08:
                 expected_value=ev,
                 portfolio_impact=impact,
             )
-            return AnalysisPipelineV08Result(analysis, opportunity, ev, impact)
+            return AnalysisPipelineV08Result(
+                analysis, opportunity, ev, impact,
+                forecast_quality_score, regime_result.confidence, None, False,
+            )
 
-        strategy_returns: list[float] = []
-        # Reconstruct the selected strategy's realized net outcomes using the same
-        # strategy model. This keeps EV tied to the v0.8 research engine.
-        from edward.services.research_backtest_service_v08 import ResearchBacktestService
         backtest = ResearchBacktestService.run_simple_strategy(
             candles=ordered,
-            strategy=winner.strategy,
-            parameters=winner.parameters,
+            strategy=evidence_strategy_result.strategy,
+            parameters=evidence_strategy_result.parameters,
             costs=self.analysis_service.costs,
         )
-        strategy_returns.extend(item.net_return_pct for item in backtest.trades_detail)
-        ev = ExpectedValueEngine.from_returns(strategy_returns)
-
-        forecast_quality_score = 50.0
-        try:
-            quality = self.forecast_quality.evaluate(candles=ordered, horizons=(1, 5, 20))
-            forecast_quality_score = quality.overall_quality_score
-        except ValueError:
-            pass
+        ev = ExpectedValueEngine.from_trades(backtest.trades_detail)
 
         weights = dict(portfolio_weights or {})
         asset_returns = dict(portfolio_returns or {})
+        portfolio_context_available = bool(weights or portfolio_returns)
         candidate_id = instrument_uid
         if candidate_id not in asset_returns:
             asset_returns[candidate_id] = self._returns(ordered)
@@ -113,20 +121,28 @@ class AnalysisPipelineServiceV08:
                 candidate_expected_return_pct=ev.expected_value_pct,
                 concentration_penalty_pct=concentration_penalty_pct,
             )
-            if candidate_weight > 0 or weights
+            if portfolio_context_available and (candidate_weight > 0 or weights)
             else self._empty_portfolio()
         )
         opportunity = OpportunityEngineV08.evaluate(
             analysis=analysis,
             candles=ordered,
-            strategy_result=winner,
+            strategy_result=evidence_strategy_result,
             expected_value=ev,
             portfolio_impact=impact,
-            robustness_score=winner.stability,
+            robustness_score=evidence_strategy_result.stability,
             forecast_quality_score=forecast_quality_score,
-            confidence_score=min(winner.stability, forecast_quality_score),
+            confidence_score=min(
+                evidence_strategy_result.stability,
+                forecast_quality_score if forecast_quality_score is not None else evidence_strategy_result.stability,
+                regime_result.confidence,
+            ),
         )
-        return AnalysisPipelineV08Result(analysis, opportunity, ev, impact)
+        return AnalysisPipelineV08Result(
+            analysis, opportunity, ev, impact,
+            forecast_quality_score, regime_result.confidence, evidence_strategy,
+            portfolio_context_available,
+        )
 
 
 __all__ = ["ANALYSIS_PIPELINE_V08_VERSION", "AnalysisPipelineV08Result", "AnalysisPipelineServiceV08"]
