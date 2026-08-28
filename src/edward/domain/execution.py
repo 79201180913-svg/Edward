@@ -19,6 +19,7 @@ class ExecutionMode(StrEnum):
     ANALYSIS_ONLY = "analysis_only"
     PREPARE_ORDER = "prepare_order"
     USER_CONFIRMATION = "user_confirmation"
+    AUTONOMOUS = "autonomous"
 
 
 class ExecutionStatus(StrEnum):

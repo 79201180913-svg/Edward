@@ -99,7 +99,7 @@ def test_engine_rejects_non_confirmation_modes_in_v06_2():
     engine.validate(req)
     engine.require_confirmation(req)
 
-    with pytest.raises(ValueError, match="user-confirmation"):
+    with pytest.raises(ValueError, match="unsupported execution mode"):
         engine.submit(req, mode="prepare_order")
 
 
