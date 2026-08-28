@@ -29,6 +29,9 @@ class FakeClient:
     def get_news(self, limit):
         return {"items": [{"id": 1, "title": "Test", "instrument_id": [{"instrument": {"instrument_uid": "UID"}}]}]}
 
+    def get_trading_schedules(self, **kwargs):
+        return {"exchanges": []}
+
 
 def test_collector_returns_mapped_contract_sources_and_tracks_failures():
     result = ContractAnalysisDataServiceV081(FakeClient()).collect("UID")
