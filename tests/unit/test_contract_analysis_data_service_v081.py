@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from edward.services.contract_analysis_data_service_v081 import ContractAnalysisDataServiceV081
 
@@ -58,7 +58,7 @@ def test_collector_returns_mapped_contract_sources_and_tracks_failures():
     assert isinstance(client.schedule_to, datetime)
     assert client.schedule_from.tzinfo is not None
     assert client.schedule_to.tzinfo is not None
-    assert client.schedule_from >= datetime.now(timezone.utc).replace(microsecond=0) - __import__("datetime").timedelta(seconds=5)
+    assert client.schedule_from >= datetime.now(timezone.utc) - timedelta(seconds=5)
     assert client.schedule_to > client.schedule_from
 
 
