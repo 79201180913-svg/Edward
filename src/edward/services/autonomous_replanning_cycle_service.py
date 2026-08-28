@@ -22,7 +22,7 @@ class AutonomousReplanningCycleResult:
 class AutonomousReplanningCycleService:
     """Run one execution step, verify it, then discard and rebuild the plan."""
 
-    def __init__(self, *, refresh_state: Callable[[], Any], build_plan: Callable[[Any], AutonomousExecutionPlan], execute_step: Callable[[Any], Any], verify_step: Callable[[Any, Any, Any], ExecutionVerification], max_iterations: int = 50) -> None:
+    def __init__(self, *, refresh_state: Callable[[], Any], build_plan: Callable[[Any], AutonomousExecutionPlan], execute_step: Callable[[Any], Any], verify_step: Callable[[Any, Any, Any], ExecutionVerification], max_iterations: int = 50, execution_event_callback: Callable[[dict[str, Any]], None] | None = None) -> None:
         if max_iterations < 1:
             raise ValueError("max_iterations must be positive")
         self._refresh_state = refresh_state
@@ -30,6 +30,15 @@ class AutonomousReplanningCycleService:
         self._execute_step = execute_step
         self._verify_step = verify_step
         self._max_iterations = max_iterations
+        self._execution_event_callback = execution_event_callback
+
+    def _emit_execution_event(self, **payload: Any) -> None:
+        if self._execution_event_callback is None:
+            return
+        try:
+            self._execution_event_callback(payload)
+        except Exception:
+            pass
 
     def run(self) -> AutonomousReplanningCycleResult:
         executed: list[int] = []
@@ -45,18 +54,24 @@ class AutonomousReplanningCycleService:
                 return AutonomousReplanningCycleResult(True, iteration, tuple(executed))
 
             step = plan.steps[0]
-            ticker = getattr(step, "ticker", "")
-            target_value = getattr(step, "target_value", "")
-            _console(f"[AUTONOMOUS][EXECUTION] iteration={iteration} step={step.sequence} action={step.action} ticker={ticker} uid={step.instrument_uid} target_value={target_value}")
+            common = dict(iteration=iteration, sequence=step.sequence, action=step.action, ticker=getattr(step, "ticker", ""), instrument_uid=step.instrument_uid, target_value=step.target_value)
+            _console(f"[AUTONOMOUS][EXECUTION] iteration={iteration} step={step.sequence} action={step.action} ticker={getattr(step, 'ticker', '')} uid={step.instrument_uid} target_value={step.target_value}")
+            self._emit_execution_event(**common, status="PLAN", reason="Шаг подготовлен к исполнению")
             try:
+                self._emit_execution_event(**common, status="SUBMITTING", reason="Отправка заявки")
                 execution = self._execute_step(step)
+                execution_id = getattr(execution, "execution_id", None)
+                broker_status = getattr(getattr(execution, "status", None), "value", getattr(execution, "status", None))
+                self._emit_execution_event(**common, execution_id=execution_id, status="SUBMITTED", broker_status=broker_status, reason="Заявка принята исполнительным контуром")
                 _console(f"[AUTONOMOUS][EXECUTION] iteration={iteration} step={step.sequence} execution returned")
             except Exception as exc:
                 reason = f"EXECUTION_ERROR:{exc}"
+                self._emit_execution_event(**common, status="FAILED", reason=reason)
                 _console(f"[AUTONOMOUS][EXECUTION] iteration={iteration} step={step.sequence} FAILED reason={reason}")
                 return AutonomousReplanningCycleResult(False, iteration, tuple(executed), reason)
 
             try:
+                self._emit_execution_event(**common, execution_id=getattr(execution, "execution_id", None), status="VERIFYING", reason="Проверка фактического результата")
                 _console(f"[AUTONOMOUS][VERIFY] iteration={iteration} step={step.sequence}: refresh state START")
                 refreshed_state = self._refresh_state()
                 _console(f"[AUTONOMOUS][VERIFY] iteration={iteration} step={step.sequence}: verify START")
@@ -64,15 +79,18 @@ class AutonomousReplanningCycleService:
                 _console(f"[AUTONOMOUS][VERIFY] iteration={iteration} step={step.sequence}: passed={verification.passed} reasons={';'.join(verification.reasons) if verification.reasons else 'NONE'}")
             except Exception as exc:
                 reason = f"VERIFICATION_ERROR:{exc}"
+                self._emit_execution_event(**common, execution_id=getattr(execution, "execution_id", None), status="FAILED", reason=reason)
                 _console(f"[AUTONOMOUS][VERIFY] iteration={iteration} step={step.sequence} FAILED reason={reason}")
                 return AutonomousReplanningCycleResult(False, iteration, tuple(executed), reason)
 
             if not verification.passed:
                 reason = "VERIFICATION_FAILED:" + ";".join(verification.reasons)
+                self._emit_execution_event(**common, execution_id=getattr(execution, "execution_id", None), status="FAILED", reason=reason)
                 _console(f"[AUTONOMOUS][VERIFY] iteration={iteration} step={step.sequence} REJECTED reason={reason}")
                 return AutonomousReplanningCycleResult(False, iteration, tuple(executed), reason)
 
             executed.append(int(step.sequence))
+            self._emit_execution_event(**common, execution_id=getattr(execution, "execution_id", None), status="EXECUTED", reason="Сделка подтверждена по актуальному состоянию счёта")
             _console(f"[AUTONOMOUS][REPLAN] iteration={iteration} step={step.sequence} verified; rebuilding plan from refreshed state")
             state = refreshed_state
 
