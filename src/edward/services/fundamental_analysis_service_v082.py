@@ -46,6 +46,7 @@ class FundamentalAnalysisServiceV082:
     def _metric_score(cls,metric,value):
         if value is None:return 0.0
         e=FundamentalScoringEngineV082
+        if metric in {"roe","roic","roa","net_margin"}:return e.profitability(value,kind=metric)
         if metric in {"pe","ps","pb","p_fcf","ev_to_ebitda","ev_to_sales"}:return e.valuation(value)
         if metric in {"net_debt_to_ebitda","total_debt_to_ebitda"}:return e.leverage(value,scale=18.0)
         if metric=="total_debt_to_equity":return e.debt_to_equity(value)
@@ -88,8 +89,7 @@ class FundamentalAnalysisServiceV082:
         if not usable:return 0.0,0.0,(("fundamental_momentum",0.0),) if "fundamental_momentum" in defaults else ()
         total=sum(defaults[g.name] for g in usable); normalized=tuple((g.name,defaults[g.name]/total) for g in usable)
         normalized_map=dict(normalized)
-        if "fundamental_momentum" in defaults:
-            normalized_map.setdefault("fundamental_momentum",0.0)
+        if "fundamental_momentum" in defaults: normalized_map.setdefault("fundamental_momentum",0.0)
         ordered=tuple((name,normalized_map[name]) for name in defaults if name in normalized_map)
         overall=sum(g.score*normalized_map[g.name] for g in usable); confidence=sum(g.confidence*normalized_map[g.name] for g in usable)
         return FundamentalScoringEngineV082.clamp(overall),FundamentalScoringEngineV082.clamp(confidence),ordered
