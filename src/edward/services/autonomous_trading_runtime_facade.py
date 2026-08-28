@@ -91,6 +91,7 @@ class AutonomousTradingRuntimeFacade:
         scope_callback: Callable[[str], None] | None = None,
         planning_callback: Callable[[Any], None] | None = None,
         cycle_result_callback: Callable[[Any], None] | None = None,
+        execution_event_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> AutonomousRuntimeResult:
         _console(f"[AUTONOMOUS][STAGE] cycle entered; account_id={self.account_id} profile={self.profile} max_iterations={max_iterations}")
 
@@ -135,7 +136,16 @@ class AutonomousTradingRuntimeFacade:
             return self._fresh_opportunity(step)
 
         _console("[AUTONOMOUS][STAGE] 3/6 execution/replanning loop: START")
-        control = self._cycle.execute_replanned(account_id=self.account_id, mode=ExecutionMode.AUTONOMOUS, refresh_state=refresh_state, build_plan=build_plan, budget_for_state=budget_for_state, result_factory=result_factory, max_iterations=max_iterations)
+        control = self._cycle.execute_replanned(
+            account_id=self.account_id,
+            mode=ExecutionMode.AUTONOMOUS,
+            refresh_state=refresh_state,
+            build_plan=build_plan,
+            budget_for_state=budget_for_state,
+            result_factory=result_factory,
+            max_iterations=max_iterations,
+            execution_event_callback=execution_event_callback,
+        )
         _console(f"[AUTONOMOUS][STAGE] 3/6 execution/replanning loop: DONE executed={control.executed} reason={control.reason or 'NONE'}")
         _console("[AUTONOMOUS][STAGE] cycle exited")
         return AutonomousRuntimeResult(control=control)
