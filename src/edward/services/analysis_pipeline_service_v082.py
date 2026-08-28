@@ -47,10 +47,9 @@ class AnalysisPipelineV082Result:
 class AnalysisPipelineServiceV082:
     """Additive v0.8.2 facade over the stable v0.8.1 analysis pipeline.
 
-    The fundamental layer is calculated from the same contract-mapped
-    fundamentals input, but it does not modify the v0.8.1 multifactor score,
-    overlay or execution decision yet. Integration of fundamental weighting is
-    intentionally a separate increment.
+    Fundamental analysis is calculated from the same contract-mapped data and
+    uses the selected trading profile for fundamental group weighting. It does
+    not yet modify the v0.8.1 multifactor score, overlay or execution decision.
     """
 
     def __init__(self, *, base_pipeline: AnalysisPipelineServiceV081 | None = None) -> None:
@@ -86,7 +85,7 @@ class AnalysisPipelineServiceV082:
             fundamentals=fundamentals,
             **kwargs,
         )
-        fundamental = FundamentalAnalysisServiceV082.analyze(fundamentals)
+        fundamental = FundamentalAnalysisServiceV082.analyze(fundamentals, profile=profile)
         return AnalysisPipelineV082Result(base=result, fundamental=fundamental)
 
 
