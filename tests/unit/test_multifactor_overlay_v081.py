@@ -1,15 +1,28 @@
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+from edward.services.decision_engine import OpportunityContext
 from edward.services.multifactor_analysis_service_v081 import MultiFactorAnalysisServiceV081
 from edward.services.multifactor_overlay_service_v081 import MultiFactorOverlayServiceV081, PointInTimeGuardV081
+from edward.services.opportunity_engine import OpportunityResult
 
 
 def _pipeline(score=60.0, confidence=40.0, entry_signal=True):
-    opportunity = SimpleNamespace(
+    context = OpportunityContext(
+        opportunity_score=score,
+        entry_ok=entry_signal,
+        risk_ok=True,
+        strategy_ok=True,
+        market_regime_compatible=True,
+        critical_risk=False,
+    )
+    opportunity = OpportunityResult(
+        context=context,
         score=score,
         entry_signal=entry_signal,
+        market_regime_compatible=True,
         explanation="base",
+        risk=None,
     )
     confidence_result = SimpleNamespace(overall_confidence=confidence)
     return SimpleNamespace(opportunity=opportunity, confidence=confidence_result)
