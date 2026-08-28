@@ -124,7 +124,15 @@ class ContractAnalysisDataServiceV081:
         raw_risk = call("risk_rates", lambda: self.client.get_risk_rates([instrument_uid]), {})
         raw_reports = call("reports", lambda: self.client.get_asset_reports(instrument_uid, start, now + timedelta(days=90)), {})
         raw_news = call("news", lambda: self.client.get_news(1000), {})
-        raw_schedules = call("trading_schedules", lambda: self.client.get_trading_schedules(from_dt=now - timedelta(days=1), to_dt=now + timedelta(days=1)), {})
+        # TradingSchedules rejects historical start dates; use the current instant as the lower bound.
+        raw_schedules = call(
+            "trading_schedules",
+            lambda: self.client.get_trading_schedules(
+                from_dt=now,
+                to_dt=now + timedelta(days=2),
+            ),
+            {},
+        )
 
         fundamentals_raw = self._first(raw_fundamentals, "fundamentals", "statistics")
         order_book_raw = raw_order_book if raw_order_book else None
@@ -137,9 +145,12 @@ class ContractAnalysisDataServiceV081:
 
         mapped_news = tuple(map_news(item) for item in news_raw)
         relevant_news = tuple(
-            item for item in mapped_news
+            item
+            for item in mapped_news
             if not item.get("instrument_id")
-            or str(instrument_uid) in {str(value) for value in (item.get("instrument_id") or []) if isinstance(value, str)}
+            or str(instrument_uid) in {
+                str(value) for value in (item.get("instrument_id") or []) if isinstance(value, str)
+            }
             or any(
                 isinstance(link, dict)
                 and str(instrument_uid) == str(((link.get("instrument") or {}).get("instrument_uid")))
