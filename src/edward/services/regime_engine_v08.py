@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from statistics import mean, pstdev
+from statistics import mean, median, pstdev
 from typing import Any, Sequence
 
 from edward.services.analysis_service import Candle
@@ -37,7 +37,7 @@ class RegimeEngine:
 
     @staticmethod
     def _returns(candles: Sequence[Candle]) -> list[float]:
-        return [current.close / previous.close - 1.0 for previous, current in zip(candles, candles[1:]) if previous.close > 0]
+        return [current.close / previous.close - 1.0 for previous, current in zip(candles, candles[1:]) if previous.close > 0 and current.close > 0]
 
     @classmethod
     def classify(cls, candles: Sequence[Candle], *, trend_window: int = 20, baseline_window: int = 50, volatility_window: int = 20) -> RegimeResult:
@@ -51,16 +51,14 @@ class RegimeEngine:
         recent_returns = returns[-volatility_window:]
         volatility_pct = pstdev(recent_returns) * 100.0 if len(recent_returns) > 1 else 0.0
         history_vol = [pstdev(returns[i - volatility_window:i]) * 100.0 for i in range(volatility_window, len(returns) + 1)] if len(returns) >= volatility_window + 1 else []
-        percentile = 50.0
-        if history_vol:
-            percentile = sum(value <= volatility_pct for value in history_vol) / len(history_vol) * 100.0
+        percentile = sum(value <= volatility_pct for value in history_vol) / len(history_vol) * 100.0 if history_vol else 50.0
 
-        if percentile >= 80.0:
+        if abs(trend_score) >= 1.0:
+            regime = "TREND_UP" if trend_score > 0 else "TREND_DOWN"
+        elif percentile >= 80.0:
             regime = "HIGH_VOLATILITY"
         elif percentile <= 20.0:
             regime = "LOW_VOLATILITY"
-        elif abs(trend_score) >= 1.0:
-            regime = "TREND_UP" if trend_score > 0 else "TREND_DOWN"
         elif abs(trend_score) <= 0.35:
             regime = "RANGE"
         else:
@@ -89,4 +87,4 @@ class RegimeEngine:
         if not returns_pct:
             return RegimePerformance(regime, 0, 0.0, 0.0, 0.0, 0.0)
         wins = sum(value > 0 for value in returns_pct)
-        return RegimePerformance(regime, len(returns_pct), mean(returns_pct), __import__("statistics").median(returns_pct), wins / len(returns_pct) * 100.0, mean(drawdowns_pct) if drawdowns_pct else 0.0)
+        return RegimePerformance(regime, len(returns_pct), mean(returns_pct), median(returns_pct), wins / len(returns_pct) * 100.0, mean(drawdowns_pct) if drawdowns_pct else 0.0)
