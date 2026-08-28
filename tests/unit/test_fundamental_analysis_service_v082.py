@@ -123,64 +123,17 @@ def test_explicit_not_applicable_metric_is_excluded_from_group_score_and_coverag
     assert "METRIC_NOT_APPLICABLE" in roic.reason_codes
 
 
-def test_bank_context_marks_bank_specific_metrics_not_applicable_even_when_zero():
-    result = FundamentalAnalysisServiceV082.analyze({
+def test_explicit_not_applicable_metrics_are_independent_of_instrument_name_or_sector():
+    snapshot = {
         "roe": 23.0,
         "roic": 0.0,
-        "roa": 2.8,
-        "net_margin": 0.0,
-        "ebitda_growth": 0.0,
-        "free_cash_flow": 0.0,
-        "free_cash_flow_to_price": 0.0,
-        "net_debt_to_ebitda": 0.0,
-        "total_debt_to_ebitda": 0.0,
-        "total_debt_to_equity": 0.0,
-        "current_ratio": 0.0,
-        "ps": 0.0,
-        "p_fcf": 0.0,
-        "ev_to_ebitda": 0.0,
-        "ev_to_sales": 0.0,
-        "pe": 8.0,
-        "pb": 1.1,
-        "__instrument_context": {"sector": "Banks"},
-    })
-    for group_name, metric_names in {
-        "business_quality": {"roic"},
-        "growth": {"ebitda_growth"},
-        "cash_generation": {"free_cash_flow", "free_cash_flow_to_price"},
-        "financial_health": {"net_debt_to_ebitda", "total_debt_to_ebitda", "current_ratio", "total_debt_to_equity"},
-        "valuation": {"ps", "p_fcf", "ev_to_ebitda", "ev_to_sales"},
-        "fundamental_momentum": {"ebitda_growth"},
-    }.items():
-        metrics = {metric.metric: metric for metric in getattr(result, group_name).metrics}
-        for name in metric_names:
-            assert metrics[name].available is False
-            assert "METRIC_NOT_APPLICABLE" in metrics[name].reason_codes
-
-    valuation = {metric.metric: metric for metric in result.valuation.metrics}
-    assert valuation["pe"].available is True
-    assert valuation["pb"].available is True
-
-
-def test_bank_name_context_is_detected_when_sector_is_not_available():
-    snapshot = {
-        "roe": 20.0,
-        "roic": 15.0,
-        "free_cash_flow": 100.0,
-        "current_ratio": 1.5,
-        "ps": 2.0,
-        "ev_to_ebitda": 7.0,
-        "__instrument_context": {"name": "Сбербанк России"},
+        "__not_applicable_metrics": ["roic"],
+        "__instrument_context": {"name": "Example Instrument", "sector": "Example Sector"},
     }
     result = FundamentalAnalysisServiceV082.analyze(snapshot)
-    metrics = {metric.metric: metric for metric in result.cash_generation.metrics}
-    assert metrics["free_cash_flow"].available is False
-    assert metrics["free_cash_flow_to_price"].available is False
-    health = {metric.metric: metric for metric in result.financial_health.metrics}
-    assert health["current_ratio"].available is False
-    valuation = {metric.metric: metric for metric in result.valuation.metrics}
-    assert valuation["ps"].available is False
-    assert valuation["ev_to_ebitda"].available is False
+    roic = next(metric for metric in result.business_quality.metrics if metric.metric == "roic")
+    assert roic.available is False
+    assert "METRIC_NOT_APPLICABLE" in roic.reason_codes
 
 
 def test_zero_is_still_a_valid_value_without_non_applicable_context():
