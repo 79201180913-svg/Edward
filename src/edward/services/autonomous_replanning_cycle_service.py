@@ -22,15 +22,7 @@ class AutonomousReplanningCycleResult:
 class AutonomousReplanningCycleService:
     """Run one execution step, verify it, then discard and rebuild the plan."""
 
-    def __init__(
-        self,
-        *,
-        refresh_state: Callable[[], Any],
-        build_plan: Callable[[Any], AutonomousExecutionPlan],
-        execute_step: Callable[[Any], Any],
-        verify_step: Callable[[Any, Any, Any], ExecutionVerification],
-        max_iterations: int = 50,
-    ) -> None:
+    def __init__(self, *, refresh_state: Callable[[], Any], build_plan: Callable[[Any], AutonomousExecutionPlan], execute_step: Callable[[Any], Any], verify_step: Callable[[Any, Any, Any], ExecutionVerification], max_iterations: int = 50) -> None:
         if max_iterations < 1:
             raise ValueError("max_iterations must be positive")
         self._refresh_state = refresh_state
@@ -53,10 +45,9 @@ class AutonomousReplanningCycleService:
                 return AutonomousReplanningCycleResult(True, iteration, tuple(executed))
 
             step = plan.steps[0]
-            _console(
-                f"[AUTONOMOUS][EXECUTION] iteration={iteration} step={step.sequence} "
-                f"action={step.action} ticker={step.ticker} uid={step.instrument_uid} target_value={step.target_value}"
-            )
+            ticker = getattr(step, "ticker", "")
+            target_value = getattr(step, "target_value", "")
+            _console(f"[AUTONOMOUS][EXECUTION] iteration={iteration} step={step.sequence} action={step.action} ticker={ticker} uid={step.instrument_uid} target_value={target_value}")
             try:
                 execution = self._execute_step(step)
                 _console(f"[AUTONOMOUS][EXECUTION] iteration={iteration} step={step.sequence} execution returned")
@@ -70,10 +61,7 @@ class AutonomousReplanningCycleService:
                 refreshed_state = self._refresh_state()
                 _console(f"[AUTONOMOUS][VERIFY] iteration={iteration} step={step.sequence}: verify START")
                 verification = self._verify_step(step, execution, refreshed_state)
-                _console(
-                    f"[AUTONOMOUS][VERIFY] iteration={iteration} step={step.sequence}: "
-                    f"passed={verification.passed} reasons={';'.join(verification.reasons) if verification.reasons else 'NONE'}"
-                )
+                _console(f"[AUTONOMOUS][VERIFY] iteration={iteration} step={step.sequence}: passed={verification.passed} reasons={';'.join(verification.reasons) if verification.reasons else 'NONE'}")
             except Exception as exc:
                 reason = f"VERIFICATION_ERROR:{exc}"
                 _console(f"[AUTONOMOUS][VERIFY] iteration={iteration} step={step.sequence} FAILED reason={reason}")
@@ -82,29 +70,15 @@ class AutonomousReplanningCycleService:
             if not verification.passed:
                 reason = "VERIFICATION_FAILED:" + ";".join(verification.reasons)
                 _console(f"[AUTONOMOUS][VERIFY] iteration={iteration} step={step.sequence} REJECTED reason={reason}")
-                return AutonomousReplanningCycleResult(
-                    False,
-                    iteration,
-                    tuple(executed),
-                    reason,
-                )
+                return AutonomousReplanningCycleResult(False, iteration, tuple(executed), reason)
 
             executed.append(int(step.sequence))
             _console(f"[AUTONOMOUS][REPLAN] iteration={iteration} step={step.sequence} verified; rebuilding plan from refreshed state")
-            # The verified refreshed state is authoritative for the next plan.
-            # Do not refresh it again before rebuilding: that would introduce a
-            # second state transition and could cause the next plan to be built
-            # from a different account snapshot than the one just verified.
             state = refreshed_state
 
         reason = "MAX_ITERATIONS_REACHED"
         _console(f"[AUTONOMOUS][REPLAN] loop STOP reason={reason}")
-        return AutonomousReplanningCycleResult(
-            False,
-            self._max_iterations,
-            tuple(executed),
-            reason,
-        )
+        return AutonomousReplanningCycleResult(False, self._max_iterations, tuple(executed), reason)
 
 
 __all__ = ["AutonomousReplanningCycleResult", "AutonomousReplanningCycleService"]
