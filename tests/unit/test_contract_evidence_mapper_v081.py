@@ -32,6 +32,38 @@ def test_fundamentals_mapper_uses_contract_field_names_and_fcf_margin():
     assert result["pe"] == 10.0
 
 
+def test_fundamentals_mapper_treats_zero_as_unavailable_per_t_invest_contract():
+    result = map_fundamentals({
+        "roe": 20.0,
+        "roic": 0.0,
+        "roa": 0.0,
+        "net_margin_mrq": 0.0,
+        "one_year_annual_revenue_growth_rate": 12.0,
+        "three_year_annual_revenue_growth_rate": 0.0,
+        "five_year_annual_revenue_growth_rate": 0.0,
+        "eps_change_five_years": 0.0,
+        "ebitda_change_five_years": 0.0,
+        "current_ratio_mrq": 0.0,
+        "net_debt_to_ebitda": 0.0,
+        "free_cash_flow_ttm": 0.0,
+        "free_cash_flow_to_price": 0.0,
+        "pe_ratio_ttm": 0.0,
+        "price_to_sales_ttm": 0.0,
+        "price_to_book_ttm": 0.0,
+        "price_to_free_cash_flow_ttm": 0.0,
+        "ev_to_ebitda_mrq": 0.0,
+        "ev_to_sales": 0.0,
+        "dividend_yield_daily_ttm": 0.0,
+        "dividend_payout_ratio_fy": 0.0,
+        "five_year_annual_dividend_growth_rate": 0.0,
+    })
+    assert result["roe"] == 20.0
+    assert result["revenue_growth"] == 12.0
+    for key, value in result.items():
+        if key not in {"roe", "revenue_growth"}:
+            assert value is None, key
+
+
 def test_mapper_accepts_protobuf_json_camel_case():
     result = map_fundamentals({
         "roe": 18.0, "roic": 15.0, "netMarginMrq": 10.0,
