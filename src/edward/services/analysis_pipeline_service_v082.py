@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Mapping, Sequence
 
 from edward.services.analysis_pipeline_service_v081 import (
@@ -11,13 +11,16 @@ from edward.services.fundamental_analysis_service_v082 import (
     FundamentalAnalysisResult,
     FundamentalAnalysisServiceV082,
 )
+from edward.services.fundamental_factor_adapter_v082 import FundamentalFactorAdapterV082
+from edward.services.multifactor_normalization_v081 import normalize
+from edward.services.multifactor_overlay_service_v081 import MultiFactorOverlayServiceV081
 
 ANALYSIS_PIPELINE_V082_VERSION = "0.8.2"
 
 
 @dataclass(frozen=True, slots=True)
 class AnalysisPipelineV082Result:
-    """v0.8.2 result: v0.8.1 pipeline plus structured fundamental analysis."""
+    """v0.8.2 result: v0.8.1 pipeline with the structured fundamental layer wired in."""
 
     base: AnalysisPipelineV081Result
     fundamental: FundamentalAnalysisResult
@@ -45,11 +48,13 @@ class AnalysisPipelineV082Result:
 
 
 class AnalysisPipelineServiceV082:
-    """Additive v0.8.2 facade over the stable v0.8.1 analysis pipeline.
+    """v0.8.2 facade reusing the stable v0.8.1 factor pipeline.
 
-    Fundamental analysis is calculated from the same contract-mapped data and
-    uses the selected trading profile for fundamental group weighting. It does
-    not yet modify the v0.8.1 multifactor score, overlay or execution decision.
+    The v0.8.1 pipeline remains the source for every non-fundamental factor.
+    The structured v0.8.2 fundamental result is adapted to the existing
+    FundamentalFactor contract and replaces only that factor before the existing
+    normalization/overlay stage is re-applied. This prevents double-counting
+    fundamentals while preserving the v0.8.1 public contracts.
     """
 
     def __init__(self, *, base_pipeline: AnalysisPipelineServiceV081 | None = None) -> None:
@@ -71,7 +76,7 @@ class AnalysisPipelineServiceV082:
         fundamentals: Any = None,
         **kwargs: Any,
     ) -> AnalysisPipelineV082Result:
-        result = self.base_pipeline.analyze(
+        base_result = self.base_pipeline.analyze(
             instrument_uid=instrument_uid,
             ticker=ticker,
             candles=candles,
@@ -85,8 +90,29 @@ class AnalysisPipelineServiceV082:
             fundamentals=fundamentals,
             **kwargs,
         )
+
         fundamental = FundamentalAnalysisServiceV082.analyze(fundamentals, profile=profile)
-        return AnalysisPipelineV082Result(base=result, fundamental=fundamental)
+        adapted_fundamental = FundamentalFactorAdapterV082.adapt(fundamental)
+
+        # Reuse every v0.8.1 factor except fundamentals. We intentionally start
+        # overlay recalculation from the original v0.8 result held by the v0.8.1
+        # facade, so the old already-adjusted overlay is never compounded twice.
+        multifactor = replace(base_result.multifactor, fundamentals=adapted_fundamental)
+        multifactor = normalize(
+            multifactor,
+            portfolio_context_available=bool(
+                portfolio_weights
+                or portfolio_returns
+                or candidate_weight > 0
+                or kwargs.get("current_weight_pct", 0.0) > 0
+                or kwargs.get("marginal_risk_pct", 0.0) != 0
+                or kwargs.get("diversification_benefit_pct", 0.0) != 0
+            ),
+            session_available=kwargs.get("session_name") is not None,
+        )
+        adjusted, overlay = MultiFactorOverlayServiceV081.apply(base_result.base, multifactor)
+        integrated_base = replace(base_result, base=adjusted, multifactor=multifactor, overlay=overlay)
+        return AnalysisPipelineV082Result(base=integrated_base, fundamental=fundamental)
 
 
 __all__ = [
