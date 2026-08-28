@@ -30,7 +30,19 @@ def install() -> None:
             if getattr(window, "_ev_reliability_panel_added", False):
                 continue
 
+            canvas = getattr(window, "_analysis_canvas", None)
+            if canvas is not None:
+                scroll_frame = canvas.master
+                for child in scroll_frame.winfo_children():
+                    if isinstance(child, ttk.Scrollbar) and str(child.cget("orient")) == "horizontal":
+                        child.grid_remove()
+
             content = getattr(window, "_analysis_content", window)
+            for child in content.winfo_children():
+                if isinstance(child, tk.Text):
+                    child.configure(height=11)
+                    break
+
             metrics = next(
                 (
                     item
