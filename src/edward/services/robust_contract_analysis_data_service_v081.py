@@ -1,19 +1,16 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from edward.services.contract_analysis_data_service_v081 import ContractAnalysisDataServiceV081
+from edward.services.contract_evidence_mapper_v081 import map_order_book, map_risk_rates
 
 
 class RobustContractAnalysisDataServiceV081(ContractAnalysisDataServiceV081):
-    """v0.8.1 collector with recursive contract-response unwrapping.
-
-    The runtime adapter may return a response wrapped in one or more envelope
-    objects (for example ``data``, ``response``, ``result`` or ``payload``).
-    The base collector intentionally remains unchanged; this subclass only
-    improves discovery of the existing contract collections.
-    """
+    """v0.8.1 collector with recursive contract-response unwrapping."""
 
     _ENVELOPE_KEYS = {
         "data",
@@ -88,6 +85,30 @@ class RobustContractAnalysisDataServiceV081(ContractAnalysisDataServiceV081):
                 if cls._normalize(str(raw_key)) in target_names and isinstance(value, list):
                     return value
         return []
+
+    def collect(self, instrument_uid: str):
+        result = super().collect(instrument_uid)
+        failed = set(result.failed_sources)
+        fetched = set(result.fetched_sources)
+
+        if "risk_rates" in fetched and "risk_rates_mapping" in failed:
+            raw_risk = self.client.get_risk_rates([instrument_uid])
+            risk_items = self._many(raw_risk, "risk_rates", "instrument_risk_rates", "items")
+            mapped_risk = map_risk_rates({"risk_rates": risk_items}) if risk_items else None
+            if mapped_risk is not None:
+                failed.discard("risk_rates_mapping")
+                result = replace(result, risk_data=mapped_risk)
+
+        if "order_book" in fetched and result.order_book is None:
+            raw_book = self.client.get_order_book(instrument_uid, 10)
+            bids = self._many(raw_book, "bids")
+            asks = self._many(raw_book, "asks")
+            mapped_book = map_order_book({"bids": bids, "asks": asks}) if bids or asks else None
+            if mapped_book is not None:
+                result = replace(result, order_book=mapped_book)
+
+        result = replace(result, failed_sources=tuple(sorted(failed)))
+        return result
 
 
 __all__ = ["RobustContractAnalysisDataServiceV081"]
