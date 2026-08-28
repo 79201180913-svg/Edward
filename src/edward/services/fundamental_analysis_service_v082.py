@@ -143,13 +143,22 @@ class FundamentalAnalysisServiceV082:
         "short-term": "speculative",
     }
 
+    # Banks are financial institutions whose operating model makes several
+    # generic industrial-company metrics structurally non-comparable. Keep
+    # these fields visible as evidence, but exclude them from scoring/coverage.
+    # P/E, P/B, ROE and dividend metrics remain applicable to banks.
     BANK_NOT_APPLICABLE = frozenset(
         {
             "roic",
             "ebitda_growth",
+            "free_cash_flow",
+            "free_cash_flow_to_price",
             "net_debt_to_ebitda",
             "total_debt_to_ebitda",
+            "total_debt_to_equity",
             "current_ratio",
+            "ps",
+            "p_fcf",
             "ev_to_ebitda",
             "ev_to_sales",
         }
@@ -198,6 +207,10 @@ class FundamentalAnalysisServiceV082:
             "industry",
             "industry_name",
             "asset_class",
+            "name",
+            "instrument_name",
+            "company_name",
+            "ticker",
         ):
             value = context.get(key)
             if value is not None:
@@ -208,10 +221,10 @@ class FundamentalAnalysisServiceV082:
             for token in (
                 "bank",
                 "banks",
-                "банков",
+                "banking",
                 "банк",
                 "банки",
-                "banking",
+                "банков",
             )
         )
 
