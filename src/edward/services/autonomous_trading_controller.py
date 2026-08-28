@@ -83,7 +83,7 @@ class AutonomousTradingController:
             budget = budget_for_state(state)
             allowed, reason, reasons = self._gate(account_id=account_id, mode=mode, plan=plan, budget=budget, state=state)
             if not allowed:
-                preflight_reasons.extend(reasons or (reason,)); cycle_error.append(reason + ((":" + ";".join(reasons)) if reasons else "")); return AutonomousExecutionPlan(steps=())
+                preflight_reasons.extend(reasons or (reason,)); cycle_error.append(reason + ((":" + ";".join(reasons)) if reasons else "")); return plan
             return plan
 
         def execute_one(step: Any) -> Any:
