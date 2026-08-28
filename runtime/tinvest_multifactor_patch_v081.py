@@ -15,8 +15,46 @@ def _ts(value: datetime | str | None) -> str | None:
     return normalized.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _structure(value: Any, depth: int = 0) -> Any:
+    """Return response shape only; never log financial values."""
+    if depth >= 2:
+        return type(value).__name__
+    if isinstance(value, dict):
+        result: dict[str, Any] = {"type": "dict", "keys": tuple(sorted(str(key) for key in value))}
+        for key in ("fundamentals", "statistics", "asset_fundamentals", "response", "data", "result", "payload"):
+            if key in value:
+                nested = value[key]
+                if isinstance(nested, list):
+                    result[key] = {
+                        "type": "list",
+                        "count": len(nested),
+                        "first": _structure(nested[0], depth + 1) if nested else None,
+                    }
+                else:
+                    result[key] = _structure(nested, depth + 1)
+        return result
+    if isinstance(value, (list, tuple)):
+        return {
+            "type": type(value).__name__,
+            "count": len(value),
+            "first": _structure(value[0], depth + 1) if value else None,
+        }
+    return {"type": type(value).__name__}
+
+
 def _get_asset_fundamentals(self, instrument_id: str):
-    return self._rest_request("InstrumentsService/GetAssetFundamentals", {"assets": [str(instrument_id)]})
+    assets = [str(instrument_id)]
+    adapter.logger.info("[FUNDAMENTALS API REQUEST] assets=%s", tuple(assets))
+    result = self._rest_request("InstrumentsService/GetAssetFundamentals", {"assets": assets})
+    adapter.logger.info("[FUNDAMENTALS API RAW] response_type=%s structure=%s", type(result).__name__, _structure(result))
+    if isinstance(result, dict):
+        fundamentals = result.get("fundamentals")
+        if isinstance(fundamentals, list):
+            adapter.logger.info("[FUNDAMENTALS API COLLECTION] count=%s", len(fundamentals))
+            if fundamentals and isinstance(fundamentals[0], dict):
+                populated = tuple(sorted(str(key) for key, value in fundamentals[0].items() if value is not None))
+                adapter.logger.info("[FUNDAMENTALS API FIRST] keys=%s populated_fields=%s", tuple(sorted(str(key) for key in fundamentals[0])), populated)
+    return result
 
 
 def _get_asset_reports(self, instrument_id: str, from_dt: datetime | str | None = None, to_dt: datetime | str | None = None):
