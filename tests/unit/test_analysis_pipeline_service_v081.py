@@ -59,7 +59,7 @@ def test_v081_pipeline_accepts_all_optional_contract_sources():
     assert result.multifactor.instrument_risk.evidence.available is True
 
 
-def test_v081_normalizes_fractional_risk_rates_to_percent_before_factor_calculation():
+def test_v081_normalizes_fractional_risk_rates_and_uses_long_margin_when_short_is_disabled():
     result = AnalysisPipelineServiceV081().analyze(
         instrument_uid="TQBR.RISK",
         ticker="RISK",
@@ -71,6 +71,25 @@ def test_v081_normalizes_fractional_risk_rates_to_percent_before_factor_calculat
     risk = result.multifactor.instrument_risk
     assert risk.long_margin_rate_pct == 25.0
     assert risk.short_margin_rate_pct == 56.75
-    assert risk.capital_efficiency_score < 100.0
-    assert risk.risk_score > 50.0
+    assert risk.short_enabled is False
+    assert risk.capital_efficiency_score == 75.0
+    assert risk.risk_score == 25.0
+    assert risk.evidence.available is True
+
+
+def test_v081_uses_stricter_short_margin_when_short_is_enabled():
+    result = AnalysisPipelineServiceV081().analyze(
+        instrument_uid="TQBR.RISK_SHORT",
+        ticker="RISK_SHORT",
+        candles=_candles(),
+        session_name="REGULAR",
+        risk_data={"dlong": 0.25, "dshort": 0.5675, "short_enabled": True},
+    )
+
+    risk = result.multifactor.instrument_risk
+    assert risk.long_margin_rate_pct == 25.0
+    assert risk.short_margin_rate_pct == 56.75
+    assert risk.short_enabled is True
+    assert risk.capital_efficiency_score == 43.25
+    assert risk.risk_score == 56.75
     assert risk.evidence.available is True
