@@ -94,6 +94,20 @@ class ContractAnalysisDataServiceV081:
         for key, value in payload.items():
             if str(key).replace("_", "").lower() == compact: return value
         return default
+    @staticmethod
+    def _mapping_keys(payload: Any) -> tuple[str, ...]:
+        return tuple(sorted(str(key) for key in payload.keys())) if isinstance(payload, dict) else ()
+    @staticmethod
+    def _mapping_value_keys(payload: Any) -> tuple[str, ...]:
+        return tuple(sorted(str(key) for key in payload.keys())) if isinstance(payload, dict) else ()
+    @classmethod
+    def _log_fundamentals_diagnostics(cls, instrument_uid: str, raw: Any, candidate: Any, mapped: Any) -> None:
+        logger.info("[V081 FUNDAMENTALS RAW] instrument_uid=%s root_type=%s root_keys=%s", instrument_uid, type(raw).__name__, cls._mapping_keys(raw))
+        logger.info("[V081 FUNDAMENTALS CANDIDATE] instrument_uid=%s candidate_type=%s candidate_keys=%s", instrument_uid, type(candidate).__name__, cls._mapping_keys(candidate))
+        if isinstance(candidate, dict):
+            populated = tuple(sorted(str(key) for key, value in candidate.items() if value is not None))
+            logger.info("[V081 FUNDAMENTALS CANDIDATE FIELDS] instrument_uid=%s populated=%s", instrument_uid, populated)
+        logger.info("[V081 FUNDAMENTALS MAPPED] instrument_uid=%s mapped=%s mapped_type=%s mapped_keys=%s", instrument_uid, mapped is not None, type(mapped).__name__, cls._mapping_value_keys(mapped))
     @classmethod
     def _map_report(cls, report: Any) -> Any:
         if not isinstance(report, dict): return report
@@ -150,6 +164,7 @@ class ContractAnalysisDataServiceV081:
         signals_raw = self._many_recursive(raw_signals, "signals")
         news_raw = self._many_recursive(raw_news, "items", "news")
         mapped_instrument_risk = map_instrument_risk(self._instrument_candidate(raw_instrument)); mapped_fundamentals = map_fundamentals(fundamentals_raw); mapped_order_book = map_order_book(raw_order_book); mapped_risk_rates = map_risk_rates(raw_risk)
+        self._log_fundamentals_diagnostics(instrument_uid, raw_fundamentals, fundamentals_raw, mapped_fundamentals)
         mapped_news = tuple(map_news(item) for item in news_raw)
         relevant_news = tuple(item for item in mapped_news if not item.get("instrument_id") or str(instrument_uid) in {str(value) for value in (item.get("instrument_id") or []) if isinstance(value, str)} or any(isinstance(link, dict) and str(instrument_uid) == str(((link.get("instrument") or {}).get("instrument_uid"))) for link in (item.get("instrument_id") or ())))
         session_name = self._current_session(raw_schedules, now); session_available = "trading_schedules" in fetched and session_name is not None
