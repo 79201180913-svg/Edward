@@ -4,7 +4,7 @@ from dataclasses import replace
 from logging import getLogger
 from typing import Any
 from edward.services.contract_analysis_data_service_v081 import ContractAnalysisDataServiceV081
-from edward.services.contract_evidence_mapper_v081 import map_fundamentals, map_insider, map_order_book, map_risk_rates
+from edward.services.contract_evidence_mapper_v081 import map_fundamentals, map_insider, map_order_book, map_risk_rates, map_news
 logger = getLogger(__name__)
 class RobustContractAnalysisDataServiceV081(ContractAnalysisDataServiceV081):
     """v0.8.1 collector with recursive contract-response discovery."""
@@ -109,6 +109,13 @@ class RobustContractAnalysisDataServiceV081(ContractAnalysisDataServiceV081):
         if "reports" in fetched and ("reports_mapping" in failed or "reports" in unavailable):
             items=self._many(self.client.get_asset_reports(instrument_uid,None,None),"events","reports")
             if items: failed.discard("reports_mapping"); unavailable.discard("reports"); result=replace(result,reports=tuple(self._map_report(x) for x in items))
+        if "news" in fetched and ("news_mapping" in failed or "news" in unavailable or not result.news):
+            raw=self.client.get_news(1000)
+            items=self._many(raw,"items","news")
+            if not items and isinstance(raw,Mapping) and self._looks_like_direct_object(raw,"news"):
+                items=[raw]
+            if items:
+                failed.discard("news_mapping"); unavailable.discard("news"); result=replace(result,news=tuple(map_news(x) for x in items))
         if "risk_rates" in fetched and ("risk_rates_mapping" in failed or "risk_rates_mapping" in unavailable or "risk_rates" in unavailable):
             raw=self.client.get_risk_rates([instrument_uid]); items=self._many(raw,"risk_rates","instrument_risk_rates","items"); self._log_risk_item_diagnostics(instrument_uid,raw,items)
             mapped=map_risk_rates({"risk_rates":items}) if items else map_risk_rates(raw)
