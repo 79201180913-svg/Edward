@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import erf, sqrt
 from statistics import mean, pstdev
 from typing import Sequence
 
@@ -30,6 +31,10 @@ class ExpectedValueResult:
     confidence: str
     available: bool = True
     unavailable_reason: str | None = None
+    ev_ci_low_pct: float | None = None
+    ev_ci_high_pct: float | None = None
+    edge_reliability_pct: float | None = None
+    edge_reliability_level: str = "LOW"
     version: str = EXPECTED_VALUE_VERSION
 
 
@@ -49,6 +54,42 @@ class ExpectedValueEngine:
         fraction = position - lower
         return ordered[lower] + (ordered[upper] - ordered[lower]) * fraction
 
+    @staticmethod
+    def _t_critical_95(df: int) -> float:
+        table = {
+            1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571,
+            6: 2.447, 7: 2.365, 8: 2.306, 9: 2.262, 10: 2.228,
+            11: 2.201, 12: 2.179, 13: 2.160, 14: 2.145, 15: 2.131,
+            16: 2.120, 17: 2.110, 18: 2.101, 19: 2.093, 20: 2.086,
+            21: 2.080, 22: 2.074, 23: 2.069, 24: 2.064, 25: 2.060,
+            26: 2.056, 27: 2.052, 28: 2.048, 29: 2.045, 30: 2.042,
+        }
+        return table.get(max(1, df), 1.96)
+
+    @staticmethod
+    def _normal_cdf(value: float) -> float:
+        return 0.5 * (1.0 + erf(value / sqrt(2.0)))
+
+    @classmethod
+    def _ev_reliability(cls, outcomes: Sequence[float], expected_value: float) -> tuple[float, float, float, str]:
+        observations = len(outcomes)
+        if observations < 2:
+            return 0.0, None if observations == 0 else expected_value, None if observations == 0 else expected_value, "LOW"
+        sample_std = pstdev(outcomes)
+        if sample_std == 0.0:
+            low = high = expected_value
+            reliability = 100.0 if expected_value > 0 else 0.0 if expected_value < 0 else 50.0
+        else:
+            standard_error = sample_std / sqrt(observations)
+            critical = cls._t_critical_95(observations - 1)
+            half_width = critical * standard_error
+            low = expected_value - half_width
+            high = expected_value + half_width
+            z = expected_value / standard_error
+            reliability = cls._normal_cdf(z) * 100.0
+        level = "HIGH" if observations >= 100 and reliability >= 95.0 and low > 0 else "MEDIUM" if observations >= 30 and reliability >= 75.0 and low > 0 else "LOW"
+        return reliability, low, high, level
+
     @classmethod
     def from_trades(cls, trades: Sequence[BacktestTrade]) -> ExpectedValueResult:
         outcomes = [float(trade.net_return_pct) for trade in trades]
@@ -57,6 +98,7 @@ class ExpectedValueEngine:
                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
                 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0,
                 "Low", False, "NO_REALIZED_OUTCOMES",
+                None, None, 0.0, "LOW",
             )
 
         wins = [value for value in outcomes if value > 0]
@@ -72,6 +114,7 @@ class ExpectedValueEngine:
         risk_adjusted = expected_value / dispersion if dispersion > 0 else (expected_value if expected_value > 0 else 0.0)
         observations = len(outcomes)
         confidence = "High" if observations >= 100 else "Medium" if observations >= 30 else "Low"
+        edge_reliability, ev_ci_low, ev_ci_high, edge_level = cls._ev_reliability(outcomes, expected_value)
 
         p10 = cls._percentile(outcomes, 10)
         p25 = cls._percentile(outcomes, 25)
@@ -95,6 +138,10 @@ class ExpectedValueEngine:
             uncertainty_width_pct=p90 - p10,
             observations=observations,
             confidence=confidence,
+            ev_ci_low_pct=ev_ci_low,
+            ev_ci_high_pct=ev_ci_high,
+            edge_reliability_pct=edge_reliability,
+            edge_reliability_level=edge_level,
         )
 
     @classmethod
