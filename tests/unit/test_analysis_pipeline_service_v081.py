@@ -57,3 +57,20 @@ def test_v081_pipeline_accepts_all_optional_contract_sources():
     assert result.multifactor.dividends.evidence.available is True
     assert result.multifactor.insider.evidence.available is True
     assert result.multifactor.instrument_risk.evidence.available is True
+
+
+def test_v081_normalizes_fractional_risk_rates_to_percent_before_factor_calculation():
+    result = AnalysisPipelineServiceV081().analyze(
+        instrument_uid="TQBR.RISK",
+        ticker="RISK",
+        candles=_candles(),
+        session_name="REGULAR",
+        risk_data={"dlong": 0.25, "dshort": 0.5675, "short_enabled": False},
+    )
+
+    risk = result.multifactor.instrument_risk
+    assert risk.long_margin_rate_pct == 25.0
+    assert risk.short_margin_rate_pct == 56.75
+    assert risk.capital_efficiency_score < 100.0
+    assert risk.risk_score > 50.0
+    assert risk.evidence.available is True
