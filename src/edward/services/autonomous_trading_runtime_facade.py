@@ -100,7 +100,12 @@ class AutonomousTradingRuntimeFacade:
 
         def budget_for_state(state: AccountState) -> BudgetPlan:
             _console("[AUTONOMOUS][STAGE] budget recalculation: START")
-            budget = self._planning.plan_from_state(state, self.policy).budget
+            budget = self._planning.plan_from_state(
+                self.account_id,
+                self.policy,
+                positions=state.positions,
+                portfolio=state.portfolio,
+            ).budget
             _console(f"[AUTONOMOUS][STAGE] budget recalculation: DONE currency={budget.currency} planning_budget={budget.planning_budget}")
             return budget
 
