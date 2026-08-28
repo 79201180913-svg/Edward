@@ -169,48 +169,27 @@ def install_autonomous_ui(app_class: type) -> None:
                 status_var.set(f"{scope}: обработано {current}/{total} — {opportunity.ticker}")
             self.after(0, apply)
 
-        def render_result(result: Any) -> None:
-            def apply() -> None:
-                latest_portfolio_opportunities.clear()
-                latest_portfolio_opportunities.extend(result.portfolio_opportunities)
-                for item in tree.get_children():
-                    tree.delete(item)
-                for opportunity in result.market_opportunities:
-                    insert_opportunity(opportunity, "Рынок")
-                for opportunity in result.portfolio_opportunities:
-                    insert_opportunity(opportunity, "Портфель")
-                render_budget(result.planning)
-                render_allocation(result.allocation_actions)
-                render_execution_plan(result.execution_plan)
-                status_var.set(f"Завершено: рынок {len(result.market_opportunities)}, портфель {len(result.portfolio_opportunities)}, действий {len(result.allocation_actions)}, шагов {len(result.execution_plan.steps) if result.execution_plan else 0}")
-                log_ui(f"Цикл анализа завершён: market={len(result.market_opportunities)} portfolio={len(result.portfolio_opportunities)} allocation={len(result.allocation_actions)} execution_steps={len(result.execution_plan.steps) if result.execution_plan else 0}")
-            self.after(0, apply)
-
         def open_portfolio() -> None:
             open_autonomous_portfolio_window(self, self.client, aid, display_currency=str(self.display_currency.get() or "RUB"), opportunities=tuple(latest_portfolio_opportunities))
         portfolio_button.configure(command=open_portfolio)
 
         def on_progress(stage: str, percent: float, current: int, total: int) -> None:
-            logger.info("autonomous_progress stage=%s percent=%.1f current=%d total=%d", stage, percent, current, total)
             status = f"{stage} — {percent:.1f}%"
             self.after(0, lambda: status_var.set(status))
             log_ui(status)
 
         def autonomous_result_callback(opportunity: Any, current: int, total: int) -> None:
             render_incremental(opportunity, autonomous_scope["value"], current, total)
-            logger.info("autonomous_runtime_opportunity scope=%s ticker=%s current=%d total=%d", autonomous_scope["value"], getattr(opportunity, "ticker", ""), current, total)
 
         def autonomous_scope_callback(scope: str) -> None:
             autonomous_scope["value"] = "Рынок" if scope == "MARKET" else "Портфель"
             log_ui(f"Автономный цикл: начат анализ {autonomous_scope['value']}")
-            logger.info("autonomous_runtime_scope scope=%s", scope)
 
         def autonomous_planning_callback(planning: Any) -> None:
             render_budget(planning)
             budget = getattr(planning, "budget", None)
             if budget is not None:
                 log_ui(f"Бюджет рассчитан: капитал={budget.account_capital}, резерв={budget.reserve}, инвестиционный бюджет={budget.planning_budget}, доступные деньги={budget.investable_cash}")
-            logger.info("autonomous_runtime_budget_published")
 
         def build_runtime_policy() -> BudgetPlanningPolicy:
             return BudgetPlanningPolicy(slots=int(slots_var.get()), reserve_pct=Decimal(str(reserve_var.get()).replace(",", ".")))
@@ -224,20 +203,22 @@ def install_autonomous_ui(app_class: type) -> None:
         def run_analysis_cycle() -> None:
             try:
                 policy = build_runtime_policy()
-                logger.info("autonomous_analysis_started account_id=%s profile=%s slots=%d reserve_pct=%s", aid, profile_var.get(), policy.slots, policy.reserve_pct)
-                log_ui(f"Однократный анализ: профиль={profile_var.get()}, слоты={policy.slots}, резерв={policy.reserve_pct}%")
                 service = AutonomousCycleService(AutonomousPlanningService(BalanceService(self.client)), OpportunitySearchService(self.client))
                 active_scope = {"value": "Рынок"}
                 def result_callback(opportunity: Any, current: int, total: int) -> None:
                     render_incremental(opportunity, active_scope["value"], current, total)
                 def scope_callback(scope: str) -> None:
                     active_scope["value"] = "Рынок" if scope == "MARKET" else "Портфель"
-                    log_ui(f"Начат анализ: {active_scope['value']}")
                 def planning_callback(planning: Any) -> None:
                     render_budget(planning)
                     log_ui("План капитала рассчитан по текущему счёту")
                 result = service.run(account_id=aid, policy=policy, profile=profile_var.get(), instrument_kind="SHARE", progress_callback=on_progress, result_callback=result_callback, scope_callback=scope_callback, planning_callback=planning_callback)
-                render_result(result)
+                for item in tree.get_children():
+                    tree.delete(item)
+                for opportunity in result.market_opportunities:
+                    insert_opportunity(opportunity, "Рынок")
+                for opportunity in result.portfolio_opportunities:
+                    insert_opportunity(opportunity, "Портфель")
             except Exception as exc:
                 logger.exception("autonomous_analysis_failed account_id=%s", aid)
                 log_ui(f"Ошибка анализа: {type(exc).__name__}: {exc}")
@@ -247,15 +228,10 @@ def install_autonomous_ui(app_class: type) -> None:
 
         def run_autonomous_once() -> None:
             try:
-                logger.info("autonomous_runtime_manual_start account_id=%s profile=%s", aid, profile_var.get())
                 log_ui(f"Запуск автономного цикла: профиль={profile_var.get()}")
                 result = run_runtime_cycle()
                 control_result = getattr(result, "control", result)
                 reason = getattr(control_result, "reason", "") or ""
-                if reason.startswith("PARTIAL_COMPLETED:"):
-                    log_ui("⚠️ Часть операций завершилась ошибкой; автономный цикл продолжен.")
-                elif reason.startswith("PREFLIGHT_REJECTED"):
-                    log_ui("⚠️ План отклонён preflight-проверкой.")
                 self.after(0, lambda r=reason: status_var.set(f"Автономный цикл: {r}"))
             except Exception as exc:
                 logger.exception("autonomous_runtime_manual_failed account_id=%s", aid)
