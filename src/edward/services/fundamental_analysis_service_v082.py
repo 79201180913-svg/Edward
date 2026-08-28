@@ -264,8 +264,14 @@ class FundamentalAnalysisServiceV082:
                 reason_codes=("METRIC_NOT_APPLICABLE",),
             )
 
+        raw_value = snapshot.get(metric) if isinstance(snapshot, Mapping) else None
         value = cls._num(snapshot, metric)
         if value is None:
+            logger.info(
+                "[V082 FUNDAMENTAL METRIC] metric=%s status=UNAVAILABLE raw=%r mapped=None score=0.00 reason=METRIC_UNAVAILABLE",
+                metric,
+                raw_value,
+            )
             return FundamentalMetricResult(
                 metric,
                 None,
@@ -276,6 +282,15 @@ class FundamentalAnalysisServiceV082:
             )
         score = cls._metric_score(metric, value)
         direction = "POSITIVE" if score > 60 else "NEGATIVE" if score < 40 else "NEUTRAL"
+        logger.info(
+            "[V082 FUNDAMENTAL METRIC] metric=%s status=AVAILABLE raw=%r mapped=%.6f score=%.6f direction=%s reason_codes=%s",
+            metric,
+            raw_value,
+            value,
+            score,
+            direction,
+            (),
+        )
         return FundamentalMetricResult(metric, value, score, True, 100.0, direction=direction)
 
     @classmethod
