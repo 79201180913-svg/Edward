@@ -83,6 +83,27 @@ def _cancel_stop_order(self, account_id, stop_order_id):
     return self._rest_request("SandboxService/CancelSandboxStopOrder", {"accountId": str(account_id), "stopOrderId": str(stop_order_id)})
 
 
+def _get_instrument(self, instrument_id):
+    """Contract-correct GetInstrumentBy using UID identification."""
+    instrument_id = str(instrument_id or "")
+    if not instrument_id:
+        raise ValueError("instrument_id is required")
+    result = self._rest_request(
+        "InstrumentsService/GetInstrumentBy",
+        {
+            "idType": "INSTRUMENT_ID_TYPE_UID",
+            "id": instrument_id,
+        },
+    )
+    _adapter.logger.info(
+        "[INSTRUMENT LOOKUP] instrument_uid=%s found=%s keys=%s",
+        instrument_id,
+        bool(result),
+        list(result.keys()) if isinstance(result, dict) else type(result).__name__,
+    )
+    return result
+
+
 _adapter.AdapterState.operations = _operations
 _adapter.AdapterState.orders = _orders
 _adapter.AdapterState.order_state = _order_state
@@ -92,6 +113,26 @@ _adapter.AdapterState.replace_order = _replace_order
 _adapter.AdapterState.post_stop_order = _create_stop_order
 _adapter.AdapterState.get_stop_orders = _stop_orders
 _adapter.AdapterState.cancel_stop_order = _cancel_stop_order
+_adapter.AdapterState.get_instrument = _get_instrument
+
+_original_handler_do_post = _adapter.Handler.do_POST
+
+
+def _handler_do_post(self):
+    if self.path == "/instruments/get":
+        try:
+            payload = self._read_json()
+            result = _adapter.STATE.get_instrument(str(payload.get("instrument_id") or payload.get("id") or ""))
+            self._send(200, result)
+            return
+        except Exception as exc:
+            _adapter.logger.exception("[INSTRUMENT LOOKUP ERROR] %s", exc)
+            self._send(500, {"error": str(exc), "type": type(exc).__name__})
+            return
+    return _original_handler_do_post(self)
+
+
+_adapter.Handler.do_POST = _handler_do_post
 
 tinvest_candles_patch.install(_adapter)
 
