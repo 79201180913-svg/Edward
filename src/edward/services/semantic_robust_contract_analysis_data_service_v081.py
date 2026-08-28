@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any
 
 from edward.services.robust_contract_analysis_data_service_v081 import RobustContractAnalysisDataServiceV081
@@ -96,8 +97,8 @@ class SemanticRobustContractAnalysisDataServiceV081(RobustContractAnalysisDataSe
         deduped = tuple(dict.fromkeys(diagnostics))
 
         if hasattr(result, "unavailable_sources"):
-            result = result.__class__(**{**result.__dict__, "unavailable_sources": deduped}) if hasattr(result, "__dict__") else result
-        result = result.__class__(**{**result.__dict__, "failed_sources": tuple(sorted(failed))}) if hasattr(result, "__dict__") else result
+            result = replace(result, unavailable_sources=deduped)
+        result = replace(result, failed_sources=tuple(sorted(failed)))
         return result
 
 
