@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from edward.domain.execution import ExecutionMode
 from edward.services.account_state_refresh_service import AccountState
+from edward.services.autonomous_execution_plan_service import AutonomousExecutionPlan
 from edward.services.autonomous_trading_controller import AutonomousTradingController
 from edward.services.budget_planning_service import BudgetPlan
 
@@ -12,7 +13,10 @@ class FakeSequence:
 
     def execute_confirmed_plan(self, **kwargs):
         self.calls.append(kwargs)
-        return type("Sequence", (), {"completed": True, "stopped_at": None})()
+        step = kwargs["plan"].steps[0]
+        execution = type("Execution", (), {"verification": type("Verification", (), {"passed": True, "reasons": ()})()})()
+        result = type("StepResult", (), {"completed": True, "reason": "", "verification": execution.verification})()
+        return type("Sequence", (), {"completed": True, "stopped_at": None, "steps": (result,)})()
 
 
 def plan(uid="new", action="BUY"):
@@ -20,7 +24,7 @@ def plan(uid="new", action="BUY"):
         "sequence": 1, "action": action, "instrument_uid": uid,
         "target_value": Decimal("10000"), "depends_on": None,
     })()
-    return type("Plan", (), {"steps": (step,)})()
+    return AutonomousExecutionPlan(steps=(step,))
 
 
 def budget():
@@ -103,4 +107,71 @@ def test_enabled_autonomous_mode_stops_on_preflight_rejection():
     assert result.executed is False
     assert result.reason == "PREFLIGHT_REJECTED"
     assert "BUY_ALREADY_HELD:1:old" in result.preflight_reasons
+    assert sequence.calls == []
+
+
+def test_replanned_cycle_rechecks_preflight_against_live_state_before_execution():
+    sequence = FakeSequence()
+    controller = AutonomousTradingController(sequence)
+    controller.enable()
+
+    states = [state(), state()]
+    budgets = [budget(), budget()]
+    refresh_calls = []
+
+    def refresh_state():
+        refresh_calls.append(len(refresh_calls) + 1)
+        return states.pop(0)
+
+    def build_plan(_state):
+        return plan(uid="new")
+
+    def budget_for_state(_state):
+        return budgets.pop(0)
+
+    result = controller.execute_replanned(
+        account_id="ACC",
+        mode=ExecutionMode.AUTONOMOUS,
+        refresh_state=refresh_state,
+        build_plan=build_plan,
+        budget_for_state=budget_for_state,
+        result_factory=lambda step: step,
+        max_iterations=1,
+    )
+
+    assert result.executed is True
+    assert result.reason == "MAX_ITERATIONS_REACHED"
+    assert len(refresh_calls) == 3
+    assert len(sequence.calls) == 1
+
+
+def test_replanned_cycle_rejects_step_when_live_state_changed():
+    sequence = FakeSequence()
+    controller = AutonomousTradingController(sequence)
+    controller.enable()
+
+    initial = state()
+    changed = AccountState(
+        portfolio=None,
+        positions=[{"instrument_uid": "new", "quantity": 10}],
+        balance=None,
+        orders=[],
+    )
+    states = [initial, changed]
+
+    def refresh_state():
+        return states.pop(0)
+
+    result = controller.execute_replanned(
+        account_id="ACC",
+        mode=ExecutionMode.AUTONOMOUS,
+        refresh_state=refresh_state,
+        build_plan=lambda _state: plan(uid="new"),
+        budget_for_state=lambda _state: budget(),
+        result_factory=lambda step: step,
+        max_iterations=1,
+    )
+
+    assert result.executed is False
+    assert result.reason.startswith("EXECUTION_ERROR:EXECUTION_ERROR:PREFLIGHT_REJECTED")
     assert sequence.calls == []
