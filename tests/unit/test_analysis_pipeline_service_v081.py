@@ -4,6 +4,7 @@ import pytest
 
 from edward.services.analysis_pipeline_service_v08 import AnalysisPipelineV08Result
 from edward.services.analysis_pipeline_service_v081 import AnalysisPipelineServiceV081, AnalysisPipelineV081Result
+from edward.services.fundamental_analysis_service_v082 import FundamentalAnalysisServiceV082
 
 
 def _candles(count=320):
@@ -123,42 +124,43 @@ def test_v081_instrument_metadata_takes_precedence_over_risk_rates():
 
 
 def test_v081_pipeline_uses_v082_fundamental_score_in_multifactor():
+    fundamentals = {
+        "roe": 20.0,
+        "roic": 18.0,
+        "roa": 8.0,
+        "net_margin": 12.0,
+        "revenue_growth": 15.0,
+        "revenue_growth_3y": 12.0,
+        "revenue_growth_5y": 10.0,
+        "eps_growth": 18.0,
+        "ebitda_growth": 16.0,
+        "current_ratio": 1.5,
+        "net_debt_to_ebitda": 1.0,
+        "free_cash_flow": 100.0,
+        "free_cash_flow_to_price": 4.0,
+        "pe": 15.0,
+        "ps": 2.0,
+        "pb": 2.0,
+        "p_fcf": 14.0,
+        "ev_to_ebitda": 10.0,
+        "ev_to_sales": 2.0,
+        "dividend_yield": 3.0,
+        "dividend_payout": 40.0,
+        "dividend_growth": 5.0,
+        "dividend_regularity": 100.0,
+    }
     result = AnalysisPipelineServiceV081().analyze(
         instrument_uid="TQBR.FUNDAMENTAL",
         ticker="FUNDAMENTAL",
         candles=_candles(),
-        fundamentals={
-            "roe": 20.0,
-            "roic": 18.0,
-            "roa": 8.0,
-            "net_margin": 12.0,
-            "revenue_growth": 15.0,
-            "revenue_growth_3y": 12.0,
-            "revenue_growth_5y": 10.0,
-            "eps_growth": 18.0,
-            "ebitda_growth": 16.0,
-            "current_ratio": 1.5,
-            "net_debt_to_ebitda": 1.0,
-            "free_cash_flow": 100.0,
-            "free_cash_flow_to_price": 4.0,
-            "pe": 15.0,
-            "ps": 2.0,
-            "pb": 2.0,
-            "p_fcf": 14.0,
-            "ev_to_ebitda": 10.0,
-            "ev_to_sales": 2.0,
-            "dividend_yield": 3.0,
-            "dividend_payout": 40.0,
-            "dividend_growth": 5.0,
-            "dividend_regularity": 100.0,
-        },
+        fundamentals=fundamentals,
         session_name="REGULAR",
     )
+    canonical = FundamentalAnalysisServiceV082.analyze(fundamentals)
 
     assert result.multifactor.fundamentals.evidence.available is True
-    assert result.multifactor.fundamentals.evidence.strength == pytest.approx(
-        result.multifactor.fundamentals.quality_score * 0 + result.multifactor.fundamentals.evidence.strength
-    )
-    assert result.multifactor.fundamentals.quality_score == result.multifactor.fundamentals.evidence.strength
-    assert result.multifactor.fundamentals.growth_score >= 0.0
+    assert result.multifactor.fundamentals.evidence.strength == pytest.approx(canonical.overall_score)
+    assert result.multifactor.fundamentals.quality_score == pytest.approx(canonical.business_quality.score)
+    assert result.multifactor.fundamentals.growth_score == pytest.approx(canonical.growth.score)
+    assert result.multifactor.fundamentals.valuation_score == pytest.approx(canonical.valuation.score)
     assert result.multifactor.aggregate_evidence_score >= 0.0
