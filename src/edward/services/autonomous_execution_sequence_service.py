@@ -119,8 +119,8 @@ class AutonomousExecutionSequenceService:
                 before_quantity = self._quantity(before_state, step.instrument_uid)
             except Exception as exc:
                 reason = f"STATE_REFRESH_FAILED:{exc}"
-                emit(step.sequence, AutonomousExecutionPhase.FAILED, reason)
-                results.append(AutonomousExecutionStepResult(step, None, None, None, False, AutonomousExecutionPhase.FAILED, reason))
+                emit(step.sequence, AutonomousExecutionPhase.STOPPED, reason)
+                results.append(AutonomousExecutionStepResult(step, None, None, None, False, AutonomousExecutionPhase.STOPPED, reason))
                 cycle_failed = True
                 if first_failure is None:
                     first_failure = step.sequence
@@ -131,8 +131,8 @@ class AutonomousExecutionSequenceService:
                 intake = self._steps.prepare_step(account_id=account_id, step=step, result=result, dependency_completed=True)
             except Exception as exc:
                 reason = str(exc)
-                emit(step.sequence, AutonomousExecutionPhase.FAILED, reason)
-                results.append(AutonomousExecutionStepResult(step, None, None, None, False, AutonomousExecutionPhase.FAILED, reason))
+                emit(step.sequence, AutonomousExecutionPhase.STOPPED, reason)
+                results.append(AutonomousExecutionStepResult(step, None, None, None, False, AutonomousExecutionPhase.STOPPED, reason))
                 cycle_failed = True
                 if first_failure is None:
                     first_failure = step.sequence
@@ -140,8 +140,8 @@ class AutonomousExecutionSequenceService:
 
             if not intake.accepted or intake.request is None:
                 reason = intake.reason or "EXECUTION_INTAKE_REJECTED"
-                emit(step.sequence, AutonomousExecutionPhase.FAILED, reason)
-                results.append(AutonomousExecutionStepResult(step, getattr(intake.result, "execution_id", None), getattr(intake.result, "status", None), None, False, AutonomousExecutionPhase.FAILED, reason))
+                emit(step.sequence, AutonomousExecutionPhase.STOPPED, reason)
+                results.append(AutonomousExecutionStepResult(step, getattr(intake.result, "execution_id", None), getattr(intake.result, "status", None), None, False, AutonomousExecutionPhase.STOPPED, reason))
                 cycle_failed = True
                 if first_failure is None:
                     first_failure = step.sequence
@@ -170,8 +170,8 @@ class AutonomousExecutionSequenceService:
                     )
             except Exception as exc:
                 reason = str(exc)
-                emit(step.sequence, AutonomousExecutionPhase.FAILED, reason)
-                results.append(AutonomousExecutionStepResult(step, execution_id, None, None, False, AutonomousExecutionPhase.FAILED, reason))
+                emit(step.sequence, AutonomousExecutionPhase.STOPPED, reason)
+                results.append(AutonomousExecutionStepResult(step, execution_id, None, None, False, AutonomousExecutionPhase.STOPPED, reason))
                 cycle_failed = True
                 if first_failure is None:
                     first_failure = step.sequence
@@ -179,8 +179,8 @@ class AutonomousExecutionSequenceService:
 
             if submitted.status not in {ExecutionStatus.FILLED, ExecutionStatus.RECONCILED}:
                 reason = submitted.error_message or f"EXECUTION_STATUS:{submitted.status}"
-                emit(step.sequence, AutonomousExecutionPhase.FAILED, reason)
-                results.append(AutonomousExecutionStepResult(step, execution_id, submitted.status, None, False, AutonomousExecutionPhase.FAILED, reason))
+                emit(step.sequence, AutonomousExecutionPhase.STOPPED, reason)
+                results.append(AutonomousExecutionStepResult(step, execution_id, submitted.status, None, False, AutonomousExecutionPhase.STOPPED, reason))
                 cycle_failed = True
                 if first_failure is None:
                     first_failure = step.sequence
@@ -193,8 +193,8 @@ class AutonomousExecutionSequenceService:
                 verification = self._verifier.verify(step=step, state=after_state, expected_quantity=expected_quantity, before_quantity=before_quantity)
             except Exception as exc:
                 reason = f"VERIFICATION_FAILED:{exc}"
-                emit(step.sequence, AutonomousExecutionPhase.FAILED, reason)
-                results.append(AutonomousExecutionStepResult(step, execution_id, submitted.status, None, False, AutonomousExecutionPhase.FAILED, reason))
+                emit(step.sequence, AutonomousExecutionPhase.STOPPED, reason)
+                results.append(AutonomousExecutionStepResult(step, execution_id, submitted.status, None, False, AutonomousExecutionPhase.STOPPED, reason))
                 cycle_failed = True
                 if first_failure is None:
                     first_failure = step.sequence
@@ -202,8 +202,8 @@ class AutonomousExecutionSequenceService:
 
             if not verification.passed:
                 reason = ";".join(verification.reasons)
-                emit(step.sequence, AutonomousExecutionPhase.FAILED, reason)
-                results.append(AutonomousExecutionStepResult(step, execution_id, submitted.status, verification, False, AutonomousExecutionPhase.FAILED, reason))
+                emit(step.sequence, AutonomousExecutionPhase.STOPPED, reason)
+                results.append(AutonomousExecutionStepResult(step, execution_id, submitted.status, verification, False, AutonomousExecutionPhase.STOPPED, reason))
                 cycle_failed = True
                 if first_failure is None:
                     first_failure = step.sequence
@@ -216,16 +216,16 @@ class AutonomousExecutionSequenceService:
                     protection = self._protection.protect_fill(account_id=account_id, instrument_uid=step.instrument_uid, quantity=expected_quantity, result=result)
                 except Exception as exc:
                     reason = f"PROTECTION_FAILED:{exc}"
-                    emit(step.sequence, AutonomousExecutionPhase.FAILED, reason)
-                    results.append(AutonomousExecutionStepResult(step, execution_id, submitted.status, verification, False, AutonomousExecutionPhase.FAILED, reason))
+                    emit(step.sequence, AutonomousExecutionPhase.STOPPED, reason)
+                    results.append(AutonomousExecutionStepResult(step, execution_id, submitted.status, verification, False, AutonomousExecutionPhase.STOPPED, reason))
                     cycle_failed = True
                     if first_failure is None:
                         first_failure = step.sequence
                     continue
                 if not protection.protected:
                     reason = protection.reason or "PROTECTION_FAILED"
-                    emit(step.sequence, AutonomousExecutionPhase.FAILED, reason)
-                    results.append(AutonomousExecutionStepResult(step, execution_id, submitted.status, verification, False, AutonomousExecutionPhase.FAILED, reason, protection))
+                    emit(step.sequence, AutonomousExecutionPhase.STOPPED, reason)
+                    results.append(AutonomousExecutionStepResult(step, execution_id, submitted.status, verification, False, AutonomousExecutionPhase.STOPPED, reason, protection))
                     cycle_failed = True
                     if first_failure is None:
                         first_failure = step.sequence
@@ -239,11 +239,13 @@ class AutonomousExecutionSequenceService:
 
         if not cycle_failed:
             final_phase = AutonomousExecutionPhase.COMPLETED
+            emit(None, final_phase, "План выполнен")
         elif continued_after_failure:
             final_phase = AutonomousExecutionPhase.FAILED
+            emit(None, final_phase, "План завершён с ошибками")
         else:
             final_phase = AutonomousExecutionPhase.STOPPED
-        emit(None, final_phase, "План выполнен" if not cycle_failed else "План завершён с ошибками")
+
         return AutonomousExecutionSequenceResult(tuple(results), not cycle_failed, first_failure, final_phase, tuple(events))
 
     @staticmethod
