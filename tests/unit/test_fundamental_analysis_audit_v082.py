@@ -15,7 +15,7 @@ def test_metric_audit_log_contains_raw_mapped_score_and_direction(caplog):
         "revenue_change_5y": 212.2,
         "eps_growth": 126.9,
         "ebitda_growth": None,
-        "__instrument_context": {"sector": "banking"},
+        "__not_applicable_metrics": ["roic"],
     }
 
     with caplog.at_level(logging.INFO):
