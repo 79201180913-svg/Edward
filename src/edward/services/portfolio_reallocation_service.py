@@ -66,12 +66,16 @@ class PortfolioReallocationService:
         actions: list[AllocationAction] = []
 
         held: list[object] = []
+        held_uids: set[str] = set()
         for item in portfolio:
             decision = _decision(item)
+            uid = _uid(item)
             if decision == SELL:
                 actions.append(self._action(item, SELL, _target_value(item, budget.target_position_value), "Portfolio Decision требует полного выхода."))
             else:
                 held.append(item)
+                if uid:
+                    held_uids.add(uid)
                 if decision in {HOLD, ADD, REDUCE}:
                     actions.append(self._action(item, decision, _target_value(item, budget.target_position_value), "Текущее решение Portfolio/Decision Engine."))
 
@@ -90,7 +94,7 @@ class PortfolioReallocationService:
             if free_slots <= 0:
                 break
             uid = _uid(candidate)
-            if not uid or uid in selected_uids:
+            if not uid or uid in selected_uids or uid in held_uids:
                 continue
             value = min(target_value, remaining_cash)
             if value <= 0:
@@ -107,7 +111,7 @@ class PortfolioReallocationService:
             )
             replaced_sources: set[str] = set()
             for candidate in eligible:
-                if _uid(candidate) in selected_uids:
+                if _uid(candidate) in selected_uids or _uid(candidate) in held_uids:
                     continue
                 source = next(
                     (
