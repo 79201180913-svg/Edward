@@ -486,18 +486,24 @@ class FundamentalAnalysisServiceV082:
             cls._momentum(fundamentals),
         )
         overall, confidence, weights = cls._weighted_overall(groups, selected)
-        coverage = mean(g.coverage for g in groups)
-        available = sum(g.coverage > 0 for g in groups)
+        coverage_groups = tuple(
+            group
+            for group in groups
+            if "ALL_METRICS_NOT_APPLICABLE" not in group.reason_codes
+        )
+        coverage = mean(g.coverage for g in coverage_groups) if coverage_groups else 0.0
+        available = sum(g.coverage > 0 for g in coverage_groups)
         status = "UNAVAILABLE" if available == 0 else "PARTIAL" if coverage < 100 else "AVAILABLE"
         reasons = ("PARTIAL_DATA_COVERAGE",) if coverage < 100 else ()
         logger.info(
-            "[V082 FUNDAMENTAL RESULT] profile=%s overall=%.2f confidence=%.2f coverage=%.2f status=%s weights=%s",
+            "[V082 FUNDAMENTAL RESULT] profile=%s overall=%.2f confidence=%.2f coverage=%.2f status=%s weights=%s coverage_groups=%s",
             selected,
             overall,
             confidence,
             coverage,
             status,
             weights,
+            tuple(group.name for group in coverage_groups),
         )
         return FundamentalAnalysisResult(
             *groups,
