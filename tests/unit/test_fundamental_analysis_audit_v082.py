@@ -49,7 +49,7 @@ def test_metric_audit_log_contains_raw_mapped_score_and_direction(caplog):
     assert result.overall_score > 0
 
 
-def test_metric_audit_log_preserves_zero_as_unavailable_after_mapping():
+def test_metric_audit_log_preserves_zero_as_unavailable_after_mapping(caplog):
     snapshot = {"pe": 0.0}
 
     with caplog.at_level(logging.INFO):
