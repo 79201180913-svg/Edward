@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -64,6 +65,39 @@ class ExecutionBridgeService:
         result = self.intake.confirmation_service.autonomous_submit(item.request)
         self._items[execution_id] = ExecutionQueueItem(item.request, result)
         return result
+
+    def monitor(self, execution_id: str) -> ExecutionResult:
+        item = self._require(execution_id)
+        result = self.intake.confirmation_service.engine.monitor(execution_id)
+        self._items[execution_id] = ExecutionQueueItem(item.request, result)
+        return result
+
+    def wait_for_terminal(self, execution_id: str, *, timeout_seconds: float = 30.0, poll_interval_seconds: float = 1.0) -> ExecutionResult:
+        """Poll broker status until the order reaches a terminal state.
+
+        Autonomous verification must not treat SUBMITTED as a filled trade.
+        When the order does not reach a terminal state before the timeout, the
+        bridge cancels it and returns the resulting terminal status.
+        """
+        if timeout_seconds < 0:
+            raise ValueError("timeout_seconds must be non-negative")
+        if poll_interval_seconds <= 0:
+            raise ValueError("poll_interval_seconds must be positive")
+
+        item = self._require(execution_id)
+        current = item.result
+        if current.status in _TERMINAL_STATUSES:
+            return current
+
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            current = self.monitor(execution_id)
+            if current.status in _TERMINAL_STATUSES:
+                return current
+            if time.monotonic() >= deadline:
+                cancelled = self.cancel(execution_id)
+                return cancelled
+            time.sleep(min(poll_interval_seconds, max(0.0, deadline - time.monotonic())))
 
     def cancel(self, execution_id: str) -> ExecutionResult:
         item = self._require(execution_id)
