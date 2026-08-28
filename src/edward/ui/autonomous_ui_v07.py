@@ -149,20 +149,6 @@ def install_autonomous_ui(app_class: type) -> None:
             quantity = _display_opportunity_quantity(opportunity)
             tree.insert("", "end", values=(scope, opportunity.ticker, decision, f"{opportunity.opportunity_score:.2f}", f"{opportunity.risk_score:.2f}", "—" if opportunity.price is None else f"{opportunity.price:.4f}", quantity, f"{opportunity.recommended_value:.2f}", opportunity.status))
 
-        def render_allocation(actions: Any) -> None:
-            for item in allocation_tree.get_children():
-                allocation_tree.delete(item)
-            for action in actions:
-                allocation_tree.insert("", "end", values=(action.action, action.ticker, action.source_ticker or "—", f"{action.score:.2f}", f"{action.risk_score:.2f}", f"{action.target_value:.2f}", action.reason))
-
-        def render_execution_plan(plan: Any) -> None:
-            for item in execution_tree.get_children():
-                execution_tree.delete(item)
-            if plan is None:
-                return
-            for step in plan.steps:
-                execution_tree.insert("", "end", values=(step.sequence, step.action, step.ticker, step.instrument_uid, f"{step.target_value:.2f}", "—" if step.depends_on is None else step.depends_on, "План", step.reason))
-
         def render_incremental(opportunity: Any, scope: str, current: int, total: int) -> None:
             def apply() -> None:
                 insert_opportunity(opportunity, scope)
