@@ -93,3 +93,28 @@ def test_v081_uses_stricter_short_margin_when_short_is_enabled():
     assert risk.capital_efficiency_score == 43.25
     assert risk.risk_score == 100.0
     assert risk.evidence.available is True
+
+
+def test_v081_instrument_metadata_takes_precedence_over_risk_rates():
+    result = AnalysisPipelineServiceV081().analyze(
+        instrument_uid="TQBR.SBER",
+        ticker="SBER",
+        candles=_candles(),
+        session_name="REGULAR",
+        risk_data={"dlong": 0.125, "dshort": 0.1428, "short_enabled": False},
+        instrument_risk_metadata={
+            "dlong": 0.1666,
+            "dshort": 0.2,
+            "dlong_client": 0.1666,
+            "dshort_client": 0.2,
+            "short_enabled": True,
+        },
+    )
+
+    risk = result.multifactor.instrument_risk
+    assert risk.evidence.available is True
+    assert risk.long_margin_rate_pct == 16.66
+    assert risk.short_margin_rate_pct == 20.0
+    assert risk.short_enabled is True
+    assert risk.capital_efficiency_score == 80.0
+    assert risk.risk_score == 76.66666666666667
