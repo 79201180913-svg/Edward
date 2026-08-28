@@ -6,6 +6,7 @@ import pytest
 
 from edward.services.analysis_pipeline_service_v08 import AnalysisPipelineServiceV08
 from edward.services.analysis_service import Candle
+from edward.services.analysis_service_v08 import AnalysisServiceV08
 from edward.services.expected_value_engine_v08 import ExpectedValueEngine
 from edward.services.regime_engine_v08 import RegimeEngine
 from edward.services.research_backtest_service_v08 import BacktestTrade
@@ -49,8 +50,7 @@ def test_pipeline_keeps_evidence_when_no_strategy_passes_quality_gate(monkeypatc
     candles = _candles([100 + index * 0.2 for index in range(420)])
     service = AnalysisPipelineServiceV08()
 
-    original_quality = service.analysis_service._quality
-    monkeypatch.setattr(service.analysis_service, "_quality", staticmethod(lambda _result, _profile: False))
+    monkeypatch.setattr(AnalysisServiceV08, "_quality", staticmethod(lambda _result, _profile: False))
 
     result = service.analyze(
         instrument_uid="UID",
@@ -61,7 +61,8 @@ def test_pipeline_keeps_evidence_when_no_strategy_passes_quality_gate(monkeypatc
 
     assert result.analysis.recommendation is None
     assert result.evidence_strategy is not None
-    assert result.expected_value.available is True or result.expected_value.observations >= 0
+    assert result.expected_value.observations > 0
+    assert result.expected_value.available is True
     assert result.forecast_quality_score is not None
     assert result.regime_confidence is not None
     assert 0.0 < result.regime_confidence < 100.0
