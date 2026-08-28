@@ -198,7 +198,8 @@ class ContractAnalysisDataServiceV081:
             failed.append("fundamentals_mapping")
         if raw_risk not in ({}, None) and mapped_risk is None:
             failed.append("risk_rates_mapping")
-        if raw_schedules not in ({}, None) and session_name is None:
+        schedule_items = self._many(raw_schedules, "exchanges", "schedules", "items")
+        if schedule_items and session_name is None:
             failed.append("trading_schedules_mapping")
         if raw_reports not in ({}, None) and not reports_raw:
             failed.append("reports_mapping")
