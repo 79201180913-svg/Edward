@@ -60,15 +60,7 @@ class AutonomousExecutionSequenceResult:
 
 
 class AutonomousExecutionSequenceService:
-    """Execute autonomous steps one-by-one, wait for broker completion and protect fills.
-
-    A failed individual step is recorded and the sequence continues with the
-    next independent step. A dependent step is skipped when its prerequisite
-    did not complete. Broker SUBMITTED/PARTIALLY_FILLED states are not treated
-    as successful fills: the bridge polls until a terminal broker state or
-    cancels the order on timeout. The whole cycle is only marked completed when
-    every planned step completed successfully.
-    """
+    """Execute autonomous steps one-by-one, wait for broker completion and protect fills."""
 
     def __init__(
         self,
@@ -106,6 +98,7 @@ class AutonomousExecutionSequenceService:
         events: list[AutonomousExecutionPhaseEvent] = []
         cycle_failed = False
         first_failure: int | None = None
+        continued_after_failure = False
 
         def emit(sequence: int | None, phase: AutonomousExecutionPhase, message: str = "") -> None:
             events.append(AutonomousExecutionPhaseEvent(sequence, phase, message))
@@ -165,12 +158,7 @@ class AutonomousExecutionSequenceService:
                         raise ValueError(f"CONFIRMATION_NOT_READY:{waiting.status}")
                     submitted = self._bridge.intake.confirmation_service.confirm_and_submit(intake.request)
 
-                if submitted.status not in {
-                    ExecutionStatus.SUBMITTED,
-                    ExecutionStatus.PARTIALLY_FILLED,
-                    ExecutionStatus.FILLED,
-                    ExecutionStatus.RECONCILED,
-                }:
+                if submitted.status not in {ExecutionStatus.SUBMITTED, ExecutionStatus.PARTIALLY_FILLED, ExecutionStatus.FILLED, ExecutionStatus.RECONCILED}:
                     raise RuntimeError(submitted.error_message or f"EXECUTION_STATUS:{submitted.status}")
 
                 if submitted.status in {ExecutionStatus.SUBMITTED, ExecutionStatus.PARTIALLY_FILLED}:
@@ -202,12 +190,7 @@ class AutonomousExecutionSequenceService:
             try:
                 after_state = self._refresh.refresh(account_id)
                 expected_quantity = int(submitted.filled_quantity)
-                verification = self._verifier.verify(
-                    step=step,
-                    state=after_state,
-                    expected_quantity=expected_quantity,
-                    before_quantity=before_quantity,
-                )
+                verification = self._verifier.verify(step=step, state=after_state, expected_quantity=expected_quantity, before_quantity=before_quantity)
             except Exception as exc:
                 reason = f"VERIFICATION_FAILED:{exc}"
                 emit(step.sequence, AutonomousExecutionPhase.FAILED, reason)
@@ -230,12 +213,7 @@ class AutonomousExecutionSequenceService:
             if self._protection is not None and step.action in {"BUY", "ADD"}:
                 emit(step.sequence, AutonomousExecutionPhase.PROTECTED, "Создание защитного Stop Loss")
                 try:
-                    protection = self._protection.protect_fill(
-                        account_id=account_id,
-                        instrument_uid=step.instrument_uid,
-                        quantity=expected_quantity,
-                        result=result,
-                    )
+                    protection = self._protection.protect_fill(account_id=account_id, instrument_uid=step.instrument_uid, quantity=expected_quantity, result=result)
                 except Exception as exc:
                     reason = f"PROTECTION_FAILED:{exc}"
                     emit(step.sequence, AutonomousExecutionPhase.FAILED, reason)
@@ -255,9 +233,16 @@ class AutonomousExecutionSequenceService:
 
             emit(step.sequence, AutonomousExecutionPhase.COMPLETED, "Шаг выполнен и защищён" if protection is not None else "Шаг выполнен")
             results.append(AutonomousExecutionStepResult(step, execution_id, submitted.status, verification, True, AutonomousExecutionPhase.COMPLETED, "", protection))
+            if first_failure is not None and step.sequence != first_failure:
+                continued_after_failure = True
             completed_sequences.add(step.sequence)
 
-        final_phase = AutonomousExecutionPhase.FAILED if cycle_failed else AutonomousExecutionPhase.COMPLETED
+        if not cycle_failed:
+            final_phase = AutonomousExecutionPhase.COMPLETED
+        elif continued_after_failure:
+            final_phase = AutonomousExecutionPhase.FAILED
+        else:
+            final_phase = AutonomousExecutionPhase.STOPPED
         emit(None, final_phase, "План выполнен" if not cycle_failed else "План завершён с ошибками")
         return AutonomousExecutionSequenceResult(tuple(results), not cycle_failed, first_failure, final_phase, tuple(events))
 
