@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import tkinter as tk
 from dataclasses import replace
 from typing import Any
@@ -12,6 +13,8 @@ from edward.services.semantic_robust_contract_analysis_data_service_v081 import 
 from edward.services.news_intelligence_service_v081 import NewsIntelligenceServiceV081
 from edward.services.news_overlay_service_v081 import NewsOverlayServiceV081
 from edward.services.multifactor_diagnostics_v081 import emit_multifactor_diagnostics
+
+logger = logging.getLogger(__name__)
 
 
 def install(app_class: type[Any], client_class: type[Any]) -> None:
@@ -159,7 +162,6 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
                 lines.append("")
             metrics_text.insert("1.0", "\n".join(lines))
             metrics_text.configure(state="disabled")
-
             ttk.Button(detail_window, text="Закрыть", command=detail_window.destroy).pack(pady=(0, 10))
 
         fundamental_button = ttk.Button(panel, text="Детализация", command=open_fundamental_detail)
@@ -205,7 +207,7 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
                     v082_fundamental.fundamental_momentum,
                 )
             )
-            runtime.adapter_logger.info(
+            logger.info(
                 "[V082 FUNDAMENTAL BREAKDOWN] instrument_uid=%s overall=%.1f confidence=%.1f coverage=%.1f status=%s groups=%s",
                 detail["instrument_uid"],
                 v082_fundamental.overall_score,
@@ -213,7 +215,7 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
                 v082_fundamental.coverage,
                 v082_fundamental.status,
                 group_summary,
-            ) if hasattr(runtime, "adapter_logger") else None
+            )
 
         original_pipeline_class = runtime.AnalysisPipelineServiceV08
 
