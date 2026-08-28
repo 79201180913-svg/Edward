@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from edward.services.decision_engine import OpportunityContext
 from edward.services.entry_quality_service_v082 import EntryQualityResult
 from edward.services.fundamental_analysis_service_v082 import FundamentalAnalysisResult
 from edward.services.opportunity_engine import OpportunityResult
@@ -19,13 +18,7 @@ class OpportunityAdjustmentResult:
 
 
 class OpportunityAdjustmentServiceV082:
-    """Applies conservative v0.8.2 evidence adjustments to an existing opportunity.
-
-    Fundamentals are asymmetric evidence: strong fundamentals may confirm an already
-    valid entry, but cannot manufacture one. Weak fundamentals may reduce an
-    opportunity when they conflict with an otherwise valid trade. Entry Quality can
-    hard-block the entry independently of the opportunity score.
-    """
+    """Adds v0.8.2 evidence to Opportunity without taking the decision."""
 
     @staticmethod
     def _clamp(value: float) -> float:
@@ -42,31 +35,25 @@ class OpportunityAdjustmentServiceV082:
         fundamental_score = cls._clamp(fundamental.overall_score)
         entry_score = cls._clamp(entry_quality.score)
 
-        # Positive fundamentals are confirmation only. Negative fundamentals can
-        # penalize a trade more than positive fundamentals can boost it.
-        if entry_quality.entry_signal:
-            support_delta = (fundamental_score - 50.0) * 0.10
-            if fundamental_score < 40.0:
-                support_delta = (fundamental_score - 50.0) * 0.20
-        else:
-            support_delta = 0.0
+        # Fundamentals are analytical evidence only. They may confirm or
+        # weaken an existing opportunity, but Entry Quality must not mutate the
+        # opportunity into a decision gate.
+        support_delta = (fundamental_score - 50.0) * 0.10 if entry_quality.entry_signal else 0.0
+        if fundamental_score < 40.0 and entry_quality.entry_signal:
+            support_delta = (fundamental_score - 50.0) * 0.20
 
         adjusted_score = cls._clamp(opportunity.score + support_delta)
-        blocked = entry_quality.entry_blocked or not entry_quality.entry_signal
-        context = replace(
-            opportunity.context,
-            opportunity_score=adjusted_score,
-            entry_ok=opportunity.entry_signal and entry_quality.entry_signal,
-        )
+        context = replace(opportunity.context, opportunity_score=adjusted_score)
+
         reasons: list[str] = []
-        if entry_quality.entry_blocked:
-            reasons.append(entry_quality.block_reason or "ENTRY_BLOCKED")
-        elif not entry_quality.entry_signal:
-            reasons.append("ENTRY_NOT_CONFIRMED")
         if fundamental_score >= 70.0 and entry_quality.entry_signal:
             reasons.append("FUNDAMENTAL_SUPPORT")
         elif fundamental_score < 40.0 and entry_quality.entry_signal:
             reasons.append("FUNDAMENTAL_CONFLICT")
+        if not entry_quality.entry_signal:
+            reasons.append("ENTRY_NOT_CONFIRMED")
+        if entry_quality.entry_blocked:
+            reasons.append(entry_quality.block_reason or "ENTRY_BLOCKED")
 
         explanation = (
             f"{opportunity.explanation} v0.8.2 Fundamental={fundamental_score:.1f}, "
@@ -75,7 +62,7 @@ class OpportunityAdjustmentServiceV082:
         adjusted = OpportunityResult(
             context,
             adjusted_score,
-            opportunity.entry_signal and entry_quality.entry_signal,
+            opportunity.entry_signal,
             opportunity.market_regime_compatible,
             explanation,
             opportunity.risk,
@@ -85,7 +72,7 @@ class OpportunityAdjustmentServiceV082:
             round(support_delta, 2),
             fundamental_score,
             entry_score,
-            blocked,
+            entry_quality.entry_blocked,
             tuple(reasons),
         )
 
