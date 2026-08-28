@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from edward.services.analysis_pipeline_service_v08 import AnalysisPipelineV08Result
 from edward.services.analysis_pipeline_service_v081 import AnalysisPipelineServiceV081, AnalysisPipelineV081Result
 
@@ -113,8 +115,8 @@ def test_v081_instrument_metadata_takes_precedence_over_risk_rates():
 
     risk = result.multifactor.instrument_risk
     assert risk.evidence.available is True
-    assert risk.long_margin_rate_pct == 16.66
-    assert risk.short_margin_rate_pct == 20.0
+    assert risk.long_margin_rate_pct == pytest.approx(16.66)
+    assert risk.short_margin_rate_pct == pytest.approx(20.0)
     assert risk.short_enabled is True
-    assert risk.capital_efficiency_score == 80.0
-    assert risk.risk_score == 76.66666666666667
+    assert risk.capital_efficiency_score == pytest.approx(80.0)
+    assert risk.risk_score == pytest.approx(76.66666666666667)
