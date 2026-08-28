@@ -36,109 +36,68 @@ class AutonomousTradingController:
     def enabled(self) -> bool:
         return self._enabled
 
-    def enable(self) -> None:
-        self._enabled = True
-
-    def disable(self) -> None:
-        self._enabled = False
+    def enable(self) -> None: self._enabled = True
+    def disable(self) -> None: self._enabled = False
 
     def _gate(self, *, account_id: str, mode: ExecutionMode, plan: AutonomousExecutionPlan, budget: BudgetPlan | None, state: AccountState | None) -> tuple[bool, str, tuple[str, ...]]:
-        if mode is not ExecutionMode.AUTONOMOUS:
-            return False, "AUTONOMOUS_MODE_REQUIRED", ()
-        if not self._enabled:
-            return False, "AUTONOMOUS_TRADING_DISABLED", ()
-        if not plan.steps:
-            return False, "EMPTY_EXECUTION_PLAN", ()
-        if budget is None or state is None:
-            return False, "FRESH_ACCOUNT_STATE_REQUIRED", ()
+        if mode is not ExecutionMode.AUTONOMOUS: return False, "AUTONOMOUS_MODE_REQUIRED", ()
+        if not self._enabled: return False, "AUTONOMOUS_TRADING_DISABLED", ()
+        if not plan.steps: return False, "EMPTY_EXECUTION_PLAN", ()
+        if budget is None or state is None: return False, "FRESH_ACCOUNT_STATE_REQUIRED", ()
         if self._protection_reconciliation is not None:
             reconciliation = self._protection_reconciliation.reconcile(account_id=account_id, positions=state.positions)
-            if not reconciliation.protected:
-                return False, "PROTECTION_RECONCILIATION_FAILED", reconciliation.reasons
+            if not reconciliation.protected: return False, "PROTECTION_RECONCILIATION_FAILED", reconciliation.reasons
         preflight = self._preflight.validate(plan=plan, budget=budget, state=state)
-        if not preflight.passed:
-            return False, "PREFLIGHT_REJECTED", preflight.reasons
+        if not preflight.passed: return False, "PREFLIGHT_REJECTED", preflight.reasons
         return True, "", ()
 
     def _execute_sequence(self, *, account_id: str, plan: AutonomousExecutionPlan, result_factory: Callable[[Any], Any], mode: ExecutionMode, initial_state: AccountState | None = None) -> AutonomousExecutionSequenceResult:
         try:
             return self._sequence.execute_confirmed_plan(account_id=account_id, plan=plan, result_factory=result_factory, mode=mode, initial_state=initial_state)
         except TypeError as exc:
-            if "unexpected keyword argument 'mode'" not in str(exc) and "unexpected keyword argument 'initial_state'" not in str(exc):
-                raise
-            try:
-                return self._sequence.execute_confirmed_plan(account_id=account_id, plan=plan, result_factory=result_factory, mode=mode)
-            except TypeError as mode_exc:
-                if "unexpected keyword argument 'mode'" not in str(mode_exc):
-                    raise
-                return self._sequence.execute_confirmed_plan(account_id=account_id, plan=plan, result_factory=result_factory)
+            if "unexpected keyword argument 'mode'" not in str(exc) and "unexpected keyword argument 'initial_state'" not in str(exc): raise
+            return self._sequence.execute_confirmed_plan(account_id=account_id, plan=plan, result_factory=result_factory)
 
     def execute(self, *, account_id: str, plan: AutonomousExecutionPlan, result_factory: Callable[[Any], Any], mode: ExecutionMode = ExecutionMode.ANALYSIS_ONLY, budget: BudgetPlan | None = None, state: AccountState | None = None) -> AutonomousTradingControlResult:
         allowed, reason, reasons = self._gate(account_id=account_id, mode=mode, plan=plan, budget=budget, state=state)
-        if not allowed:
-            return AutonomousTradingControlResult(mode=mode, executed=False, reason=reason, preflight_reasons=reasons)
+        if not allowed: return AutonomousTradingControlResult(mode=mode, executed=False, reason=reason, preflight_reasons=reasons)
         sequence = self._execute_sequence(account_id=account_id, plan=plan, result_factory=result_factory, mode=mode, initial_state=state)
         return AutonomousTradingControlResult(mode=mode, executed=sequence.completed, reason="COMPLETED" if sequence.completed else f"STOPPED_AT:{sequence.stopped_at}", phase=getattr(sequence, "phase", AutonomousExecutionPhase.STOPPED), sequence=sequence, events=getattr(sequence, "events", ()))
 
     def execute_replanned(self, *, account_id: str, mode: ExecutionMode, refresh_state: Callable[[], AccountState], build_plan: Callable[[AccountState], AutonomousExecutionPlan], budget_for_state: Callable[[AccountState], BudgetPlan], result_factory: Callable[[Any], Any], max_iterations: int = 50) -> AutonomousTradingControlResult:
-        if mode is not ExecutionMode.AUTONOMOUS:
-            return AutonomousTradingControlResult(mode=mode, executed=False, reason="AUTONOMOUS_MODE_REQUIRED")
-        if not self._enabled:
-            return AutonomousTradingControlResult(mode=mode, executed=False, reason="AUTONOMOUS_TRADING_DISABLED")
-        preflight_reasons: list[str] = []
-        cycle_error: list[str] = []
-        current_preflight_state: AccountState | None = None
+        if mode is not ExecutionMode.AUTONOMOUS: return AutonomousTradingControlResult(mode=mode, executed=False, reason="AUTONOMOUS_MODE_REQUIRED")
+        if not self._enabled: return AutonomousTradingControlResult(mode=mode, executed=False, reason="AUTONOMOUS_TRADING_DISABLED")
+        preflight_reasons: list[str] = []; cycle_error: list[str] = []
 
         def build_checked_plan(state: AccountState) -> AutonomousExecutionPlan:
-            nonlocal current_preflight_state
             plan = build_plan(state)
-            if not plan.steps:
-                current_preflight_state = None
-                return plan
+            if not plan.steps: return plan
             budget = budget_for_state(state)
             allowed, reason, reasons = self._gate(account_id=account_id, mode=mode, plan=plan, budget=budget, state=state)
             if not allowed:
-                current_preflight_state = None
-                preflight_reasons.extend(reasons or (reason,))
-                cycle_error.append(reason + (":" + ";".join(reasons) if reasons else ""))
-                return AutonomousExecutionPlan(steps=())
-            current_preflight_state = state
+                preflight_reasons.extend(reasons or (reason,)); cycle_error.append(reason + ((":" + ";".join(reasons)) if reasons else "")); return AutonomousExecutionPlan(steps=())
             return plan
 
         def execute_one(step: Any) -> Any:
-            nonlocal current_preflight_state
-            live_state = refresh_state()
-            live_budget = budget_for_state(live_state)
-            single_step_plan = AutonomousExecutionPlan(steps=(step,))
-            allowed, reason, reasons = self._gate(account_id=account_id, mode=mode, plan=single_step_plan, budget=live_budget, state=live_state)
+            live_state = refresh_state(); live_budget = budget_for_state(live_state)
+            allowed, reason, reasons = self._gate(account_id=account_id, mode=mode, plan=AutonomousExecutionPlan(steps=(step,)), budget=live_budget, state=live_state)
             if not allowed:
-                detail = ";".join(reasons) if reasons else reason
-                raise RuntimeError(f"PREFLIGHT_REJECTED:{detail}")
-            current_preflight_state = live_state
-            try:
-                sequence = self._execute_sequence(account_id=account_id, plan=single_step_plan, result_factory=result_factory, mode=mode, initial_state=live_state)
-            finally:
-                current_preflight_state = None
-            if not sequence.steps:
-                raise RuntimeError("EXECUTION_SEQUENCE_EMPTY")
+                detail = ";".join(reasons) if reasons else reason; raise RuntimeError(f"PREFLIGHT_REJECTED:{detail}")
+            sequence = self._execute_sequence(account_id=account_id, plan=AutonomousExecutionPlan(steps=(step,)), result_factory=result_factory, mode=mode, initial_state=live_state)
+            if not sequence.steps: raise RuntimeError("EXECUTION_SEQUENCE_EMPTY")
             item = sequence.steps[0]
-            if not item.completed:
-                raise RuntimeError(item.reason or "EXECUTION_STEP_FAILED")
+            if not item.completed: raise RuntimeError(item.reason or "EXECUTION_STEP_FAILED")
             return item
 
         def verify_one(step: Any, execution: Any, state: AccountState) -> Any:
             verification = getattr(execution, "verification", None)
-            if verification is None:
-                raise RuntimeError("VERIFICATION_RESULT_MISSING")
+            if verification is None: raise RuntimeError("VERIFICATION_RESULT_MISSING")
             return verification
 
         cycle = AutonomousReplanningCycleService(refresh_state=refresh_state, build_plan=build_checked_plan, execute_step=execute_one, verify_step=verify_one, max_iterations=max_iterations).run()
-        if cycle_error:
-            reason = "EXECUTION_ERROR:" + cycle_error[-1]
-        elif cycle.completed:
-            reason = "COMPLETED"
-        else:
-            reason = cycle.stopped_reason or "STOPPED"
+        if cycle_error: reason = "EXECUTION_ERROR:" + cycle_error[-1]
+        elif cycle.completed: reason = "COMPLETED"
+        else: reason = cycle.stopped_reason or "STOPPED"
         return AutonomousTradingControlResult(mode=mode, executed=bool(cycle.executed_steps), reason=reason, phase=AutonomousExecutionPhase.COMPLETED if cycle.completed else AutonomousExecutionPhase.STOPPED, replanning=cycle, preflight_reasons=tuple(preflight_reasons))
 
 
