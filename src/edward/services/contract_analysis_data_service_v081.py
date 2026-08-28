@@ -55,6 +55,24 @@ class ContractAnalysisDataServiceV081:
             value = cls._first_recursive(nested, *keys, max_depth=max_depth - 1)
             if value is not None: return value
         return None
+    @classmethod
+    def _many_recursive(cls, payload: Any, *keys: str, max_depth: int = 6) -> list[Any]:
+        if isinstance(payload, list): return payload
+        if not isinstance(payload, dict) or max_depth < 0: return []
+        normalized = {str(key).replace("_", "").lower(): key for key in payload}
+        for key in keys:
+            source_key = normalized.get(key.replace("_", "").lower())
+            if source_key is not None:
+                value = payload[source_key]
+                if isinstance(value, list): return value
+                nested = cls._many_recursive(value, *keys, max_depth=max_depth - 1)
+                if nested: return nested
+        for wrapper in ("response", "data", "result", "payload"):
+            source_key = normalized.get(wrapper)
+            if source_key is None: continue
+            nested = cls._many_recursive(payload[source_key], *keys, max_depth=max_depth - 1)
+            if nested: return nested
+        return []
     @staticmethod
     def _many(payload: Any, *keys: str) -> list[Any]:
         if isinstance(payload, list): return payload
@@ -126,11 +144,11 @@ class ContractAnalysisDataServiceV081:
         raw_news = call("news", lambda: self.client.get_news(1000), {})
         raw_schedules = call("trading_schedules", lambda: self.client.get_trading_schedules(from_dt=now, to_dt=now + timedelta(days=2)), {})
         fundamentals_raw = self._first_recursive(raw_fundamentals, "fundamentals", "statistics", "asset_fundamentals")
-        reports_raw = self._many(self._first_recursive(raw_reports, "events", "reports") or raw_reports, "events", "reports")
-        insiders_raw = self._many(self._first_recursive(raw_insiders, "insider_deals", "insiders") or raw_insiders, "insider_deals", "insiders")
-        dividends_raw = self._many(self._first_recursive(raw_dividends, "dividends") or raw_dividends, "dividends")
-        signals_raw = self._many(self._first_recursive(raw_signals, "signals") or raw_signals, "signals")
-        news_raw = self._many(self._first_recursive(raw_news, "items", "news") or raw_news, "items", "news")
+        reports_raw = self._many_recursive(raw_reports, "events", "reports")
+        insiders_raw = self._many_recursive(raw_insiders, "insider_deals", "insiders")
+        dividends_raw = self._many_recursive(raw_dividends, "dividends")
+        signals_raw = self._many_recursive(raw_signals, "signals")
+        news_raw = self._many_recursive(raw_news, "items", "news")
         mapped_instrument_risk = map_instrument_risk(self._instrument_candidate(raw_instrument)); mapped_fundamentals = map_fundamentals(fundamentals_raw); mapped_order_book = map_order_book(raw_order_book); mapped_risk_rates = map_risk_rates(raw_risk)
         mapped_news = tuple(map_news(item) for item in news_raw)
         relevant_news = tuple(item for item in mapped_news if not item.get("instrument_id") or str(instrument_uid) in {str(value) for value in (item.get("instrument_id") or []) if isinstance(value, str)} or any(isinstance(link, dict) and str(instrument_uid) == str(((link.get("instrument") or {}).get("instrument_uid"))) for link in (item.get("instrument_id") or ())))
@@ -138,7 +156,7 @@ class ContractAnalysisDataServiceV081:
         if raw_fundamentals not in ({}, None) and mapped_fundamentals is None: unavailable.append("fundamentals")
         if raw_risk not in ({}, None) and mapped_risk_rates is None: unavailable.append("risk_rates_mapping")
         if raw_instrument not in ({}, None) and mapped_instrument_risk is None: unavailable.append("instrument")
-        if self._many(raw_schedules, "exchanges", "schedules", "items") and session_name is None: unavailable.append("trading_schedules")
+        if self._many_recursive(raw_schedules, "exchanges", "schedules", "items") and session_name is None: unavailable.append("trading_schedules")
         if raw_reports not in ({}, None) and not reports_raw: unavailable.append("reports")
         if raw_insiders not in ({}, None) and not insiders_raw: unavailable.append("insiders")
         if raw_news not in ({}, None) and not news_raw: unavailable.append("news")
