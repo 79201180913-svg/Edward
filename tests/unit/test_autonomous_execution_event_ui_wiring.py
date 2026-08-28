@@ -4,9 +4,12 @@ from pathlib import Path
 ROOT = Path(__file__).parents[2]
 
 
-def test_execution_events_are_published_through_controller_and_facade():
+def test_execution_events_are_published_through_cycle_controller_and_facade():
+    cycle = (ROOT / "src/edward/services/autonomous_cycle_service.py").read_text(encoding="utf-8")
     controller = (ROOT / "src/edward/services/autonomous_trading_controller.py").read_text(encoding="utf-8")
     facade = (ROOT / "src/edward/services/autonomous_trading_runtime_facade.py").read_text(encoding="utf-8")
+    assert "execution_event_callback: Callable[[dict[str, Any]], None] | None = None" in cycle
+    assert "execution_event_callback=execution_event_callback" in cycle
     assert "execution_event_callback: Callable[[dict[str, Any]], None] | None = None" in controller
     assert "execution_event_callback=execution_event_callback" in controller
     assert "execution_event_callback: Callable[[dict[str, Any]], None] | None = None" in facade
