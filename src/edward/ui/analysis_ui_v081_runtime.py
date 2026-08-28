@@ -7,6 +7,7 @@ from tkinter import ttk
 
 from edward.api.tinvest_multifactor_client_patch_v081 import install as install_client_patch
 from edward.services.analysis_pipeline_service_v081 import AnalysisPipelineServiceV081
+from edward.services.fundamental_analysis_service_v082 import FundamentalAnalysisServiceV082
 from edward.services.semantic_robust_contract_analysis_data_service_v081 import SemanticRobustContractAnalysisDataServiceV081
 from edward.services.news_intelligence_service_v081 import NewsIntelligenceServiceV081
 from edward.services.news_overlay_service_v081 import NewsOverlayServiceV081
@@ -29,6 +30,7 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
         runtime._v081_last_result = None
         runtime._v081_last_news = None
         runtime._v081_last_failed_sources = ()
+        runtime._v082_fundamental_detail = None
 
         original(app)
         windows = [
@@ -71,15 +73,111 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
         status = tk.StringVar(value="")
         ttk.Label(panel, textvariable=status, wraplength=1100, justify="left").grid(row=2, column=0, columnspan=5, sticky="w", padx=5, pady=(6, 0))
 
-        def show_v081(result: Any, news_result: Any, failed_sources: tuple[str, ...]) -> None:
+        fundamental_detail: Any = None
+
+        def open_fundamental_detail() -> None:
+            if fundamental_detail is None:
+                return
+            detail_window = tk.Toplevel(window)
+            detail_window.title("v0.8.2 — Fundamental Analysis")
+            detail_window.geometry("980x680")
+            detail_window.transient(window)
+            detail_window.grab_set()
+
+            header = ttk.Frame(detail_window, padding=12)
+            header.pack(fill="x")
+            ttk.Label(
+                header,
+                text=f"Fundamental Score: {fundamental_detail.overall_score:.1f} | "
+                     f"Confidence: {fundamental_detail.confidence:.1f} | "
+                     f"Coverage: {fundamental_detail.coverage:.1f}% | "
+                     f"Profile: {fundamental_detail.strategy_profile}",
+                font=("TkDefaultFont", 11, "bold"),
+            ).pack(anchor="w")
+
+            group_table = ttk.Treeview(
+                detail_window,
+                columns=("group", "score", "coverage", "confidence"),
+                show="headings",
+                height=7,
+            )
+            for key, title, width in (
+                ("group", "Группа", 240),
+                ("score", "Score", 100),
+                ("coverage", "Coverage %", 110),
+                ("confidence", "Confidence", 120),
+            ):
+                group_table.heading(key, text=title)
+                group_table.column(key, width=width, anchor="center")
+            group_table.pack(fill="x", padx=12, pady=(0, 10))
+
+            group_map = {
+                "business_quality": "Business Quality",
+                "growth": "Growth",
+                "cash_generation": "Cash Generation",
+                "financial_health": "Financial Health",
+                "valuation": "Valuation",
+                "shareholder_return": "Shareholder Return",
+                "fundamental_momentum": "Fundamental Momentum",
+            }
+            groups = (
+                fundamental_detail.business_quality,
+                fundamental_detail.growth,
+                fundamental_detail.cash_generation,
+                fundamental_detail.financial_health,
+                fundamental_detail.valuation,
+                fundamental_detail.shareholder_return,
+                fundamental_detail.fundamental_momentum,
+            )
+            for group in groups:
+                group_table.insert(
+                    "", "end",
+                    values=(
+                        group_map.get(group.name, group.name),
+                        f"{group.score:.1f}",
+                        f"{group.coverage:.1f}",
+                        f"{group.confidence:.1f}",
+                    ),
+                )
+
+            metrics_text = tk.Text(detail_window, height=22, wrap="word")
+            metrics_text.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+            lines: list[str] = []
+            for group in groups:
+                lines.append(
+                    f"{group_map.get(group.name, group.name)} — "
+                    f"score={group.score:.1f}, coverage={group.coverage:.1f}%, confidence={group.confidence:.1f}"
+                )
+                if group.reason_codes:
+                    lines.append(f"  reasons: {', '.join(group.reason_codes)}")
+                for metric in group.metrics:
+                    value = "N/A" if metric.value is None else f"{metric.value:.4g}"
+                    lines.append(
+                        f"  {metric.metric}: value={value}, score={metric.score:.1f}, "
+                        f"available={metric.available}, direction={metric.direction}"
+                    )
+                lines.append("")
+            metrics_text.insert("1.0", "\n".join(lines))
+            metrics_text.configure(state="disabled")
+
+            ttk.Button(detail_window, text="Закрыть", command=detail_window.destroy).pack(pady=(0, 10))
+
+        fundamental_button = ttk.Button(panel, text="Детализация", command=open_fundamental_detail)
+        fundamental_button.grid(row=3, column=0, sticky="w", padx=5, pady=(2, 0))
+
+        def show_v081(result: Any, news_result: Any, failed_sources: tuple[str, ...], v082_fundamental: Any) -> None:
+            nonlocal fundamental_detail
+            fundamental_detail = v082_fundamental
             runtime._v081_last_result = result
             runtime._v081_last_news = news_result
             runtime._v081_last_failed_sources = failed_sources
+            runtime._v082_fundamental_detail = v082_fundamental
             factors = result.multifactor
             values["fundamental"].set(
                 f"{factors.fundamentals.quality_score:.1f}"
                 if factors.fundamentals.evidence.available else "N/A"
             )
+            fundamental_button.configure(state="normal" if v082_fundamental.status != "UNAVAILABLE" else "disabled")
             values["micro"].set(f"{factors.microstructure.entry_quality_score:.1f}" if factors.microstructure.evidence.available else "N/A")
             values["volume"].set(f"{factors.volume_pressure.accumulation_score:.1f}" if factors.volume_pressure.evidence.available else "N/A")
             values["signals"].set(f"{factors.signals.reliability_pct:.1f}" if factors.signals.evidence.available else "N/A")
@@ -95,6 +193,27 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
                 f"Confidence: {result.overlay.adjusted_confidence:.1f} | "
                 f"Conflicts: {result.overlay.conflict_penalty:.1f}." + failure_text
             )
+            group_summary = "; ".join(
+                f"{g.name}={g.score:.1f}({g.coverage:.0f}%)"
+                for g in (
+                    v082_fundamental.business_quality,
+                    v082_fundamental.growth,
+                    v082_fundamental.cash_generation,
+                    v082_fundamental.financial_health,
+                    v082_fundamental.valuation,
+                    v082_fundamental.shareholder_return,
+                    v082_fundamental.fundamental_momentum,
+                )
+            )
+            runtime.adapter_logger.info(
+                "[V082 FUNDAMENTAL BREAKDOWN] instrument_uid=%s overall=%.1f confidence=%.1f coverage=%.1f status=%s groups=%s",
+                detail["instrument_uid"],
+                v082_fundamental.overall_score,
+                v082_fundamental.confidence,
+                v082_fundamental.coverage,
+                v082_fundamental.status,
+                group_summary,
+            ) if hasattr(runtime, "adapter_logger") else None
 
         original_pipeline_class = runtime.AnalysisPipelineServiceV08
 
@@ -122,6 +241,10 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
                     instrument_risk_metadata=data.instrument_risk_metadata,
                     session_name=data.session_name,
                 )
+                v082_fundamental = FundamentalAnalysisServiceV082.analyze(
+                    data.fundamentals,
+                    profile=kwargs.get("profile", "medium_term"),
+                )
                 news_result = NewsIntelligenceServiceV081.analyze(data.news, instrument_uid=str(detail["instrument_uid"]))
                 adjusted_base, news_overlay = NewsOverlayServiceV081.apply(pipeline.base, news_result)
                 pipeline = replace(pipeline, base=adjusted_base)
@@ -130,7 +253,7 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
                     data=data,
                     result=pipeline,
                 )
-                show_v081(pipeline, news_result, data.failed_sources)
+                show_v081(pipeline, news_result, data.failed_sources, v082_fundamental)
                 return pipeline
 
         runtime.AnalysisPipelineServiceV08 = PipelineBridge
