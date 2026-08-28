@@ -77,6 +77,31 @@ class ContractAnalysisDataServiceV081:
         return []
 
     @staticmethod
+    def _field(payload: Any, name: str, default: Any = None) -> Any:
+        if not isinstance(payload, dict):
+            return default
+        if name in payload:
+            return payload[name]
+        compact = name.replace("_", "").lower()
+        for key, value in payload.items():
+            if str(key).replace("_", "").lower() == compact:
+                return value
+        return default
+
+    @classmethod
+    def _map_report(cls, report: Any) -> Any:
+        if not isinstance(report, dict):
+            return report
+        return {
+            "instrument_id": cls._field(report, "instrument_id"),
+            "report_date": cls._field(report, "report_date"),
+            "period_year": cls._field(report, "period_year"),
+            "period_num": cls._field(report, "period_num"),
+            "period_type": cls._field(report, "period_type"),
+            "created_at": cls._field(report, "created_at"),
+        }
+
+    @staticmethod
     def _parse_dt(value: Any) -> datetime | None:
         if isinstance(value, datetime):
             return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
@@ -95,10 +120,10 @@ class ContractAnalysisDataServiceV081:
             for day in cls._many(exchange, "days"):
                 if not isinstance(day, dict):
                     continue
-                date = cls._parse_dt(day.get("date"))
+                date = cls._parse_dt(cls._field(day, "date"))
                 if date is not None and date.date() != now.date():
                     continue
-                if not day.get("is_trading_day", True):
+                if not cls._field(day, "is_trading_day", True):
                     return "UNKNOWN"
                 ranges = (
                     ("CLEARING", "clearing_start_time", "clearing_end_time"),
@@ -109,8 +134,8 @@ class ContractAnalysisDataServiceV081:
                     ("REGULAR", "start_time", "end_time"),
                 )
                 for name, start_key, end_key in ranges:
-                    start = cls._parse_dt(day.get(start_key))
-                    end = cls._parse_dt(day.get(end_key))
+                    start = cls._parse_dt(cls._field(day, start_key))
+                    end = cls._parse_dt(cls._field(day, end_key))
                     if start is not None and end is not None and start <= now <= end:
                         return name
         return None
@@ -175,6 +200,12 @@ class ContractAnalysisDataServiceV081:
             failed.append("risk_rates_mapping")
         if raw_schedules not in ({}, None) and session_name is None:
             failed.append("trading_schedules_mapping")
+        if raw_reports not in ({}, None) and not reports_raw:
+            failed.append("reports_mapping")
+        if raw_insiders not in ({}, None) and not insiders_raw:
+            failed.append("insiders_mapping")
+        if raw_news not in ({}, None) and not news_raw:
+            failed.append("news_mapping")
 
         return ContractAnalysisDataV081(
             fundamentals=mapped_fundamentals,
@@ -184,7 +215,7 @@ class ContractAnalysisDataServiceV081:
             dividends=map_dividend(dividends_raw[0]) if dividends_raw else None,
             insider_transactions=tuple(map_insider(item) for item in insiders_raw),
             risk_data=mapped_risk,
-            reports=tuple(reports_raw),
+            reports=tuple(self._map_report(item) for item in reports_raw),
             news=relevant_news,
             session_name=session_name if session_available else None,
             session_available=session_available,
