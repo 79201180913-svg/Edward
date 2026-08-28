@@ -56,3 +56,7 @@ def _cached_save(self, result):
 
 _AnalysisService.analyze = _cached_analyze
 _AnalysisService.save = _cached_save
+
+# v0.8.1 uses an isolated margin-based instrument-risk calibration.
+# Importing this module installs the policy on MultiFactorAnalysisServiceV081.
+from . import multifactor_risk_calibration_v081 as _multifactor_risk_calibration_v081  # noqa: F401,E402
