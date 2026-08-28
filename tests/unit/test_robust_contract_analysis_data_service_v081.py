@@ -45,7 +45,13 @@ class NestedClient:
         return {"data": {"events": [{"instrument_id": instrument_id, "report_date": "2099-09-01T00:00:00Z"}]}}
 
     def get_news(self, limit):
-        return {"data": {"items": [{"id": 1, "instrument_id": [{"instrument": {"instrument_uid": "UID"}}}]}}
+        return {
+            "data": {
+                "items": [
+                    {"id": 1, "instrument_id": [{"instrument": {"instrument_uid": "UID"}}]}
+                ]
+            }
+        }
 
     def get_trading_schedules(self, **kwargs):
         return {"data": {"exchanges": []}}
