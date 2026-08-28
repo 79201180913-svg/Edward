@@ -77,18 +77,19 @@ def test_collector_returns_mapped_contract_sources_and_tracks_failures():
     assert client.schedule_to > client.schedule_from
 
 
-def test_collector_uses_instrument_metadata_when_risk_rates_are_empty():
+def test_collector_keeps_instrument_metadata_separate_when_risk_rates_are_empty():
     class NoRiskRatesClient(FakeClient):
         def get_risk_rates(self, instrument_ids):
             return {"instrument_risk_rates": [{"long_risk_rates": [], "short_risk_rates": []}]}
 
     result = ContractAnalysisDataServiceV081(NoRiskRatesClient()).collect("UID")
 
-    assert result.risk_data is not None
-    assert result.risk_data["dlong_client"] == 0.30
-    assert result.risk_data["dshort_client"] == 0.55
-    assert result.risk_data["short_enabled"] is True
-    assert "risk_rates_mapping" not in result.failed_sources
+    assert result.risk_data is None
+    assert result.instrument_risk_metadata is not None
+    assert result.instrument_risk_metadata["dlong_client"] == 0.30
+    assert result.instrument_risk_metadata["dshort_client"] == 0.55
+    assert result.instrument_risk_metadata["short_enabled"] is True
+    assert "risk_rates_mapping" in result.failed_sources
 
 
 def test_collector_accepts_camel_case_contract_wrappers():
