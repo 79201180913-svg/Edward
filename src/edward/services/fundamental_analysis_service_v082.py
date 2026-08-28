@@ -155,6 +155,13 @@ class FundamentalAnalysisServiceV082:
         }
     )
 
+    # Zero is a valid observation for operating/fundamental metrics such as
+    # ROE, but a zero valuation multiple means the valuation source did not
+    # provide a usable multiple and must remain unavailable.
+    ZERO_UNAVAILABLE_METRICS = frozenset(
+        {"pe", "ps", "pb", "p_fcf", "ev_to_ebitda", "ev_to_sales"}
+    )
+
     @classmethod
     def _profile(cls, profile):
         value = str(profile or "medium_term").strip().lower()
@@ -167,7 +174,7 @@ class FundamentalAnalysisServiceV082:
             value = float(snapshot.get(metric))
         except (TypeError, ValueError, AttributeError):
             return None
-        return value if isfinite(value) and value != 0.0 else None
+        return value if isfinite(value) else None
 
     @staticmethod
     def _context(snapshot: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -266,6 +273,8 @@ class FundamentalAnalysisServiceV082:
 
         raw_value = snapshot.get(metric) if isinstance(snapshot, Mapping) else None
         value = cls._num(snapshot, metric)
+        if metric in cls.ZERO_UNAVAILABLE_METRICS and value == 0.0:
+            value = None
         if value is None:
             logger.info(
                 "[V082 FUNDAMENTAL METRIC] metric=%s status=UNAVAILABLE raw=%r mapped=None score=0.00 reason=METRIC_UNAVAILABLE",
