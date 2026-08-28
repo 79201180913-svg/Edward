@@ -108,7 +108,6 @@ class AutonomousExecutionSequenceService:
                     first_failure = step.sequence
                 continue
 
-            result = None
             try:
                 result = result_factory(step)
                 intake = self._steps.prepare_step(account_id=account_id, step=step, result=result, dependency_completed=True)
@@ -187,7 +186,13 @@ class AutonomousExecutionSequenceService:
                 try:
                     protection = self._protection.protect_fill(account_id=account_id, instrument_uid=step.instrument_uid, quantity=expected_quantity, result=result)
                 except Exception as exc:
-                    protection = ProtectionResult(False, f"PROTECTION_FAILED:{exc}")
+                    reason = f"PROTECTION_FAILED:{exc}"
+                    emit(step.sequence, AutonomousExecutionPhase.FAILED, reason)
+                    results.append(AutonomousExecutionStepResult(step, execution_id, submitted.status, verification, False, AutonomousExecutionPhase.FAILED, reason))
+                    cycle_failed = True
+                    if first_failure is None:
+                        first_failure = step.sequence
+                    continue
                 if not protection.protected:
                     reason = protection.reason or "PROTECTION_FAILED"
                     emit(step.sequence, AutonomousExecutionPhase.FAILED, reason)
