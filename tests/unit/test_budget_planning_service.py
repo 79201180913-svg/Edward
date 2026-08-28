@@ -70,3 +70,21 @@ def test_policy_rejects_invalid_values():
         BudgetPlanningPolicy(slots=5, reserve_pct=Decimal("101"))
     with pytest.raises(ValueError):
         BudgetPlanningPolicy(slots=5, reserve_pct=Decimal("-1"))
+
+
+def test_budget_releases_cash_after_position_is_sold():
+    service = BudgetPlanningService()
+    policy = BudgetPlanningPolicy(slots=5, reserve_pct=Decimal("10"))
+
+    before_sell = service.build(
+        financial(capital="100000", cash="10000", securities="90000"),
+        policy,
+    )
+    after_sell = service.build(
+        financial(capital="100000", cash="55000", securities="45000"),
+        policy,
+    )
+
+    assert before_sell.investable_cash == Decimal("0.00")
+    assert after_sell.investable_cash == Decimal("45000.00")
+    assert after_sell.target_position_value == before_sell.target_position_value
