@@ -178,14 +178,38 @@ def _ratio_score(numerator: float | None, denominator: float | None, *, neutral:
 class MultiFactorAnalysisServiceV081:
     """Contract-friendly factor layer for v0.8.1.
 
-    All inputs accept either mappings or T-Invest-like SDK objects. Missing optional
-    inputs are represented as unavailable evidence instead of zero-valued evidence.
+    Fundamental scoring is delegated to the structured v0.8.2 service when
+    fundamentals are supplied, avoiding duplicate semantic scoring in V081.
     """
 
     @classmethod
     def fundamentals(cls, snapshot: Any) -> FundamentalFactor:
         if snapshot is None:
             return FundamentalFactor(0, 0, 0, 0, 0, 0, 0, Evidence("fundamentals", "UNAVAILABLE", 0, 0, available=False, reason="NO_FUNDAMENTAL_DATA"))
+
+        try:
+            from edward.services.fundamental_analysis_service_v082 import FundamentalAnalysisServiceV082
+
+            if isinstance(snapshot, Mapping) and snapshot:
+                profile = str(snapshot.get("strategy_profile") or snapshot.get("profile") or "medium_term")
+                result = FundamentalAnalysisServiceV082.analyze(snapshot, profile=profile)
+                score = result.overall_score
+                direction = "POSITIVE" if score >= 60 else "NEGATIVE" if score < 40 else "NEUTRAL"
+                reliability = result.confidence
+                return FundamentalFactor(
+                    result.business_quality.score,
+                    result.growth.score,
+                    result.valuation.score,
+                    result.financial_health.score,
+                    result.cash_generation.score,
+                    result.shareholder_return.score,
+                    result.fundamental_momentum.score,
+                    Evidence("fundamentals", direction, score, reliability, available=result.status != "UNAVAILABLE", reason=None if result.status != "UNAVAILABLE" else "NO_FUNDAMENTAL_DATA"),
+                )
+        except Exception:
+            # Compatibility fallback for direct V081 callers.
+            pass
+
         roe = _num(snapshot, "roe", "return_on_equity")
         roic = _num(snapshot, "roic", "return_on_invested_capital")
         margin = _num(snapshot, "net_margin", "net_profit_margin")
@@ -203,7 +227,6 @@ class MultiFactorAnalysisServiceV081:
         pfcf = _num(snapshot, "p_fcf")
         dividend_yield = _num(snapshot, "dividend_yield")
         payout = _num(snapshot, "dividend_payout", "payout_ratio")
-
         profitability = mean([_score_positive(roe, scale=1.8), _score_positive(roic, scale=2.0), _score_positive(margin, scale=2.0)])
         growth_inputs = [revenue_growth, eps_growth, ebitda_growth]
         growth_scores = [_score_positive(value, scale=1.5) for value in growth_inputs]
@@ -244,10 +267,8 @@ class MultiFactorAnalysisServiceV081:
         for trade in trades or ():
             qty = _num(trade, "quantity", "volume", default=0.0) or 0.0
             direction = str(_value(trade, "direction", default="")).upper()
-            if "BUY" in direction:
-                trade_buy += qty
-            elif "SELL" in direction:
-                trade_sell += qty
+            if "BUY" in direction: trade_buy += qty
+            elif "SELL" in direction: trade_sell += qty
         total_trade = trade_buy + trade_sell
         trade_imbalance = ((trade_buy - trade_sell) / total_trade * 100.0) if total_trade else None
         spread_score = _clamp(100.0 - (spread_pct or 2.0) * 30.0)
@@ -260,16 +281,12 @@ class MultiFactorAnalysisServiceV081:
 
     @classmethod
     def volume_pressure(cls, candles: Sequence[Any]) -> VolumePressureFactor:
-        buy = sell = total = 0.0
+        buy = sell = 0.0
         for candle in candles:
             vb = _num(candle, "volume_buy")
             vs = _num(candle, "volume_sell")
-            volume = _num(candle, "volume", default=0.0) or 0.0
-            if vb is not None:
-                buy += max(0.0, vb)
-            if vs is not None:
-                sell += max(0.0, vs)
-            total += volume
+            if vb is not None: buy += max(0.0, vb)
+            if vs is not None: sell += max(0.0, vs)
         denominator = buy + sell
         if denominator <= 0:
             return VolumePressureFactor(None, None, None, 0, 0, Evidence("volume_pressure", "UNAVAILABLE", 0, 0, available=False, reason="NO_BUY_SELL_VOLUME"))
@@ -278,9 +295,8 @@ class MultiFactorAnalysisServiceV081:
         net = buy_pct - sell_pct
         accumulation = _clamp(50.0 + net)
         distribution = _clamp(50.0 - net)
-        score = _clamp(50.0 + net)
-        direction = "POSITIVE" if score >= 60 else "NEGATIVE" if score < 40 else "NEUTRAL"
-        return VolumePressureFactor(buy_pct, sell_pct, net, accumulation, distribution, Evidence("volume_pressure", direction, score, 75.0))
+        direction = "POSITIVE" if accumulation >= 60 else "NEGATIVE" if accumulation < 40 else "NEUTRAL"
+        return VolumePressureFactor(buy_pct, sell_pct, net, accumulation, distribution, Evidence("volume_pressure", direction, accumulation, 75.0))
 
     @classmethod
     def signals(cls, current_signal: Any = None, historical_signals: Sequence[Any] | None = None) -> SignalFactor:
@@ -324,16 +340,11 @@ class MultiFactorAnalysisServiceV081:
                 pass
         avg_gap = mean(historical_gaps_pct) if historical_gaps_pct else None
         avg_vol = mean(historical_vol_pct) if historical_vol_pct else None
-        if days is None:
-            score = 20.0 if avg_gap or avg_vol else 0.0
-        elif days <= 2:
-            score = 90.0
-        elif days <= 7:
-            score = 70.0
-        elif days <= 21:
-            score = 45.0
-        else:
-            score = 15.0
+        if days is None: score = 20.0 if avg_gap or avg_vol else 0.0
+        elif days <= 2: score = 90.0
+        elif days <= 7: score = 70.0
+        elif days <= 21: score = 45.0
+        else: score = 15.0
         direction = "NEGATIVE" if score >= 70 else "NEUTRAL"
         return EventRiskFactor(days, score, avg_gap, avg_vol, Evidence("event_risk", direction, score, 80.0))
 
@@ -363,8 +374,7 @@ class MultiFactorAnalysisServiceV081:
             qty = _num(tx, "quantity", "amount", default=0.0) or 0.0
             signed.append(qty if "BUY" in action else -qty if "SELL" in action else 0.0)
             outcome = _num(tx, "follow_through_pct")
-            if outcome is not None:
-                follow.append(outcome)
+            if outcome is not None: follow.append(outcome)
         net = sum(signed)
         direction = "BUY" if net > 0 else "SELL" if net < 0 else "NEUTRAL"
         strength = _clamp(50.0 + min(50.0, abs(net) * 10.0))
@@ -385,7 +395,8 @@ class MultiFactorAnalysisServiceV081:
             return InstrumentRiskFactor(None, None, False, 0, 0, Evidence("instrument_risk", "UNAVAILABLE", 0, 0, available=False, reason="NO_RISK_RATE_DATA"))
         dlong = _num(risk_data, "dlong_client", "dlong")
         dshort = _num(risk_data, "dshort_client", "dshort")
-        short_enabled = bool(_value(risk_data, "short_enabled_flag", "short_enabled", default=False))
+        short_value = _value(risk_data, "short_enabled_flag", "short_enabled", default=None)
+        short_enabled = bool(short_value) if short_value is not None else False
         if dlong is None and dshort is None:
             return InstrumentRiskFactor(None, None, short_enabled, 0, 0, Evidence("instrument_risk", "UNAVAILABLE", 0, 0, available=False, reason="INCOMPLETE_RISK_RATE_DATA"))
         effective_margin = dlong if not short_enabled or dshort is None else max(dlong or 0.0, dshort)
@@ -396,11 +407,7 @@ class MultiFactorAnalysisServiceV081:
 
     @classmethod
     def portfolio(cls, *, current_weight_pct: float = 0.0, marginal_risk_pct: float = 0.0, diversification_benefit_pct: float = 0.0, expected_return_impact_pct: float = 0.0, max_position_weight_pct: float | None = None) -> PortfolioFactor:
-        concentration = 100.0
-        if max_position_weight_pct and max_position_weight_pct > 0:
-            concentration = _clamp(100.0 - current_weight_pct / max_position_weight_pct * 100.0)
-        else:
-            concentration = _clamp(100.0 - current_weight_pct * 2.0)
+        concentration = _clamp(100.0 - current_weight_pct / max_position_weight_pct * 100.0) if max_position_weight_pct and max_position_weight_pct > 0 else _clamp(100.0 - current_weight_pct * 2.0)
         score = _clamp(concentration + diversification_benefit_pct * 2.0 - max(0.0, marginal_risk_pct) * 4.0)
         direction = "POSITIVE" if score >= 60 else "NEGATIVE" if score < 40 else "NEUTRAL"
         return PortfolioFactor(current_weight_pct, concentration, marginal_risk_pct, diversification_benefit_pct, expected_return_impact_pct, Evidence("portfolio", direction, score, 85.0))
@@ -408,8 +415,7 @@ class MultiFactorAnalysisServiceV081:
     @classmethod
     def aggregate(cls, factors: Sequence[Evidence]) -> tuple[float, float, float]:
         available = [factor for factor in factors if factor.available]
-        if not available:
-            return 0.0, 0.0, 0.0
+        if not available: return 0.0, 0.0, 0.0
         weighted = [factor.quality for factor in available]
         reliability = mean(factor.reliability for factor in available)
         positives = sum(1 for f in available if f.direction == "POSITIVE")
@@ -434,8 +440,4 @@ class MultiFactorAnalysisServiceV081:
         return MultiFactorResult(fundamental, micro, volume, signal, event_factor, dividend, insider, session_factor, risk, portfolio, score, reliability, conflict)
 
 
-__all__ = [
-    "MULTIFACTOR_VERSION", "Evidence", "FundamentalFactor", "MicrostructureFactor", "VolumePressureFactor",
-    "SignalFactor", "EventRiskFactor", "DividendFactor", "InsiderFactor", "SessionFactor", "InstrumentRiskFactor",
-    "PortfolioFactor", "MultiFactorResult", "MultiFactorAnalysisServiceV081",
-]
+__all__ = ["MULTIFACTOR_VERSION", "Evidence", "FundamentalFactor", "MicrostructureFactor", "VolumePressureFactor", "SignalFactor", "EventRiskFactor", "DividendFactor", "InsiderFactor", "SessionFactor", "InstrumentRiskFactor", "PortfolioFactor", "MultiFactorResult", "MultiFactorAnalysisServiceV081"]

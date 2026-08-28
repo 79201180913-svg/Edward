@@ -34,7 +34,73 @@ def _open_analysis_v08(app: Any) -> None:
     window.minsize(1100, 740)
     window.transient(app)
 
-    top = ttk.Frame(window, padding=16)
+    scroll_frame = ttk.Frame(window)
+    scroll_frame.pack(fill="both", expand=True)
+    scroll_frame.rowconfigure(0, weight=1)
+    scroll_frame.columnconfigure(0, weight=1)
+
+    canvas = tk.Canvas(scroll_frame, highlightthickness=0)
+    scrollbar_y = ttk.Scrollbar(scroll_frame, orient="vertical", command=canvas.yview)
+    scrollbar_x = ttk.Scrollbar(scroll_frame, orient="horizontal", command=canvas.xview)
+    canvas.configure(yscrollcommand=scrollbar_y.set, xscrollcommand=scrollbar_x.set)
+    canvas.grid(row=0, column=0, sticky="nsew")
+    scrollbar_y.grid(row=0, column=1, sticky="ns")
+    scrollbar_x.grid(row=1, column=0, sticky="ew")
+
+    content = ttk.Frame(canvas)
+    canvas_window = canvas.create_window((0, 0), window=content, anchor="nw")
+    window._analysis_content = content
+    window._analysis_canvas = canvas
+
+    def update_scroll_region(_event: Any = None) -> None:
+        canvas.configure(scrollregion=canvas.bbox("all"))
+
+    def update_content_width(event: Any) -> None:
+        requested_width = content.winfo_reqwidth()
+        canvas.itemconfigure(canvas_window, width=max(event.width, requested_width))
+        update_scroll_region()
+
+    content.bind("<Configure>", update_scroll_region)
+    canvas.bind("<Configure>", update_content_width)
+
+    def is_inside_analysis(widget: Any) -> bool:
+        current = widget
+        while current is not None:
+            if current == content:
+                return True
+            if current == window:
+                return False
+            try:
+                current = current.master
+            except AttributeError:
+                return False
+        return False
+
+    def on_mousewheel(event: Any) -> None:
+        widget = window.winfo_containing(event.x_root, event.y_root)
+        if widget is None or not is_inside_analysis(widget):
+            return
+        if event.state & 0x0001:
+            canvas.xview_scroll(-1 if event.delta > 0 else 1, "units")
+        else:
+            units = max(1, abs(event.delta) // 120) if event.delta else 1
+            canvas.yview_scroll(-units if event.delta > 0 else units, "units")
+
+    def on_linux_scroll_up(event: Any) -> None:
+        widget = window.winfo_containing(event.x_root, event.y_root)
+        if widget is not None and is_inside_analysis(widget):
+            canvas.yview_scroll(-3, "units")
+
+    def on_linux_scroll_down(event: Any) -> None:
+        widget = window.winfo_containing(event.x_root, event.y_root)
+        if widget is not None and is_inside_analysis(widget):
+            canvas.yview_scroll(3, "units")
+
+    window.bind("<MouseWheel>", on_mousewheel, add="+")
+    window.bind("<Button-4>", on_linux_scroll_up, add="+")
+    window.bind("<Button-5>", on_linux_scroll_down, add="+")
+
+    top = ttk.Frame(content, padding=16)
     top.pack(fill="x")
     ttk.Label(top, text=f"Анализ: {detail.get('ticker', '')}", style="Title.TLabel").pack(side="left")
     ttk.Label(top, text="v0.8", font=("TkDefaultFont", 11, "bold")).pack(side="left", padx=(12, 0))
@@ -48,7 +114,7 @@ def _open_analysis_v08(app: Any) -> None:
     start_button = ttk.Button(top, text="Запустить анализ")
     start_button.pack(side="right")
 
-    table = ttk.Treeview(window, columns=("strategy", "score", "return", "dd", "sharpe", "robust", "wf", "gate"), show="headings", height=11)
+    table = ttk.Treeview(content, columns=("strategy", "score", "return", "dd", "sharpe", "robust", "wf", "gate"), show="headings", height=11)
     for key, label, width in (
         ("strategy", "Стратегия", 180), ("score", "Score", 80), ("return", "OOS Return %", 105),
         ("dd", "OOS DD %", 95), ("sharpe", "Sharpe", 80), ("robust", "Robustness", 105),
@@ -58,7 +124,7 @@ def _open_analysis_v08(app: Any) -> None:
         table.column(key, width=width, anchor="center")
     table.pack(fill="both", expand=True, padx=16, pady=10)
 
-    metrics = ttk.LabelFrame(window, text="v0.8 — Expected Value / Forecast / Portfolio", padding=12)
+    metrics = ttk.LabelFrame(content, text="v0.8 — Expected Value / Forecast / Portfolio", padding=12)
     metrics.pack(fill="x", padx=16, pady=(0, 10))
     for column in range(5):
         metrics.columnconfigure(column, weight=1)
@@ -75,14 +141,14 @@ def _open_analysis_v08(app: Any) -> None:
         ttk.Label(cell, text=title).pack(anchor="w")
         ttk.Label(cell, textvariable=metric_vars[key], font=("TkDefaultFont", 11, "bold")).pack(anchor="w", pady=(3, 0))
 
-    decision_frame = ttk.LabelFrame(window, text="Торговое решение", padding=10)
+    decision_frame = ttk.LabelFrame(content, text="Торговое решение", padding=10)
     decision_frame.pack(fill="x", padx=16, pady=(0, 10))
     decision_var = tk.StringVar(value="Решение: —")
     reason_var = tk.StringVar(value="")
     ttk.Label(decision_frame, textvariable=decision_var, font=("TkDefaultFont", 12, "bold")).pack(anchor="w")
     ttk.Label(decision_frame, textvariable=reason_var, wraplength=1150, justify="left").pack(anchor="w", pady=(4, 0))
 
-    explanation = tk.Text(window, height=7, wrap="word")
+    explanation = tk.Text(content, height=7, wrap="word")
     explanation.pack(fill="x", padx=16, pady=(0, 16))
     explanation.configure(state="disabled")
 
@@ -196,6 +262,7 @@ def _open_analysis_v08(app: Any) -> None:
         ]
         explanation.insert("1.0", "\n".join(lines))
         explanation.configure(state="disabled")
+        update_scroll_region()
 
     def run() -> None:
         running(True)

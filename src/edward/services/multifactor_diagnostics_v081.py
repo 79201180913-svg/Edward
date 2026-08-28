@@ -17,6 +17,7 @@ def emit_multifactor_diagnostics(*, instrument_uid: str, data: Any, result: Any)
     risk_data = getattr(data, "risk_data", None)
     factor = result.multifactor.instrument_risk
     evidence = factor.evidence
+    fundamental = result.multifactor.fundamentals
 
     raw_dlong = _value(risk_data, "dlong", "dlong_client")
     raw_dshort = _value(risk_data, "dshort", "dshort_client")
@@ -25,7 +26,9 @@ def emit_multifactor_diagnostics(*, instrument_uid: str, data: Any, result: Any)
     print(
         "[V081 MULTIFACTOR INPUT] "
         f"instrument_uid={instrument_uid} "
-        f"fundamentals_available={result.multifactor.fundamentals.evidence.available} "
+        f"fundamentals_available={fundamental.evidence.available} "
+        f"fundamental_score={fundamental.evidence.strength!r} "
+        f"fundamental_reliability={fundamental.evidence.reliability!r} "
         f"order_book_available={result.multifactor.microstructure.evidence.available} "
         f"signals_available={result.multifactor.signals.evidence.available} "
         f"events_available={result.multifactor.event_risk.evidence.available} "
@@ -52,6 +55,22 @@ def emit_multifactor_diagnostics(*, instrument_uid: str, data: Any, result: Any)
         f"reliability={evidence.reliability!r} "
         f"available={evidence.available!r} "
         f"reason={evidence.reason!r}",
+        flush=True,
+    )
+    print(
+        "[V082 FUNDAMENTAL FACTOR] "
+        f"instrument_uid={instrument_uid} "
+        f"score={fundamental.evidence.strength!r} "
+        f"reliability={fundamental.evidence.reliability!r} "
+        f"available={fundamental.evidence.available!r} "
+        f"reason={fundamental.evidence.reason!r} "
+        f"quality={fundamental.quality_score!r} "
+        f"growth={fundamental.growth_score!r} "
+        f"cash_flow={fundamental.cash_flow_score!r} "
+        f"balance_sheet={fundamental.balance_sheet_score!r} "
+        f"valuation={fundamental.valuation_score!r} "
+        f"shareholder_return={fundamental.shareholder_return_score!r} "
+        f"momentum={fundamental.momentum_score!r}",
         flush=True,
     )
     print(
