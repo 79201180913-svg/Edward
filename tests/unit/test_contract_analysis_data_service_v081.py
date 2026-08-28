@@ -53,6 +53,8 @@ def test_collector_returns_mapped_contract_sources_and_tracks_failures():
     assert result.insider_transactions[0]["quantity"] == 10.0
     assert result.risk_data["dlong_client"] == 10.0
     assert result.news[0]["id"] == 1
+    assert result.session_name is None
+    assert result.session_available is False
     assert set(result.failed_sources) == set()
     assert isinstance(client.schedule_from, datetime)
     assert isinstance(client.schedule_to, datetime)
@@ -60,6 +62,29 @@ def test_collector_returns_mapped_contract_sources_and_tracks_failures():
     assert client.schedule_to.tzinfo is not None
     assert client.schedule_from >= datetime.now(timezone.utc) - timedelta(seconds=5)
     assert client.schedule_to > client.schedule_from
+
+
+def test_collector_accepts_camel_case_contract_wrappers():
+    class CamelClient(FakeClient):
+        def get_asset_fundamentals(self, instrument_id):
+            return {"fundamentals": [{"roe": 15, "roic": 13, "freeCashFlowTtm": 10, "peRatioTtm": 10}]}
+
+        def get_asset_reports(self, instrument_id, from_dt, to_dt):
+            return {"events": [{"instrumentId": instrument_id, "reportDate": "2026-09-01T00:00:00Z"}]}
+
+    result = ContractAnalysisDataServiceV081(CamelClient()).collect("UID")
+
+    assert result.fundamentals is not None
+    assert result.fundamentals["free_cash_flow"] == 10.0
+    assert result.reports[0]["instrument_id"] == "UID"
+    assert result.reports[0]["report_date"] == "2026-09-01T00:00:00Z"
+
+
+def test_collector_does_not_mark_empty_schedule_response_as_mapping_failure():
+    result = ContractAnalysisDataServiceV081(FakeClient()).collect("UID")
+
+    assert "trading_schedules_mapping" not in result.failed_sources
+    assert result.session_available is False
 
 
 class FailingClient(FakeClient):
