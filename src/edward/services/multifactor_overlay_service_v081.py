@@ -115,22 +115,25 @@ class MultiFactorOverlayServiceV081:
             f"event_risk={factors.event_risk.event_risk_score:.1f}, session={factors.session.session}."
         )
 
+        adjusted_score = round(adjusted_score, 2)
+        adjusted_context = replace(pipeline.opportunity.context, opportunity_score=adjusted_score)
         adjusted_opportunity = replace(
             pipeline.opportunity,
-            score=round(adjusted_score, 2),
+            context=adjusted_context,
+            score=adjusted_score,
             explanation=f"{pipeline.opportunity.explanation} {explanation}",
         )
         adjusted_pipeline = replace(pipeline, opportunity=adjusted_opportunity)
         return adjusted_pipeline, MultiFactorOverlayResult(
             base_opportunity_score=base_score,
-            adjusted_opportunity_score=round(adjusted_score, 2),
+            adjusted_opportunity_score=adjusted_score,
             base_confidence=base_confidence,
             adjusted_confidence=round(adjusted_confidence, 2),
             entry_quality_score=round(entry_quality, 2),
             risk_adjustment=round(risk_adjustment, 2),
             evidence_score=round(factors.aggregate_evidence_score, 2),
             evidence_reliability=round(factors.aggregate_reliability_score, 2),
-            conflict_penalty=round(factors.conflict_penalty, 2),
+            conflict_penalty=round(conflict_penalty, 2),
             decision_blocked=blocked,
             block_reason=block_reason,
             explanation=explanation,
