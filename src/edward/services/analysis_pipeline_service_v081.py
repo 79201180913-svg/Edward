@@ -8,6 +8,7 @@ from edward.services.analysis_pipeline_service_v08 import AnalysisPipelineServic
 from edward.services.multifactor_analysis_service_v081 import MultiFactorAnalysisServiceV081, MultiFactorResult
 from edward.services.multifactor_normalization_v081 import normalize
 from edward.services.multifactor_overlay_service_v081 import MultiFactorOverlayResult, MultiFactorOverlayServiceV081
+from edward.services import multifactor_risk_calibration_v081 as _multifactor_risk_calibration_v081  # noqa: F401
 
 ANALYSIS_PIPELINE_V081_VERSION = "0.8.1"
 logger = getLogger(__name__)
