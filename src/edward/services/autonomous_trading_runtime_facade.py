@@ -58,15 +58,18 @@ class AutonomousTradingRuntimeFacade:
     def __init__(
         self,
         client: TInvestAdapterClient,
-        *,
         account_id: str,
-        policy: BudgetPlanningPolicy,
+        *,
+        policy: BudgetPlanningPolicy | None = None,
         profile: str = "medium_term",
         instrument_kind: str = "SHARE",
     ) -> None:
         self.client = client
         self.account_id = str(account_id)
-        self.policy = policy
+        # Keep the facade backward-compatible with the current UI wiring.
+        # The UI defaults are 5 slots / 10% reserve; the actual budget is still
+        # calculated from the live account state by BudgetPlanningService.
+        self.policy = policy or BudgetPlanningPolicy(slots=5, reserve_pct=Decimal("10"))
         self.profile = profile
         self.instrument_kind = instrument_kind
 
