@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from logging import getLogger
 from typing import Any, Mapping, Sequence
 
 from edward.services.analysis_pipeline_service_v08 import AnalysisPipelineServiceV08, AnalysisPipelineV08Result
@@ -9,6 +10,51 @@ from edward.services.multifactor_normalization_v081 import normalize
 from edward.services.multifactor_overlay_service_v081 import MultiFactorOverlayResult, MultiFactorOverlayServiceV081
 
 ANALYSIS_PIPELINE_V081_VERSION = "0.8.1"
+logger = getLogger(__name__)
+
+
+def _normalize_margin_rate(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        normalized = float(value)
+    except (TypeError, ValueError):
+        return None
+    if 0.0 <= normalized <= 1.0:
+        return normalized * 100.0
+    return normalized
+
+
+def _normalize_risk_data(risk_data: Any) -> Any:
+    if risk_data is None:
+        return None
+    if not isinstance(risk_data, Mapping):
+        return risk_data
+    normalized = dict(risk_data)
+    raw_dlong = risk_data.get("dlong")
+    raw_dshort = risk_data.get("dshort")
+    raw_dlong_client = risk_data.get("dlong_client")
+    raw_dshort_client = risk_data.get("dshort_client")
+    for key in ("dlong", "dlong_client"):
+        source = risk_data.get(key)
+        normalized[key] = _normalize_margin_rate(source)
+    for key in ("dshort", "dshort_client"):
+        source = risk_data.get(key)
+        normalized[key] = _normalize_margin_rate(source)
+    logger.info(
+        "[V081 RISK NORMALIZE] raw_dlong=%r raw_dshort=%r raw_dlong_client=%r raw_dshort_client=%r "
+        "normalized_dlong=%r normalized_dshort=%r normalized_dlong_client=%r normalized_dshort_client=%r short_enabled=%r",
+        raw_dlong,
+        raw_dshort,
+        raw_dlong_client,
+        raw_dshort_client,
+        normalized.get("dlong"),
+        normalized.get("dshort"),
+        normalized.get("dlong_client"),
+        normalized.get("dshort_client"),
+        normalized.get("short_enabled", normalized.get("short_enabled_flag")),
+    )
+    return normalized
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +160,12 @@ class AnalysisPipelineServiceV081:
             candidate_weight=candidate_weight,
             concentration_penalty_pct=concentration_penalty_pct,
         )
+        normalized_risk_data = _normalize_risk_data(risk_data)
+        logger.info(
+            "[V081 RISK BEFORE FACTOR] instrument_uid=%s risk_data=%r",
+            instrument_uid,
+            normalized_risk_data,
+        )
         multifactor = MultiFactorAnalysisServiceV081.analyze(
             fundamentals=fundamentals,
             order_book=order_book,
@@ -128,13 +180,25 @@ class AnalysisPipelineServiceV081:
             insider_transactions=insider_transactions,
             session_name=session_name,
             session_execution_allowed=session_execution_allowed,
-            risk_data=risk_data,
+            risk_data=normalized_risk_data,
             current_weight_pct=current_weight_pct,
             marginal_risk_pct=marginal_risk_pct,
             diversification_benefit_pct=diversification_benefit_pct,
             expected_return_impact_pct=expected_return_impact_pct,
             max_position_weight_pct=max_position_weight_pct,
             current_price=current_price,
+        )
+        logger.info(
+            "[V081 RISK FACTOR] instrument_uid=%s dlong=%r dshort=%r short_enabled=%r "
+            "capital_efficiency=%.2f risk_score=%.2f evidence_available=%r reason=%r",
+            instrument_uid,
+            multifactor.instrument_risk.long_margin_rate_pct,
+            multifactor.instrument_risk.short_margin_rate_pct,
+            multifactor.instrument_risk.short_enabled,
+            multifactor.instrument_risk.capital_efficiency_score,
+            multifactor.instrument_risk.risk_score,
+            multifactor.instrument_risk.evidence.available,
+            multifactor.instrument_risk.evidence.reason,
         )
         multifactor = normalize(
             multifactor,
@@ -144,6 +208,18 @@ class AnalysisPipelineServiceV081:
             session_available=session_name is not None,
         )
         adjusted, overlay = MultiFactorOverlayServiceV081.apply(base, multifactor)
+        logger.info(
+            "[V081 OVERLAY] instrument_uid=%s base_opportunity=%.2f adjusted_opportunity=%.2f "
+            "base_confidence=%s adjusted_confidence=%.2f evidence=%.2f reliability=%.2f conflicts=%.2f",
+            instrument_uid,
+            float(base.opportunity.score),
+            float(adjusted.opportunity.score),
+            base.confidence.overall_confidence if base.confidence is not None else None,
+            overlay.adjusted_confidence,
+            overlay.evidence_score,
+            overlay.evidence_reliability,
+            overlay.conflict_penalty,
+        )
         return AnalysisPipelineV081Result(adjusted, multifactor, overlay)
 
 
