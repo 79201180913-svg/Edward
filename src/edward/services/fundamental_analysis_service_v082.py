@@ -167,9 +167,6 @@ class FundamentalAnalysisServiceV082:
             value = float(snapshot.get(metric))
         except (TypeError, ValueError, AttributeError):
             return None
-        # A mapped zero means the source does not contain a usable fundamental
-        # value. Treat it as unavailable rather than feeding a synthetic score
-        # into the fundamental analysis.
         return value if isfinite(value) and value != 0.0 else None
 
     @staticmethod
@@ -423,72 +420,79 @@ class FundamentalAnalysisServiceV082:
             return 0.0, 0.0, ()
         total = sum(defaults[g.name] for g in usable)
         normalized = tuple((g.name, defaults[g.name] / total) for g in usable)
-        score = sum(g.score * weight for g, (_, weight) in zip(usable, normalized))
-        confidence = sum(g.confidence * weight for g, (_, weight) in zip(usable, normalized))
-        return (
-            FundamentalScoringEngineV082.clamp(score),
-            FundamentalScoringEngineV082.clamp(confidence),
-            normalized,
-        )
+        normalized_map = dict(normalized)
+        if "fundamental_momentum" in defaults:
+            normalized_map.setdefault("fundamental_momentum", 0.0)
+        ordered = tuple((name, normalized_map[name]) for name in defaults if name in normalized_map)
+        overall = sum(g.score * normalized_map[g.name] for g in usable)
+        confidence = sum(g.confidence * normalized_map[g.name] for g in usable)
+        return FundamentalScoringEngineV082.clamp(overall), FundamentalScoringEngineV082.clamp(confidence), ordered
 
     @classmethod
-    def analyze(cls, snapshot: Mapping[str, Any], profile="medium_term"):
-        profile = cls._profile(profile)
-        context = cls._context(snapshot)
-        not_applicable = cls._not_applicable_metrics(snapshot)
+    def analyze(cls, fundamentals=None, *, profile="medium_term"):
+        selected = cls._profile(profile)
+        if not isinstance(fundamentals, Mapping) or not fundamentals:
+            empty = {
+                name: FundamentalGroupResult(name, 0.0, 0.0, 0.0, (), ("GROUP_UNAVAILABLE",))
+                for name in cls.GROUPS
+            }
+            return FundamentalAnalysisResult(
+                *(empty[name] for name in cls.GROUPS),
+                0.0,
+                0.0,
+                0.0,
+                "UNAVAILABLE",
+                selected,
+                tuple(cls.STRATEGY_WEIGHTS[selected].items()),
+                ("NO_FUNDAMENTAL_DATA",),
+            )
+
         logger.info(
             "[V082 FUNDAMENTAL INPUT] profile=%s instrument_context=%r not_applicable=%s",
-            profile,
-            dict(context),
-            tuple(sorted(not_applicable)),
+            selected,
+            dict(cls._context(fundamentals)),
+            tuple(sorted(cls._not_applicable_metrics(fundamentals))),
         )
 
-        business_quality = cls._group(snapshot, "business_quality")
-        growth = cls._group(snapshot, "growth")
-        cash_generation = cls._group(snapshot, "cash_generation")
-        financial_health = cls._group(snapshot, "financial_health")
-        valuation = cls._group(snapshot, "valuation")
-        shareholder_return = cls._group(snapshot, "shareholder_return")
-        fundamental_momentum = cls._momentum(snapshot)
         groups = (
-            business_quality,
-            growth,
-            cash_generation,
-            financial_health,
-            valuation,
-            shareholder_return,
-            fundamental_momentum,
+            cls._group(fundamentals, "business_quality"),
+            cls._group(fundamentals, "growth"),
+            cls._group(fundamentals, "cash_generation"),
+            cls._group(fundamentals, "financial_health"),
+            cls._group(fundamentals, "valuation"),
+            cls._group(fundamentals, "shareholder_return"),
+            cls._momentum(fundamentals),
         )
-        overall_score, confidence, group_weights = cls._weighted_overall(groups, profile)
-        available_metrics = sum(1 for group in groups for metric in group.metrics if metric.available)
-        total_metrics = sum(1 for group in groups for metric in group.metrics if "METRIC_NOT_APPLICABLE" not in metric.reason_codes)
-        coverage = available_metrics / total_metrics * 100.0 if total_metrics else 0.0
-        status = "OK" if coverage >= 100.0 else "PARTIAL"
-        reasons = []
-        if coverage < 100.0:
-            reasons.append("PARTIAL_DATA_COVERAGE")
+        overall, confidence, weights = cls._weighted_overall(groups, selected)
+        coverage = mean(g.coverage for g in groups)
+        available = sum(g.coverage > 0 for g in groups)
+        status = "UNAVAILABLE" if available == 0 else "PARTIAL" if coverage < 100 else "AVAILABLE"
+        reasons = ("PARTIAL_DATA_COVERAGE",) if coverage < 100 else ()
         logger.info(
             "[V082 FUNDAMENTAL RESULT] profile=%s overall=%.2f confidence=%.2f coverage=%.2f status=%s weights=%s",
-            profile,
-            overall_score,
+            selected,
+            overall,
             confidence,
             coverage,
             status,
-            group_weights,
+            weights,
         )
         return FundamentalAnalysisResult(
-            business_quality=business_quality,
-            growth=growth,
-            cash_generation=cash_generation,
-            financial_health=financial_health,
-            valuation=valuation,
-            shareholder_return=shareholder_return,
-            fundamental_momentum=fundamental_momentum,
-            overall_score=overall_score,
-            confidence=confidence,
-            coverage=coverage,
-            status=status,
-            strategy_profile=profile,
-            group_weights=group_weights,
-            reason_codes=tuple(reasons),
+            *groups,
+            overall,
+            confidence,
+            FundamentalScoringEngineV082.clamp(coverage),
+            status,
+            selected,
+            weights,
+            reasons,
         )
+
+
+__all__ = [
+    "FUNDAMENTAL_ANALYSIS_VERSION",
+    "FundamentalMetricResult",
+    "FundamentalGroupResult",
+    "FundamentalAnalysisResult",
+    "FundamentalAnalysisServiceV082",
+]
