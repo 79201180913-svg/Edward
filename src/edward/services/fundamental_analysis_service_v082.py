@@ -89,8 +89,8 @@ class FundamentalAnalysisServiceV082:
         ),
     }
 
-    # Keep cumulative revenue change visible as evidence, but do not score it
-    # as a second independent growth metric alongside normalized growth rates.
+    # Cumulative revenue change remains visible as evidence, but is not scored
+    # as an independent growth metric alongside normalized growth rates.
     SCORE_METRICS = {
         "growth": (
             "revenue_growth",
@@ -143,27 +143,6 @@ class FundamentalAnalysisServiceV082:
         "short-term": "speculative",
     }
 
-    # Banks are financial institutions whose operating model makes several
-    # generic industrial-company metrics structurally non-comparable. Keep
-    # these fields visible as evidence, but exclude them from scoring/coverage.
-    # P/E, P/B, ROE and dividend metrics remain applicable to banks.
-    BANK_NOT_APPLICABLE = frozenset(
-        {
-            "roic",
-            "ebitda_growth",
-            "free_cash_flow",
-            "free_cash_flow_to_price",
-            "net_debt_to_ebitda",
-            "total_debt_to_ebitda",
-            "total_debt_to_equity",
-            "current_ratio",
-            "ps",
-            "p_fcf",
-            "ev_to_ebitda",
-            "ev_to_sales",
-        }
-    )
-
     # Zero is a valid observation for operating/fundamental metrics such as
     # ROE, but a zero valuation multiple means the valuation source did not
     # provide a usable multiple and must remain unavailable.
@@ -194,49 +173,12 @@ class FundamentalAnalysisServiceV082:
         return {}
 
     @classmethod
-    def _instrument_is_bank(cls, snapshot: Mapping[str, Any]) -> bool:
-        context = cls._context(snapshot)
-        values: list[str] = []
-        for key in (
-            "instrument_type",
-            "instrument_type_name",
-            "instrument_kind",
-            "instrument_kind_name",
-            "sector",
-            "sector_name",
-            "industry",
-            "industry_name",
-            "asset_class",
-            "name",
-            "instrument_name",
-            "company_name",
-            "ticker",
-        ):
-            value = context.get(key)
-            if value is not None:
-                values.append(str(value).strip().lower())
-        haystack = " ".join(values)
-        return any(
-            token in haystack
-            for token in (
-                "bank",
-                "banks",
-                "banking",
-                "банк",
-                "банки",
-                "банков",
-            )
-        )
-
-    @classmethod
     def _not_applicable_metrics(cls, snapshot: Mapping[str, Any]) -> frozenset[str]:
         explicit: set[str] = set()
         for key in ("__not_applicable_metrics", "not_applicable_metrics"):
             value = snapshot.get(key)
             if isinstance(value, (list, tuple, set, frozenset)):
                 explicit.update(str(item) for item in value)
-        if cls._instrument_is_bank(snapshot):
-            explicit.update(cls.BANK_NOT_APPLICABLE)
         return frozenset(explicit)
 
     @classmethod
@@ -396,10 +338,9 @@ class FundamentalAnalysisServiceV082:
                 "fundamental_momentum", 0.0, 0.0, 0.0, metrics, ("GROUP_UNAVAILABLE",)
             )
 
+        not_applicable_metrics = cls._not_applicable_metrics(snapshot)
         g5, g3, g1 = (
-            cls._num(snapshot, k)
-            if k not in cls._not_applicable_metrics(snapshot)
-            else None
+            cls._num(snapshot, k) if k not in not_applicable_metrics else None
             for k in ("revenue_growth_5y", "revenue_growth_3y", "revenue_growth")
         )
         acceleration = FundamentalScoringEngineV082.growth_acceleration(g5, g3, g1)
@@ -408,10 +349,10 @@ class FundamentalAnalysisServiceV082:
             growth_3y=g3,
             growth_1y=g1,
             eps_growth=cls._num(snapshot, "eps_growth")
-            if "eps_growth" not in cls._not_applicable_metrics(snapshot)
+            if "eps_growth" not in not_applicable_metrics
             else None,
             ebitda_growth=cls._num(snapshot, "ebitda_growth")
-            if "ebitda_growth" not in cls._not_applicable_metrics(snapshot)
+            if "ebitda_growth" not in not_applicable_metrics
             else None,
         )
         reasons = [FundamentalScoringEngineV082.classify_acceleration(acceleration)]
