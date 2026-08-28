@@ -56,6 +56,19 @@ def _fundamental_input(fundamentals: Any, instrument_detail: Mapping[str, Any]) 
     return snapshot
 
 
+def _fundamental_group_score_text(group: Any) -> str:
+    """Display a score only when the group has usable evidence.
+
+    A zero score is a valid numeric score for some calculations, but a group
+    with zero coverage has no score at all. The latter must be rendered as
+    N/A rather than being presented as a negative/zero fundamental result.
+    """
+    if group is None or float(getattr(group, "coverage", 0.0)) <= 0.0:
+        return "N/A"
+    score = getattr(group, "score", None)
+    return "N/A" if score is None else f"{float(score):.1f}"
+
+
 def install(app_class: type[Any], client_class: type[Any]) -> None:
     import edward.ui.analysis_ui_v04 as legacy
     import edward.ui.analysis_ui_v08_runtime as runtime
@@ -202,7 +215,7 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
                     "", "end",
                     values=(
                         group_map.get(group.name, group.name),
-                        f"{group.score:.1f}",
+                        _fundamental_group_score_text(group),
                         f"{group.coverage:.1f}",
                         f"{group.confidence:.1f}",
                     ),
@@ -214,7 +227,7 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
             for group in groups:
                 lines.append(
                     f"{group_map.get(group.name, group.name)} — "
-                    f"score={group.score:.1f}, coverage={group.coverage:.1f}%, confidence={group.confidence:.1f}"
+                    f"score={_fundamental_group_score_text(group)}, coverage={group.coverage:.1f}%, confidence={group.confidence:.1f}"
                 )
                 if group.reason_codes:
                     lines.append(f"  reasons: {', '.join(group.reason_codes)}")
@@ -259,7 +272,7 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
                 f"Conflicts: {result.overlay.conflict_penalty:.1f}." + failure_text
             )
             group_summary = "; ".join(
-                f"{g.name}={g.score:.1f}({g.coverage:.0f}%)"
+                f"{g.name}={_fundamental_group_score_text(g)}({g.coverage:.0f}%)"
                 for g in (
                     v082_fundamental.business_quality,
                     v082_fundamental.growth,
