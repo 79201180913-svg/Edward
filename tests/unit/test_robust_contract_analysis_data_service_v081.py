@@ -75,6 +75,25 @@ def test_nested_contract_envelopes_are_unwrapped_without_mapping_failures():
     assert "news_mapping" not in result.failed_sources
 
 
+def test_full_remap_path_recovers_all_previously_failed_sources():
+    result = RobustContractAnalysisDataServiceV081(NestedClient()).collect("UID")
+
+    assert result.fundamentals["roic"] == 15.0
+    assert result.risk_data["dshort_client"] == 20.0
+    assert result.insider_transactions[0]["quantity"] == 10.0
+    assert result.reports[0]["report_date"] == "2099-09-01T00:00:00Z"
+    assert result.fetched_sources
+    assert not any(
+        name in result.failed_sources
+        for name in (
+            "fundamentals_mapping",
+            "insiders_mapping",
+            "reports_mapping",
+            "risk_rates_mapping",
+        )
+    )
+
+
 def test_unavailable_risk_does_not_become_neutral_score():
     class EmptyRiskClient(NestedClient):
         def get_risk_rates(self, instrument_ids):
