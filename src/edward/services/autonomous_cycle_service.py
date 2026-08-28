@@ -53,12 +53,21 @@ class AutonomousCycleService:
         policy: BudgetPlanningPolicy,
         profile: str = "medium_term",
         instrument_kind: str = "SHARE",
+        account_state: Any | None = None,
         progress_callback: Callable[[str, float, int, int], None] | None = None,
         result_callback: Callable[[OpportunitySearchResult, int, int], None] | None = None,
         scope_callback: Callable[[str], None] | None = None,
         planning_callback: Callable[[AutonomousPlanningResult], None] | None = None,
     ) -> AutonomousCycleResult:
-        planning = self._planning.plan(account_id, policy)
+        if account_state is None:
+            planning = self._planning.plan(account_id, policy)
+        else:
+            planning = self._planning.plan_from_state(
+                account_id,
+                policy,
+                positions=account_state.positions,
+                portfolio=account_state.portfolio,
+            )
         if planning_callback is not None:
             planning_callback(planning)
 
