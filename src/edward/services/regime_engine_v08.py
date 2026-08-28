@@ -64,10 +64,18 @@ class RegimeEngine:
         else:
             regime = "TRANSITION"
 
-        confidence = min(100.0, abs(trend_score) * 40.0 + abs(percentile - 50.0))
-        if regime == "RANGE":
-            confidence = min(100.0, 100.0 - abs(trend_score) * 80.0 + max(0.0, 20.0 - percentile * 0.2))
-        return RegimeResult(regime, round(trend_score, 4), round(volatility_pct, 4), round(percentile, 2), round(max(0.0, confidence), 2))
+        if regime in {"TREND_UP", "TREND_DOWN"}:
+            confidence = 55.0 + min(35.0, abs(trend_score) * 18.0) + min(5.0, abs(percentile - 50.0) * 0.10)
+        elif regime in {"HIGH_VOLATILITY", "LOW_VOLATILITY"}:
+            confidence = 55.0 + min(35.0, abs(percentile - 50.0) * 0.70) + min(5.0, abs(trend_score) * 2.0)
+        elif regime == "RANGE":
+            confidence = 60.0 + min(30.0, max(0.0, 0.35 - abs(trend_score)) * 80.0) + min(5.0, max(0.0, 20.0 - percentile * 0.2))
+        elif regime == "TRANSITION":
+            confidence = 45.0 + min(30.0, abs(trend_score) * 12.0) + min(10.0, abs(percentile - 50.0) * 0.20)
+        else:
+            confidence = 0.0
+        confidence = min(95.0, max(0.0, confidence))
+        return RegimeResult(regime, round(trend_score, 4), round(volatility_pct, 4), round(percentile, 2), round(confidence, 2))
 
     @classmethod
     def compatibility(cls, regime: str, strategy: str) -> float:
