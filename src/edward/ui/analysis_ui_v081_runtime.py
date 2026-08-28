@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import tkinter as tk
 from dataclasses import replace
-from typing import Any
+from typing import Any, Mapping
 from tkinter import ttk
 
 from edward.api.tinvest_multifactor_client_patch_v081 import install as install_client_patch
@@ -22,6 +22,38 @@ def _fundamental_display_score(fundamental_detail: Any) -> float | None:
     if fundamental_detail is None or fundamental_detail.status == "UNAVAILABLE":
         return None
     return float(fundamental_detail.overall_score)
+
+
+def _fundamental_input(fundamentals: Any, instrument_detail: Mapping[str, Any]) -> Any:
+    """Attach UI instrument metadata without changing the mapped API metrics."""
+    if not isinstance(fundamentals, Mapping):
+        return fundamentals
+
+    snapshot = dict(fundamentals)
+    context_value = snapshot.get("__instrument_context", {})
+    context = dict(context_value) if isinstance(context_value, Mapping) else {}
+
+    for source_key, context_key in (
+        ("instrument_type", "instrument_type"),
+        ("instrument_kind", "instrument_kind"),
+        ("name", "name"),
+        ("ticker", "ticker"),
+        ("sector", "sector"),
+        ("sector_name", "sector_name"),
+        ("industry", "industry"),
+        ("industry_name", "industry_name"),
+        ("asset_class", "asset_class"),
+    ):
+        value = instrument_detail.get(source_key)
+        if value not in (None, ""):
+            context[context_key] = value
+
+    # The catalog currently exposes the instrument name/ticker reliably. They
+    # are useful semantic context when the upstream instrument contract does
+    # not provide a normalized sector/industry classification.
+    if context:
+        snapshot["__instrument_context"] = context
+    return snapshot
 
 
 def install(app_class: type[Any], client_class: type[Any]) -> None:
@@ -260,9 +292,10 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
                 reports = list(data.reports)
                 event = reports[0] if reports else None
                 current_signal = data.signals[0] if data.signals else None
+                fundamental_input = _fundamental_input(data.fundamentals, detail)
                 pipeline = AnalysisPipelineServiceV081().analyze(
                     **kwargs,
-                    fundamentals=data.fundamentals,
+                    fundamentals=fundamental_input,
                     order_book=data.order_book,
                     trades=data.trades,
                     current_signal=current_signal,
@@ -275,7 +308,7 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
                     session_name=data.session_name,
                 )
                 v082_fundamental = FundamentalAnalysisServiceV082.analyze(
-                    data.fundamentals,
+                    fundamental_input,
                     profile=kwargs.get("profile", "medium_term"),
                 )
                 news_result = NewsIntelligenceServiceV081.analyze(data.news, instrument_uid=str(detail["instrument_uid"]))
