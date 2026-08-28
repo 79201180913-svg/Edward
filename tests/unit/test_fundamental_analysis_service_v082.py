@@ -101,3 +101,57 @@ def test_missing_weighted_group_is_renormalized_not_treated_as_zero_score():
 def test_profile_aliases_are_supported():
     result = FundamentalAnalysisServiceV082.analyze({"roe": 20.0}, profile="long-term")
     assert result.strategy_profile == "long_term"
+
+
+def test_explicit_not_applicable_metric_is_excluded_from_group_score_and_coverage():
+    result = FundamentalAnalysisServiceV082.analyze({
+        "roe": 30.0,
+        "roic": 0.0,
+        "roa": 5.0,
+        "net_margin": 10.0,
+        "__not_applicable_metrics": ["roic"],
+    })
+    assert result.business_quality.coverage == 100.0
+    assert result.business_quality.score == (
+        FundamentalAnalysisServiceV082._metric_score("roe", 30.0)
+        + FundamentalAnalysisServiceV082._metric_score("roa", 5.0)
+        + FundamentalAnalysisServiceV082._metric_score("net_margin", 10.0)
+    ) / 3
+    roic = next(metric for metric in result.business_quality.metrics if metric.metric == "roic")
+    assert roic.available is False
+    assert roic.value is None
+    assert "METRIC_NOT_APPLICABLE" in roic.reason_codes
+
+
+def test_bank_context_marks_bank_specific_metrics_not_applicable_even_when_zero():
+    result = FundamentalAnalysisServiceV082.analyze({
+        "roe": 23.0,
+        "roic": 0.0,
+        "roa": 2.8,
+        "net_margin": 0.0,
+        "ebitda_growth": 0.0,
+        "net_debt_to_ebitda": 0.0,
+        "total_debt_to_ebitda": 0.0,
+        "current_ratio": 0.0,
+        "ev_to_ebitda": 0.0,
+        "ev_to_sales": 0.0,
+        "__instrument_context": {"sector": "Banks"},
+    })
+    for group_name, metric_names in {
+        "business_quality": {"roic"},
+        "growth": {"ebitda_growth"},
+        "financial_health": {"net_debt_to_ebitda", "total_debt_to_ebitda", "current_ratio"},
+        "valuation": {"ev_to_ebitda", "ev_to_sales"},
+        "fundamental_momentum": {"ebitda_growth"},
+    }.items():
+        metrics = {metric.metric: metric for metric in getattr(result, group_name).metrics}
+        for name in metric_names:
+            assert metrics[name].available is False
+            assert "METRIC_NOT_APPLICABLE" in metrics[name].reason_codes
+
+
+def test_zero_is_still_a_valid_value_without_non_applicable_context():
+    result = FundamentalAnalysisServiceV082.analyze({"roe": 0.0})
+    metric = next(item for item in result.business_quality.metrics if item.metric == "roe")
+    assert metric.available is True
+    assert metric.value == 0.0
