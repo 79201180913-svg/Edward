@@ -32,6 +32,7 @@ class ContractAnalysisDataV081:
     session_available: bool = False
     fetched_sources: tuple[str, ...] = ()
     failed_sources: tuple[str, ...] = ()
+    unavailable_sources: tuple[str, ...] = ()
 
 
 class ContractAnalysisDataServiceV081:
@@ -222,6 +223,7 @@ class ContractAnalysisDataServiceV081:
             session_available=session_available,
             fetched_sources=tuple(fetched),
             failed_sources=tuple(failed),
+            unavailable_sources=(),
         )
 
 
