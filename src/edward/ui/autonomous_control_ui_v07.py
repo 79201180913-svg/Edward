@@ -84,6 +84,7 @@ class AutonomousControlPanel:
 
         ttk.Label(self.frame, textvariable=self.status_var).pack(side="left")
         self._refresh_controls()
+        self.frame.after(250, self._poll_runtime_state)
 
     def pack(self, **kwargs: Any) -> None:
         self.frame.pack(**kwargs)
@@ -100,9 +101,11 @@ class AutonomousControlPanel:
         self._notify()
 
     def _interval_changed(self, _event: Any = None) -> None:
+        print(f"[AUTONOMOUS][UI] interval selected: {self.interval_var.get()}", flush=True)
         self._notify()
 
     def _start_clicked(self) -> None:
+        print(f"[AUTONOMOUS][UI] start button pressed; interval={self.interval_minutes()}m", flush=True)
         self.state.set_enabled(True)
         self._refresh_controls()
         self._notify()
@@ -112,6 +115,7 @@ class AutonomousControlPanel:
             self.on_start()
 
     def _pause_clicked(self) -> None:
+        print("[AUTONOMOUS][UI] pause button pressed", flush=True)
         self.state.set_enabled(False)
         self._refresh_controls()
         self._notify()
@@ -121,6 +125,7 @@ class AutonomousControlPanel:
             self.on_pause()
 
     def _stop_clicked(self) -> None:
+        print("[AUTONOMOUS][UI] stop button pressed", flush=True)
         self.state.set_enabled(False)
         self._refresh_controls()
         self._notify()
@@ -141,10 +146,20 @@ class AutonomousControlPanel:
 
         if not autonomous:
             self.status_var.set("Режим анализа: автономное исполнение выключено")
+        elif snapshot.message:
+            self.status_var.set(f"{snapshot.status}: {snapshot.message}")
         elif enabled:
             self.status_var.set("● АВТОНОМНАЯ ТОРГОВЛЯ РАБОТАЕТ")
         else:
             self.status_var.set("Автономная торговля не запущена")
+
+    def _poll_runtime_state(self) -> None:
+        """Keep the control-panel status synchronized with the runtime heartbeat."""
+        try:
+            self._refresh_controls()
+        finally:
+            if self.frame.winfo_exists():
+                self.frame.after(250, self._poll_runtime_state)
 
     def _notify(self) -> None:
         if self.on_state is not None:
