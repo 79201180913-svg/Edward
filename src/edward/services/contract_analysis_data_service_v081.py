@@ -29,6 +29,7 @@ class ContractAnalysisDataV081:
     reports: tuple[Any, ...] = ()
     news: tuple[Any, ...] = ()
     session_name: str | None = None
+    session_available: bool = False
     fetched_sources: tuple[str, ...] = ()
     failed_sources: tuple[str, ...] = ()
 
@@ -41,24 +42,38 @@ class ContractAnalysisDataServiceV081:
 
     @staticmethod
     def _first(payload: Any, *keys: str) -> Any:
+        if isinstance(payload, list):
+            return payload[0] if payload else None
         if not isinstance(payload, dict):
             return None
+        normalized = {str(key).replace("_", "").lower(): key for key in payload}
         for key in keys:
-            value = payload.get(key)
-            if isinstance(value, list):
-                return value[0] if value else None
-            if value is not None:
-                return value
+            for candidate in (key, key.replace("_", "")):
+                if candidate in payload:
+                    value = payload[candidate]
+                    return value[0] if isinstance(value, list) and value else value
+            source_key = normalized.get(key.replace("_", "").lower())
+            if source_key is not None:
+                value = payload[source_key]
+                return value[0] if isinstance(value, list) and value else value
         return None
 
     @staticmethod
     def _many(payload: Any, *keys: str) -> list[Any]:
+        if isinstance(payload, list):
+            return payload
         if not isinstance(payload, dict):
             return []
+        normalized = {str(key).replace("_", "").lower(): key for key in payload}
         for key in keys:
-            value = payload.get(key)
-            if isinstance(value, list):
-                return value
+            for candidate in (key, key.replace("_", "")):
+                if candidate in payload:
+                    value = payload[candidate]
+                    return value if isinstance(value, list) else []
+            source_key = normalized.get(key.replace("_", "").lower())
+            if source_key is not None:
+                value = payload[source_key]
+                return value if isinstance(value, list) else []
         return []
 
     @staticmethod
@@ -78,13 +93,13 @@ class ContractAnalysisDataServiceV081:
         exchanges = cls._many(payload, "exchanges", "schedules", "items")
         for exchange in exchanges:
             for day in cls._many(exchange, "days"):
-                date = cls._parse_dt(day.get("date")) if isinstance(day, dict) else None
-                if date is not None and date.date() != now.date():
-                    continue
-                if isinstance(day, dict) and not day.get("is_trading_day", True):
-                    return "UNKNOWN"
                 if not isinstance(day, dict):
                     continue
+                date = cls._parse_dt(day.get("date"))
+                if date is not None and date.date() != now.date():
+                    continue
+                if not day.get("is_trading_day", True):
+                    return "UNKNOWN"
                 ranges = (
                     ("CLEARING", "clearing_start_time", "clearing_end_time"),
                     ("PREMARKET", "premarket_start_time", "premarket_end_time"),
@@ -124,51 +139,55 @@ class ContractAnalysisDataServiceV081:
         raw_risk = call("risk_rates", lambda: self.client.get_risk_rates([instrument_uid]), {})
         raw_reports = call("reports", lambda: self.client.get_asset_reports(instrument_uid, start, now + timedelta(days=90)), {})
         raw_news = call("news", lambda: self.client.get_news(1000), {})
-        # TradingSchedules rejects historical start dates; use the current instant as the lower bound.
         raw_schedules = call(
             "trading_schedules",
-            lambda: self.client.get_trading_schedules(
-                from_dt=now,
-                to_dt=now + timedelta(days=2),
-            ),
+            lambda: self.client.get_trading_schedules(from_dt=now, to_dt=now + timedelta(days=2)),
             {},
         )
 
         fundamentals_raw = self._first(raw_fundamentals, "fundamentals", "statistics")
-        order_book_raw = raw_order_book if raw_order_book else None
-        trades_raw = self._many(raw_trades, "trades")
-        signals_raw = self._many(raw_signals, "signals")
-        dividends_raw = self._many(raw_dividends, "dividends")
-        insiders_raw = self._many(raw_insiders, "insider_deals")
         reports_raw = self._many(raw_reports, "events")
-        news_raw = [item for item in self._many(raw_news, "items", "news")]
+        insiders_raw = self._many(raw_insiders, "insider_deals")
+        dividends_raw = self._many(raw_dividends, "dividends")
+        signals_raw = self._many(raw_signals, "signals")
+        news_raw = self._many(raw_news, "items", "news")
 
+        mapped_fundamentals = map_fundamentals(fundamentals_raw)
+        mapped_order_book = map_order_book(raw_order_book)
+        mapped_risk = map_risk_rates(raw_risk)
         mapped_news = tuple(map_news(item) for item in news_raw)
         relevant_news = tuple(
-            item
-            for item in mapped_news
+            item for item in mapped_news
             if not item.get("instrument_id")
-            or str(instrument_uid) in {
-                str(value) for value in (item.get("instrument_id") or []) if isinstance(value, str)
-            }
+            or str(instrument_uid) in {str(value) for value in (item.get("instrument_id") or []) if isinstance(value, str)}
             or any(
                 isinstance(link, dict)
                 and str(instrument_uid) == str(((link.get("instrument") or {}).get("instrument_uid")))
                 for link in (item.get("instrument_id") or ())
             )
         )
+        session_name = self._current_session(raw_schedules, now)
+        session_available = "trading_schedules" in fetched and session_name is not None
+
+        if raw_fundamentals not in ({}, None) and mapped_fundamentals is None:
+            failed.append("fundamentals_mapping")
+        if raw_risk not in ({}, None) and mapped_risk is None:
+            failed.append("risk_rates_mapping")
+        if raw_schedules not in ({}, None) and session_name is None:
+            failed.append("trading_schedules_mapping")
 
         return ContractAnalysisDataV081(
-            fundamentals=map_fundamentals(fundamentals_raw) if fundamentals_raw is not None else None,
-            order_book=map_order_book(order_book_raw) if order_book_raw else None,
-            trades=tuple(map_trades({"trades": trades_raw})),
+            fundamentals=mapped_fundamentals,
+            order_book=mapped_order_book,
+            trades=tuple(map_trades(raw_trades)),
             signals=tuple(map_signal(item) for item in signals_raw),
             dividends=map_dividend(dividends_raw[0]) if dividends_raw else None,
             insider_transactions=tuple(map_insider(item) for item in insiders_raw),
-            risk_data=map_risk_rates(raw_risk),
+            risk_data=mapped_risk,
             reports=tuple(reports_raw),
             news=relevant_news,
-            session_name=self._current_session(raw_schedules, now),
+            session_name=session_name if session_available else None,
+            session_available=session_available,
             fetched_sources=tuple(fetched),
             failed_sources=tuple(failed),
         )
