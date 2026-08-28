@@ -89,7 +89,8 @@ def test_collector_keeps_instrument_metadata_separate_when_risk_rates_are_empty(
     assert result.instrument_risk_metadata["dlong_client"] == 0.30
     assert result.instrument_risk_metadata["dshort_client"] == 0.55
     assert result.instrument_risk_metadata["short_enabled"] is True
-    assert "risk_rates_mapping" in result.failed_sources
+    assert "risk_rates_mapping" in result.unavailable_sources
+    assert "risk_rates_mapping" not in result.failed_sources
 
 
 def test_collector_accepts_camel_case_contract_wrappers():
@@ -106,6 +107,38 @@ def test_collector_accepts_camel_case_contract_wrappers():
     assert result.fundamentals["free_cash_flow"] == 10.0
     assert result.reports[0]["instrument_id"] == "UID"
     assert result.reports[0]["report_date"] == "2026-09-01T00:00:00Z"
+
+
+def test_collector_accepts_nested_response_wrapper_for_fundamentals():
+    class NestedClient(FakeClient):
+        def get_asset_fundamentals(self, instrument_id):
+            return {
+                "response": {
+                    "data": {
+                        "statistics": [{"roe": 24, "roic": 19, "free_cash_flow_ttm": 12}]
+                    }
+                }
+            }
+
+    result = ContractAnalysisDataServiceV081(NestedClient()).collect("UID")
+
+    assert result.fundamentals is not None
+    assert result.fundamentals["roe"] == 24.0
+    assert result.fundamentals["roic"] == 19.0
+    assert result.fundamentals["free_cash_flow"] == 12.0
+    assert "fundamentals" not in result.unavailable_sources
+
+
+def test_collector_marks_successful_empty_fundamentals_as_unavailable_not_failed():
+    class EmptyFundamentalsClient(FakeClient):
+        def get_asset_fundamentals(self, instrument_id):
+            return {"fundamentals": []}
+
+    result = ContractAnalysisDataServiceV081(EmptyFundamentalsClient()).collect("UID")
+
+    assert result.fundamentals is None
+    assert "fundamentals" in result.unavailable_sources
+    assert "fundamentals_mapping" not in result.failed_sources
 
 
 def test_collector_does_not_mark_empty_schedule_response_as_mapping_failure():
