@@ -12,7 +12,7 @@ MULTIFACTOR_VERSION = "0.8.1"
 @dataclass(frozen=True, slots=True)
 class Evidence:
     name: str
-    direction: str  # POSITIVE / NEGATIVE / NEUTRAL / UNAVAILABLE
+    direction: str
     strength: float
     reliability: float
     freshness: float = 100.0
@@ -190,6 +190,8 @@ class MultiFactorAnalysisServiceV081:
         roic = _num(snapshot, "roic", "return_on_invested_capital")
         margin = _num(snapshot, "net_margin", "net_profit_margin")
         revenue_growth = _num(snapshot, "revenue_growth", "revenue_growth_1y")
+        revenue_growth_3y = _num(snapshot, "revenue_growth_3y")
+        revenue_growth_5y = _num(snapshot, "revenue_growth_5y")
         eps_growth = _num(snapshot, "eps_growth", "eps_growth_1y")
         ebitda_growth = _num(snapshot, "ebitda_growth", "ebitda_growth_1y")
         debt_ebitda = _num(snapshot, "net_debt_to_ebitda", "debt_to_ebitda")
@@ -203,7 +205,12 @@ class MultiFactorAnalysisServiceV081:
         payout = _num(snapshot, "dividend_payout", "payout_ratio")
 
         profitability = mean([_score_positive(roe, scale=1.8), _score_positive(roic, scale=2.0), _score_positive(margin, scale=2.0)])
-        growth = mean([_score_positive(revenue_growth, scale=1.5), _score_positive(eps_growth, scale=1.5), _score_positive(ebitda_growth, scale=1.5)])
+        growth_inputs = [revenue_growth, eps_growth, ebitda_growth]
+        growth_scores = [_score_positive(value, scale=1.5) for value in growth_inputs]
+        for value in (revenue_growth_3y, revenue_growth_5y):
+            if value is not None:
+                growth_scores.append(_score_positive(value, scale=1.5))
+        growth = mean(growth_scores)
         balance = mean([_clamp(75.0 - max(0.0, debt_ebitda or 0.0) * 12.0), _score_positive((current_ratio or 1.0) - 1.0, scale=25.0)])
         cash_flow = _score_positive(fcf, neutral=50.0, scale=0.000001)
         valuations = [x for x in (pe, ps, pb, pfcf) if x is not None and x > 0]
@@ -212,7 +219,7 @@ class MultiFactorAnalysisServiceV081:
         momentum = mean([_score_positive(revenue_growth, scale=1.2), _score_positive(eps_growth, scale=1.2)])
         quality = _clamp(mean([profitability, growth, balance, cash_flow, valuation]))
         direction = "POSITIVE" if quality >= 60 else "NEGATIVE" if quality < 40 else "NEUTRAL"
-        reliability = 75.0 if sum(x is not None for x in (roe, roic, margin, revenue_growth, eps_growth, ebitda_growth, debt_ebitda, current_ratio, fcf, pe)) >= 7 else 50.0
+        reliability = 75.0 if sum(x is not None for x in (roe, roic, margin, revenue_growth, revenue_growth_3y, revenue_growth_5y, eps_growth, ebitda_growth, debt_ebitda, current_ratio, fcf, pe)) >= 7 else 50.0
         evidence = Evidence("fundamentals", direction, quality, reliability)
         return FundamentalFactor(quality, growth, valuation, balance, cash_flow, shareholder, momentum, evidence)
 
@@ -367,15 +374,7 @@ class MultiFactorAnalysisServiceV081:
     @classmethod
     def session(cls, session: str | None, *, execution_allowed: bool = True) -> SessionFactor:
         value = (session or "UNKNOWN").upper()
-        quality = {
-            "REGULAR": 100.0,
-            "OPENING_AUCTION": 80.0,
-            "CLOSING_AUCTION": 80.0,
-            "EVENING": 70.0,
-            "PREMARKET": 45.0,
-            "CLEARING": 0.0,
-            "UNKNOWN": 50.0,
-        }.get(value, 50.0)
+        quality = {"REGULAR": 100.0, "OPENING_AUCTION": 80.0, "CLOSING_AUCTION": 80.0, "EVENING": 70.0, "PREMARKET": 45.0, "CLEARING": 0.0, "UNKNOWN": 50.0}.get(value, 50.0)
         allowed = execution_allowed and value != "CLEARING"
         direction = "POSITIVE" if quality >= 70 else "NEGATIVE" if quality < 40 else "NEUTRAL"
         return SessionFactor(value, quality, allowed, Evidence("session", direction, quality, 90.0))
@@ -384,11 +383,14 @@ class MultiFactorAnalysisServiceV081:
     def instrument_risk(cls, risk_data: Any = None) -> InstrumentRiskFactor:
         if risk_data is None:
             return InstrumentRiskFactor(None, None, False, 0, 0, Evidence("instrument_risk", "UNAVAILABLE", 0, 0, available=False, reason="NO_RISK_RATE_DATA"))
-        dlong = _num(risk_data, "dlong", "dlong_client")
-        dshort = _num(risk_data, "dshort", "dshort_client")
+        dlong = _num(risk_data, "dlong_client", "dlong")
+        dshort = _num(risk_data, "dshort_client", "dshort")
         short_enabled = bool(_value(risk_data, "short_enabled_flag", "short_enabled", default=False))
-        capital = _clamp(100.0 - max(0.0, (dlong or 0.0) - 10.0) * 4.0)
-        risk = _clamp(50.0 + max(0.0, (dlong or 0.0) - 10.0) * 5.0 + max(0.0, (dshort or 0.0) - 10.0) * 4.0)
+        if dlong is None and dshort is None:
+            return InstrumentRiskFactor(None, None, short_enabled, 0, 0, Evidence("instrument_risk", "UNAVAILABLE", 0, 0, available=False, reason="INCOMPLETE_RISK_RATE_DATA"))
+        effective_margin = dlong if not short_enabled or dshort is None else max(dlong or 0.0, dshort)
+        capital = _clamp(100.0 - effective_margin)
+        risk = _clamp(50.0 + effective_margin * (40.0 / 30.0))
         direction = "NEGATIVE" if risk >= 65 else "NEUTRAL"
         return InstrumentRiskFactor(dlong, dshort, short_enabled, capital, risk, Evidence("instrument_risk", direction, risk, 90.0))
 
