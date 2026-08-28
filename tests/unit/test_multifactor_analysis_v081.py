@@ -43,6 +43,27 @@ def test_fundamental_quality_rewards_profitability_growth_and_cash_flow():
     assert factor.evidence.direction == "POSITIVE"
 
 
+def test_fundamental_growth_uses_contract_three_and_five_year_revenue_metrics():
+    without_long_term = MultiFactorAnalysisServiceV081.fundamentals(
+        {
+            "revenue_growth": 0,
+            "eps_growth": 0,
+            "ebitda_growth": 0,
+        }
+    )
+    with_long_term = MultiFactorAnalysisServiceV081.fundamentals(
+        {
+            "revenue_growth": 0,
+            "revenue_growth_3y": 20,
+            "revenue_growth_5y": 30,
+            "eps_growth": 0,
+            "ebitda_growth": 0,
+        }
+    )
+
+    assert with_long_term.growth_score > without_long_term.growth_score
+
+
 def test_microstructure_penalizes_wide_spread_and_rewards_liquidity():
     good = MultiFactorAnalysisServiceV081.microstructure(
         {
@@ -95,21 +116,15 @@ def test_signal_reliability_requires_historical_evidence():
 
 def test_event_risk_rises_close_to_report_date():
     now = datetime(2026, 8, 28, tzinfo=timezone.utc)
-    near = MultiFactorAnalysisServiceV081.event_risk(
-        {"report_date": now + timedelta(days=2)}, now=now
-    )
-    far = MultiFactorAnalysisServiceV081.event_risk(
-        {"report_date": now + timedelta(days=60)}, now=now
-    )
+    near = MultiFactorAnalysisServiceV081.event_risk({"report_date": now + timedelta(days=2)}, now=now)
+    far = MultiFactorAnalysisServiceV081.event_risk({"report_date": now + timedelta(days=60)}, now=now)
 
     assert near.event_risk_score > far.event_risk_score
     assert near.evidence.direction == "NEGATIVE"
 
 
 def test_dividend_factor_uses_yield_growth_and_payout():
-    factor = MultiFactorAnalysisServiceV081.dividends(
-        {"dividend_yield": 6, "dividend_payout": 40, "dividend_growth": 8, "dividend_regularity": 80}
-    )
+    factor = MultiFactorAnalysisServiceV081.dividends({"dividend_yield": 6, "dividend_payout": 40, "dividend_growth": 8, "dividend_regularity": 80})
 
     assert factor.yield_pct == 6
     assert factor.growth_score > 50
@@ -139,9 +154,7 @@ def test_clearing_session_blocks_execution():
 
 
 def test_instrument_risk_penalizes_high_margin_rates():
-    factor = MultiFactorAnalysisServiceV081.instrument_risk(
-        {"dlong_client": 25, "dshort_client": 35, "short_enabled": True}
-    )
+    factor = MultiFactorAnalysisServiceV081.instrument_risk({"dlong_client": 25, "dshort_client": 35, "short_enabled": True})
 
     assert factor.short_enabled is True
     assert factor.risk_score > 50
@@ -149,12 +162,8 @@ def test_instrument_risk_penalizes_high_margin_rates():
 
 
 def test_portfolio_factor_penalizes_high_current_weight_and_marginal_risk():
-    low = MultiFactorAnalysisServiceV081.portfolio(
-        current_weight_pct=2, marginal_risk_pct=0.5, diversification_benefit_pct=3, max_position_weight_pct=10
-    )
-    high = MultiFactorAnalysisServiceV081.portfolio(
-        current_weight_pct=12, marginal_risk_pct=3, diversification_benefit_pct=-1, max_position_weight_pct=10
-    )
+    low = MultiFactorAnalysisServiceV081.portfolio(current_weight_pct=2, marginal_risk_pct=0.5, diversification_benefit_pct=3, max_position_weight_pct=10)
+    high = MultiFactorAnalysisServiceV081.portfolio(current_weight_pct=12, marginal_risk_pct=3, diversification_benefit_pct=-1, max_position_weight_pct=10)
 
     assert low.concentration_score > high.concentration_score
     assert low.evidence.quality > high.evidence.quality
@@ -164,10 +173,8 @@ def test_aggregate_evidence_penalizes_conflicting_sources():
     positive = MultiFactorAnalysisServiceV081.fundamentals(
         {"roe": 20, "roic": 20, "net_margin": 15, "revenue_growth": 15, "eps_growth": 15, "ebitda_growth": 15, "net_debt_to_ebitda": 0.5, "current_ratio": 2, "free_cash_flow": 20_000_000, "pe": 8}
     )
-    signal = MultiFactorAnalysisServiceV081.signals(
-        {"direction": "SELL"},
-        [{"direction": "SELL", "initial_price": 100, "close_price": 90}] * 20,
-    )
+    signal = MultiFactorAnalysisServiceV081.signals({"direction": "SELL"}, [{"direction": "SELL", "initial_price": 100, "close_price": 90}] * 20)
+
     score, reliability, conflict = MultiFactorAnalysisServiceV081.aggregate([positive.evidence, signal.evidence])
 
     assert score >= 0
