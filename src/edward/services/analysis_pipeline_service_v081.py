@@ -5,6 +5,7 @@ from typing import Any, Mapping, Sequence
 
 from edward.services.analysis_pipeline_service_v08 import AnalysisPipelineServiceV08, AnalysisPipelineV08Result
 from edward.services.multifactor_analysis_service_v081 import MultiFactorAnalysisServiceV081, MultiFactorResult
+from edward.services.multifactor_normalization_v081 import normalize
 from edward.services.multifactor_overlay_service_v081 import MultiFactorOverlayResult, MultiFactorOverlayServiceV081
 
 ANALYSIS_PIPELINE_V081_VERSION = "0.8.1"
@@ -106,6 +107,13 @@ class AnalysisPipelineServiceV081:
             expected_return_impact_pct=expected_return_impact_pct,
             max_position_weight_pct=max_position_weight_pct,
             current_price=current_price,
+        )
+        multifactor = normalize(
+            multifactor,
+            portfolio_context_available=bool(
+                portfolio_weights or portfolio_returns or candidate_weight > 0 or current_weight_pct > 0 or marginal_risk_pct != 0 or diversification_benefit_pct != 0
+            ),
+            session_available=session_name is not None,
         )
         adjusted, overlay = MultiFactorOverlayServiceV081.apply(base, multifactor)
         return AnalysisPipelineV081Result(adjusted, multifactor, overlay)
