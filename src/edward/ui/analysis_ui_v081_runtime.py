@@ -7,7 +7,7 @@ from tkinter import ttk
 
 from edward.api.tinvest_multifactor_client_patch_v081 import install as install_client_patch
 from edward.services.analysis_pipeline_service_v081 import AnalysisPipelineServiceV081
-from edward.services.robust_contract_analysis_data_service_v081 import RobustContractAnalysisDataServiceV081
+from edward.services.semantic_robust_contract_analysis_data_service_v081 import SemanticRobustContractAnalysisDataServiceV081
 from edward.services.news_intelligence_service_v081 import NewsIntelligenceServiceV081
 from edward.services.news_overlay_service_v081 import NewsOverlayServiceV081
 
@@ -102,7 +102,7 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
                 self.client = app.client
 
             def analyze(self, **kwargs: Any):
-                collector = RobustContractAnalysisDataServiceV081(self.client)
+                collector = SemanticRobustContractAnalysisDataServiceV081(self.client)
                 data = collector.collect(str(detail["instrument_uid"]))
                 reports = list(data.reports)
                 event = reports[0] if reports else None
