@@ -3,9 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Any, Mapping, Sequence
 
-from edward.services.analysis_pipeline_service_v081 import (
-    AnalysisPipelineServiceV081,
-    AnalysisPipelineV081Result,
+from edward.services.analysis_pipeline_service_v081 import AnalysisPipelineServiceV081
+from edward.services.entry_quality_integration_v082 import (
+    EntryQualityIntegrationResult,
+    EntryQualityIntegrationServiceV082,
 )
 from edward.services.fundamental_analysis_service_v082 import (
     FundamentalAnalysisResult,
@@ -20,10 +21,11 @@ ANALYSIS_PIPELINE_V082_VERSION = "0.8.2"
 
 @dataclass(frozen=True, slots=True)
 class AnalysisPipelineV082Result:
-    """v0.8.2 result: v0.8.1 pipeline with the structured fundamental layer wired in."""
+    """v0.8.2 result: stable v0.8.1 pipeline plus structured fundamentals and entry quality."""
 
     base: Any
     fundamental: FundamentalAnalysisResult
+    entry_quality: EntryQualityIntegrationResult
     version: str = ANALYSIS_PIPELINE_V082_VERSION
 
     @property
@@ -50,12 +52,9 @@ class AnalysisPipelineV082Result:
 class AnalysisPipelineServiceV082:
     """v0.8.2 facade reusing the stable v0.8.1 factor pipeline.
 
-    The structured fundamental result is calculated for every caller. When the
-    supplied base result exposes the v0.8.1 multifactor contract, only its
-    fundamentals factor is replaced and the existing normalization/overlay is
-    re-applied. Lightweight test doubles and compatible alternate base results
-    that do not expose multifactor are returned unchanged apart from the added
-    structured fundamental result.
+    Fundamentals are calculated once and adapted into the existing multifactor
+    contract. Entry quality is calculated alongside that result but does not alter
+    the final opportunity or BUY/SELL decision yet.
     """
 
     def __init__(self, *, base_pipeline: AnalysisPipelineServiceV081 | None = None) -> None:
@@ -93,8 +92,26 @@ class AnalysisPipelineServiceV082:
         )
 
         fundamental = FundamentalAnalysisServiceV082.analyze(fundamentals, profile=profile)
+        market_context = {
+            "regime": kwargs.get("regime", kwargs.get("market_regime")),
+            "regime_score": kwargs.get("regime_score"),
+            "current_signal": kwargs.get("current_signal"),
+            "microstructure_score": kwargs.get("microstructure_score"),
+            "volume_pressure_score": kwargs.get("volume_pressure_score"),
+        }
+        entry_quality = EntryQualityIntegrationServiceV082.evaluate(
+            fundamental=fundamental,
+            market=market_context,
+            profile=profile,
+            execution_allowed=kwargs.get("session_execution_allowed", True),
+        )
+
         if not hasattr(base_result, "multifactor"):
-            return AnalysisPipelineV082Result(base=base_result, fundamental=fundamental)
+            return AnalysisPipelineV082Result(
+                base=base_result,
+                fundamental=fundamental,
+                entry_quality=entry_quality,
+            )
 
         adapted_fundamental = FundamentalFactorAdapterV082.adapt(fundamental)
         multifactor = replace(base_result.multifactor, fundamentals=adapted_fundamental)
@@ -112,7 +129,11 @@ class AnalysisPipelineServiceV082:
         )
         adjusted, overlay = MultiFactorOverlayServiceV081.apply(base_result.base, multifactor)
         integrated_base = replace(base_result, base=adjusted, multifactor=multifactor, overlay=overlay)
-        return AnalysisPipelineV082Result(base=integrated_base, fundamental=fundamental)
+        return AnalysisPipelineV082Result(
+            base=integrated_base,
+            fundamental=fundamental,
+            entry_quality=entry_quality,
+        )
 
 
 __all__ = [
