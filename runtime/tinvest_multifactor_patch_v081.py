@@ -116,15 +116,39 @@ def _get_future(self, instrument_id: str, *, id_type: str = "INSTRUMENT_ID_TYPE_
     return self._rest_request("InstrumentsService/FutureBy", payload)
 
 
+def _single_instrument_id(payload: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = payload.get(key)
+        if isinstance(value, list):
+            if value:
+                return str(value[0])
+        elif value is not None:
+            return str(value)
+    raise KeyError(keys[0])
+
+
+def _instrument_ids(payload: dict[str, Any]) -> list[str]:
+    value = payload.get("instrument_id")
+    if value is None:
+        value = payload.get("instrument_ids")
+    if value is None:
+        value = payload.get("assets")
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    if value is not None:
+        return [str(value)]
+    return []
+
+
 _ROUTES = {
-    "/analysis/fundamentals": lambda p: adapter.STATE.get_asset_fundamentals(p["instrument_id"]),
+    "/analysis/fundamentals": lambda p: adapter.STATE.get_asset_fundamentals(_single_instrument_id(p, "assets", "instrument_id")),
     "/analysis/reports": lambda p: adapter.STATE.get_asset_reports(p["instrument_id"], p.get("from"), p.get("to")),
     "/analysis/dividends": lambda p: adapter.STATE.get_dividends(p["instrument_id"], p.get("from"), p.get("to")),
-    "/analysis/risk-rates": lambda p: adapter.STATE.get_risk_rates(p.get("instrument_ids", [])),
+    "/analysis/risk-rates": lambda p: adapter.STATE.get_risk_rates(_instrument_ids(p)),
     "/analysis/insider-deals": lambda p: adapter.STATE.get_insider_deals(p["instrument_id"], p.get("limit", 100)),
     "/analysis/order-book": lambda p: adapter.STATE.get_order_book(p["instrument_id"], p.get("depth", 10)),
     "/analysis/last-trades": lambda p: adapter.STATE.get_last_trades(p["instrument_id"], p.get("from"), p.get("to")),
-    "/analysis/market-values": lambda p: adapter.STATE.get_market_values(p.get("instrument_ids", []), p.get("values", [])),
+    "/analysis/market-values": lambda p: adapter.STATE.get_market_values(_instrument_ids(p), p.get("values", [])),
     "/analysis/signals": lambda p: adapter.STATE.get_signals(p.get("instrument_uid"), p.get("strategy_id"), p.get("from"), p.get("to"), p.get("active", "SIGNAL_STATE_ALL")),
     "/analysis/signal-strategies": lambda p: adapter.STATE.get_signal_strategies(),
     "/analysis/news": lambda p: adapter.STATE.get_news(p.get("limit", 1000), p.get("cursor")),
