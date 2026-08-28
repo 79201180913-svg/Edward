@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from edward.services.contract_analysis_data_service_v081 import ContractAnalysisDataServiceV081
@@ -10,16 +9,19 @@ from edward.services.contract_evidence_mapper_v081 import map_order_book, map_ri
 
 
 class RobustContractAnalysisDataServiceV081(ContractAnalysisDataServiceV081):
-    """v0.8.1 collector with recursive contract-response unwrapping."""
+    """v0.8.1 collector with recursive and direct contract-response discovery."""
 
-    _ENVELOPE_KEYS = {
-        "data",
-        "response",
-        "result",
-        "payload",
-        "body",
-        "content",
-        "value",
+    _DIRECT_FIELD_GROUPS = {
+        "fundamentals": {
+            "roe", "roic", "net_margin_mrq", "revenue_ttm", "free_cash_flow_ttm",
+            "pe_ratio_ttm", "eps_change_five_years", "net_debt_to_ebitda",
+        },
+        "risk_rates": {"long_risk_rate", "short_risk_rate", "dlong", "dshort", "dlong_client", "dshort_client"},
+        "reports": {"report_date", "period_year", "period_num", "period_type"},
+        "insiders": {"quantity", "direction", "investor_position", "percentage"},
+        "news": {"id", "title", "source", "priority", "ts"},
+        "signals": {"signal_id", "strategy_id", "direction", "initial_price"},
+        "dividends": {"yield_value", "dividend_yield", "regularity", "declared_date"},
     }
 
     @classmethod
@@ -63,6 +65,15 @@ class RobustContractAnalysisDataServiceV081(ContractAnalysisDataServiceV081):
         return None
 
     @classmethod
+    def _looks_like_direct_object(cls, mapping: Mapping[str, Any], groups: tuple[str, ...]) -> bool:
+        normalized = {cls._normalize(str(key)) for key in mapping}
+        for group in groups:
+            required = {cls._normalize(key) for key in cls._DIRECT_FIELD_GROUPS[group]}
+            if normalized & required:
+                return True
+        return False
+
+    @classmethod
     def _first(cls, payload: Any, *keys: str) -> Any:
         for current in cls._walk(payload):
             if isinstance(current, Mapping):
@@ -71,6 +82,10 @@ class RobustContractAnalysisDataServiceV081(ContractAnalysisDataServiceV081):
                     if isinstance(value, list):
                         return value[0] if value else None
                     return value
+        # Some adapter responses are already the contract object itself rather than
+        # an object under `statistics`/`fundamentals`. Detect those directly.
+        if isinstance(payload, Mapping) and cls._looks_like_direct_object(payload, ("fundamentals",)):
+            return payload
         return None
 
     @classmethod
@@ -84,6 +99,22 @@ class RobustContractAnalysisDataServiceV081(ContractAnalysisDataServiceV081):
             for raw_key, value in current.items():
                 if cls._normalize(str(raw_key)) in target_names and isinstance(value, list):
                     return value
+        if isinstance(payload, Mapping):
+            group_map = {
+                "risk_rates": ("risk_rates",),
+                "instrument_risk_rates": ("risk_rates",),
+                "events": ("reports",),
+                "insider_deals": ("insiders",),
+                "items": ("news",),
+                "news": ("news",),
+                "signals": ("signals",),
+                "dividends": ("dividends",),
+            }
+            groups: set[str] = set()
+            for key in keys:
+                groups.update(group_map.get(key, ()))
+            if groups and cls._looks_like_direct_object(payload, tuple(groups)):
+                return [payload]
         return []
 
     def collect(self, instrument_uid: str):
