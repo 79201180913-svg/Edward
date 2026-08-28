@@ -7,7 +7,7 @@ from tkinter import ttk
 
 from edward.api.tinvest_multifactor_client_patch_v081 import install as install_client_patch
 from edward.services.analysis_pipeline_service_v081 import AnalysisPipelineServiceV081
-from edward.services.contract_analysis_data_service_v081 import ContractAnalysisDataServiceV081
+from edward.services.robust_contract_analysis_data_service_v081 import RobustContractAnalysisDataServiceV081
 from edward.services.news_intelligence_service_v081 import NewsIntelligenceServiceV081
 from edward.services.news_overlay_service_v081 import NewsOverlayServiceV081
 
@@ -48,12 +48,7 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
             ),
             None,
         )
-        panel.pack(
-            fill="x",
-            padx=16,
-            pady=(0, 10),
-            before=decision_frame,
-        )
+        panel.pack(fill="x", padx=16, pady=(0, 10), before=decision_frame)
         for column in range(5):
             panel.columnconfigure(column, weight=1)
         values = {key: tk.StringVar(value="N/A") for key in (
@@ -80,7 +75,10 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
             runtime._v081_last_news = news_result
             runtime._v081_last_failed_sources = failed_sources
             factors = result.multifactor
-            values["fundamental"].set(f"{factors.fundamentals.quality_score:.1f}")
+            values["fundamental"].set(
+                f"{factors.fundamentals.quality_score:.1f}"
+                if factors.fundamentals.evidence.available else "N/A"
+            )
             values["micro"].set(f"{factors.microstructure.entry_quality_score:.1f}" if factors.microstructure.evidence.available else "N/A")
             values["volume"].set(f"{factors.volume_pressure.accumulation_score:.1f}" if factors.volume_pressure.evidence.available else "N/A")
             values["signals"].set(f"{factors.signals.reliability_pct:.1f}" if factors.signals.evidence.available else "N/A")
@@ -104,7 +102,7 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
                 self.client = app.client
 
             def analyze(self, **kwargs: Any):
-                collector = ContractAnalysisDataServiceV081(self.client)
+                collector = RobustContractAnalysisDataServiceV081(self.client)
                 data = collector.collect(str(detail["instrument_uid"]))
                 reports = list(data.reports)
                 event = reports[0] if reports else None
