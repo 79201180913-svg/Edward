@@ -34,4 +34,5 @@ class ForecastQualityAdapterV08:
             candles=candles,
             horizons=horizons,
             forecast_fn=forecast,
+            min_history=max(self._forecast_service.MIN_CANDLES, self._quality_service.MIN_ORIGIN_OBSERVATIONS),
         )
