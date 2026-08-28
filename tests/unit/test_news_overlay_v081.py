@@ -21,7 +21,14 @@ def _pipeline(score=80.0):
         critical_risk=False,
     )
     opportunity = OpportunityResult(context, score, True, True, "base", None)
-    confidence = ConfidenceResult(overall_confidence=60.0, level="Medium", strategy_confidence=60.0, forecast_confidence=60.0, regime_confidence=60.0, portfolio_confidence=60.0)
+    confidence = ConfidenceResult(
+        strategy_confidence=60.0,
+        forecast_confidence=60.0,
+        regime_confidence=60.0,
+        portfolio_confidence=60.0,
+        overall_confidence=60.0,
+        level="Medium",
+    )
     analysis = AnalysisResult(
         instrument_uid="UID", ticker="TEST", profile="medium_term", risk_profile="balanced", horizon="medium",
         market_regime="TREND_UP", recommendation="HOLD", confidence="Medium", score=score,
