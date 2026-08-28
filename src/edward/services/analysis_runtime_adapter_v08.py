@@ -3,11 +3,11 @@ from __future__ import annotations
 from typing import Any, Iterable
 
 from edward.services.analysis_service import AnalysisResult, Candle, AnalysisService
-from edward.services.analysis_pipeline_service_v08 import AnalysisPipelineServiceV08
+from edward.services.analysis_pipeline_service_v08_fixed import AnalysisPipelineServiceV08
 
 
 class AnalysisRuntimeAdapterV08:
-    """Expose v0.8 analysis behind a stable runtime-facing method."""
+    """Expose corrected v0.8 analysis behind a stable runtime-facing method."""
 
     def __init__(self, *, enabled: bool = True, legacy_service: AnalysisService | None = None) -> None:
         self.enabled = enabled
