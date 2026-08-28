@@ -86,14 +86,10 @@ class SemanticRobustContractAnalysisDataServiceV081(RobustContractAnalysisDataSe
         summary: dict[str, Any] = {
             "root_type": type(payload).__name__,
             "root_keys": list(payload.keys()) if isinstance(payload, Mapping) else None,
-            "collections": cls._find_collections(
-                payload,
-                "instrument_risk_rates",
-                "risk_rates",
-                "items",
-            ),
+            "collections": cls._find_collections(payload, "instrument_risk_rates", "risk_rates", "items"),
             "error_items": [],
             "direct_numeric_items": [],
+            "contract_rate_array_items": [],
         }
         normalized_keys = {
             cls._normalize("instrument_risk_rates"),
@@ -108,34 +104,26 @@ class SemanticRobustContractAnalysisDataServiceV081(RobustContractAnalysisDataSe
                     continue
                 for index, item in enumerate(value):
                     if not isinstance(item, Mapping):
-                        summary["error_items"].append({
-                            "index": index,
-                            "item_type": type(item).__name__,
-                        })
+                        summary["error_items"].append({"index": index, "item_type": type(item).__name__})
                         continue
+                    long_rates = item.get("long_risk_rates")
+                    short_rates = item.get("short_risk_rates")
                     error = item.get("error", item.get("Error"))
                     entry = {
                         "index": index,
                         "keys": list(item.keys()),
                         "instrument_uid": item.get("instrument_uid"),
                         "error": None if error is None else str(error),
-                        "long_risk_rate": item.get("long_risk_rate"),
-                        "short_risk_rate": item.get("short_risk_rate"),
-                        "dlong": item.get("dlong"),
-                        "dshort": item.get("dshort"),
-                        "dlong_client": item.get("dlong_client"),
-                        "dshort_client": item.get("dshort_client"),
+                        "long_risk_rates_type": type(long_rates).__name__,
+                        "long_risk_rates_len": len(long_rates) if isinstance(long_rates, (list, tuple)) else None,
+                        "short_risk_rates_type": type(short_rates).__name__,
+                        "short_risk_rates_len": len(short_rates) if isinstance(short_rates, (list, tuple)) else None,
                     }
                     if entry["error"]:
                         summary["error_items"].append(entry)
-                    if any(entry[key] is not None for key in (
-                        "long_risk_rate",
-                        "short_risk_rate",
-                        "dlong",
-                        "dshort",
-                        "dlong_client",
-                        "dshort_client",
-                    )):
+                    if (isinstance(long_rates, (list, tuple)) or isinstance(short_rates, (list, tuple))):
+                        summary["contract_rate_array_items"].append(entry)
+                    if any(item.get(key) is not None for key in ("long_risk_rate", "short_risk_rate", "dlong", "dshort", "dlong_client", "dshort_client")):
                         summary["direct_numeric_items"].append(entry)
         return summary
 
@@ -158,13 +146,36 @@ class SemanticRobustContractAnalysisDataServiceV081(RobustContractAnalysisDataSe
                         return True
         return False
 
-    def collect(self, instrument_uid: str):
-        logger.warning(
-            "[V081 SEMANTIC START] instrument_uid=%s client=%s",
-            instrument_uid,
-            type(self.client).__name__,
-        )
+    @classmethod
+    def _has_empty_risk_rate_arrays(cls, payload: Any) -> bool:
+        """True when a valid RiskRateResult exposes rate arrays and all are empty."""
+        normalized_keys = {
+            cls._normalize("instrument_risk_rates"),
+            cls._normalize("risk_rates"),
+            cls._normalize("items"),
+        }
+        found_result = False
+        for current in cls._walk(payload):
+            if not isinstance(current, Mapping):
+                continue
+            for raw_key, value in current.items():
+                if cls._normalize(str(raw_key)) not in normalized_keys or not isinstance(value, (list, tuple)):
+                    continue
+                for item in value:
+                    if not isinstance(item, Mapping):
+                        continue
+                    long_rates = item.get("long_risk_rates")
+                    short_rates = item.get("short_risk_rates")
+                    if isinstance(long_rates, (list, tuple)) or isinstance(short_rates, (list, tuple)):
+                        found_result = True
+                        long_empty = not isinstance(long_rates, (list, tuple)) or len(long_rates) == 0
+                        short_empty = not isinstance(short_rates, (list, tuple)) or len(short_rates) == 0
+                        if long_empty and short_empty:
+                            return True
+        return False if found_result else False
 
+    def collect(self, instrument_uid: str):
+        logger.warning("[V081 SEMANTIC START] instrument_uid=%s client=%s", instrument_uid, type(self.client).__name__)
         result = super().collect(instrument_uid)
         failed = set(result.failed_sources)
         unavailable = set()
@@ -187,12 +198,7 @@ class SemanticRobustContractAnalysisDataServiceV081(RobustContractAnalysisDataSe
             if failure_name not in failed:
                 continue
 
-            logger.warning(
-                "[V081 SEMANTIC RETRY] failure=%s source=%s keys=%s",
-                failure_name,
-                source_name,
-                keys,
-            )
+            logger.warning("[V081 SEMANTIC RETRY] failure=%s source=%s keys=%s", failure_name, source_name, keys)
             try:
                 if source_name == "fundamentals":
                     raw = self.client.get_asset_fundamentals(instrument_uid)
@@ -203,26 +209,13 @@ class SemanticRobustContractAnalysisDataServiceV081(RobustContractAnalysisDataSe
                 else:
                     raw = self.client.get_risk_rates([instrument_uid])
             except Exception as exc:
-                logger.exception(
-                    "[V081 SEMANTIC RETRY ERROR] source=%s exc=%r",
-                    source_name,
-                    exc,
-                )
+                logger.exception("[V081 SEMANTIC RETRY ERROR] source=%s exc=%r", source_name, exc)
                 continue
 
             if source_name == "risk_rates":
-                logger.warning(
-                    "[V081 RISK RAW] instrument_uid=%s summary=%r",
-                    instrument_uid,
-                    self._risk_debug_summary(raw),
-                )
+                logger.warning("[V081 RISK RAW] instrument_uid=%s summary=%r", instrument_uid, self._risk_debug_summary(raw))
                 risk_items = self._many(raw, *keys)
-                logger.warning(
-                    "[V081 RISK MAP INPUT] instrument_uid=%s item_count=%d items=%r",
-                    instrument_uid,
-                    len(risk_items),
-                    risk_items,
-                )
+                logger.warning("[V081 RISK MAP INPUT] instrument_uid=%s item_count=%d items=%r", instrument_uid, len(risk_items), risk_items)
                 mapped_risk = map_risk_rates({"risk_rates": risk_items}) if risk_items else None
                 logger.warning(
                     "[V081 RISK MAP RESULT] instrument_uid=%s mapped=%r mapped_type=%s",
@@ -238,6 +231,15 @@ class SemanticRobustContractAnalysisDataServiceV081(RobustContractAnalysisDataSe
                         source_name,
                         failure_name,
                         mapped_risk,
+                    )
+                    continue
+
+                if self._has_empty_risk_rate_arrays(raw) or self._has_contract_error(raw, *keys):
+                    failed.discard(failure_name)
+                    unavailable.add(source_name)
+                    logger.warning(
+                        "[V081 SEMANTIC -> RISK UNAVAILABLE] source=%s reason=EMPTY_OR_ERROR_RATE_RESULT",
+                        source_name,
                     )
                     continue
 
@@ -257,30 +259,17 @@ class SemanticRobustContractAnalysisDataServiceV081(RobustContractAnalysisDataSe
             if empty or contract_error:
                 failed.discard(failure_name)
                 unavailable.add(source_name)
-                logger.warning(
-                    "[V081 SEMANTIC -> UNAVAILABLE] source=%s removed_failure=%s",
-                    source_name,
-                    failure_name,
-                )
+                logger.warning("[V081 SEMANTIC -> UNAVAILABLE] source=%s removed_failure=%s", source_name, failure_name)
             elif not nonempty and isinstance(raw, (Mapping, list, tuple)) and not raw:
                 failed.discard(failure_name)
                 unavailable.add(source_name)
-                logger.warning(
-                    "[V081 SEMANTIC -> EMPTY UNAVAILABLE] source=%s removed_failure=%s",
-                    source_name,
-                    failure_name,
-                )
+                logger.warning("[V081 SEMANTIC -> EMPTY UNAVAILABLE] source=%s removed_failure=%s", source_name, failure_name)
             else:
-                logger.warning(
-                    "[V081 SEMANTIC KEEP FAILURE] source=%s failure=%s",
-                    source_name,
-                    failure_name,
-                )
+                logger.warning("[V081 SEMANTIC KEEP FAILURE] source=%s failure=%s", source_name, failure_name)
 
         diagnostics = list(getattr(result, "unavailable_sources", ()) or ())
         diagnostics.extend(sorted(unavailable))
         deduped = tuple(dict.fromkeys(diagnostics))
-
         if hasattr(result, "unavailable_sources"):
             result = replace(result, unavailable_sources=deduped)
         result = replace(result, failed_sources=tuple(sorted(failed)))
