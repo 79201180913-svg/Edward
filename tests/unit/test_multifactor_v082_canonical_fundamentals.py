@@ -30,7 +30,6 @@ def test_v081_fundamentals_delegates_to_v082_for_mapped_snapshot():
     }
     factor = MultiFactorAnalysisServiceV081.fundamentals(snapshot)
     canonical = FundamentalAnalysisServiceV082.analyze(snapshot)
-
     assert factor.evidence.available is True
     assert factor.evidence.reason is None
     assert factor.evidence.strength == canonical.overall_score
