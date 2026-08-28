@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Mapping, Sequence
 
 from edward.services.analysis_pipeline_service_v08 import AnalysisPipelineServiceV08, AnalysisPipelineV08Result
@@ -33,6 +33,34 @@ class AnalysisPipelineV081Result:
     @property
     def portfolio_impact(self):
         return self.base.portfolio_impact
+
+    @property
+    def forecast_quality_score(self):
+        return self.base.forecast_quality_score
+
+    @property
+    def regime_confidence(self):
+        return self.base.regime_confidence
+
+    @property
+    def evidence_strategy(self):
+        return self.base.evidence_strategy
+
+    @property
+    def portfolio_context_available(self):
+        return self.base.portfolio_context_available
+
+    @property
+    def confidence(self):
+        base_confidence = self.base.confidence
+        if base_confidence is None:
+            return None
+        level = "High" if self.overlay.adjusted_confidence >= 75.0 else "Medium" if self.overlay.adjusted_confidence >= 55.0 else "Low"
+        return replace(
+            base_confidence,
+            overall_confidence=self.overlay.adjusted_confidence,
+            level=level,
+        )
 
 
 class AnalysisPipelineServiceV081:
