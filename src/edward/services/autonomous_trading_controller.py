@@ -112,12 +112,18 @@ class AutonomousTradingController:
             if not allowed:
                 detail = ";".join(reasons) if reasons else reason
                 raise RuntimeError(f"PREFLIGHT_REJECTED:{detail}")
-            return self._execute_sequence(
+            sequence = self._execute_sequence(
                 account_id=account_id,
                 plan=single_step_plan,
                 result_factory=result_factory,
                 mode=mode,
-            ).steps[0]
+            )
+            if not sequence.steps:
+                raise RuntimeError("EXECUTION_SEQUENCE_EMPTY")
+            item = sequence.steps[0]
+            if not item.completed:
+                raise RuntimeError(item.reason or "EXECUTION_STEP_FAILED")
+            return item
 
         def verify_one(step: Any, execution: Any, state: AccountState) -> Any:
             verification = getattr(execution, "verification", None)
