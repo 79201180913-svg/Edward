@@ -309,18 +309,34 @@ def install_autonomous_ui(app_class: type) -> None:
                 return
             try:
                 facade = AutonomousTradingRuntimeFacade(self.client, aid, profile=profile_var.get())
-                config = AutonomousRuntimeConfig(interval_seconds=300.0)
-                service = AutonomousRuntimeService(run_cycle=facade.run_cycle, config=config)
+                interval_minutes = control.interval_minutes()
+                config = AutonomousRuntimeConfig(interval_seconds=float(interval_minutes * 60))
+                service = AutonomousRuntimeService(
+                    run_cycle=facade.run_cycle,
+                    state_service=control.state,
+                    config=config,
+                )
                 runtime_holder["service"] = service
                 runtime_holder["facade"] = facade
                 service.start()
-                log_ui("Автономный runtime запущен; цикл выполняется каждые 300 секунд.")
-                logger.info("autonomous_runtime_started account_id=%s interval=300", aid)
+                log_ui(f"Автономный runtime запущен; цикл выполняется каждые {interval_minutes} минут.")
+                logger.info("autonomous_runtime_started account_id=%s interval=%s", aid, interval_minutes)
                 _sync_runtime_status()
             except Exception as exc:
                 logger.exception("autonomous_runtime_start_failed account_id=%s", aid)
+                try:
+                    control.state.set_enabled(False)
+                except Exception:
+                    logger.exception("autonomous_runtime_state_reset_failed account_id=%s", aid)
                 log_ui(f"Ошибка запуска runtime: {type(exc).__name__}: {exc}")
                 status_var.set(f"Ошибка запуска runtime: {exc}")
+
+        def pause_runtime() -> None:
+            service = runtime_holder.get("service")
+            if service is not None:
+                service.pause()
+                log_ui("Автономный runtime поставлен на паузу.")
+                logger.info("autonomous_runtime_paused account_id=%s", aid)
 
         def stop_runtime() -> None:
             service = runtime_holder.get("service")
@@ -331,6 +347,7 @@ def install_autonomous_ui(app_class: type) -> None:
                 logger.info("autonomous_runtime_stopped account_id=%s", aid)
 
         control.start_command = start_runtime
+        control.pause_command = pause_runtime
         control.stop_command = stop_runtime
         control.refresh_command = lambda: threading.Thread(target=run_autonomous_once, daemon=True).start()
         control.log_path = str(log_path)
