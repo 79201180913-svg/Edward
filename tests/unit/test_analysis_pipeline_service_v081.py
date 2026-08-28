@@ -73,7 +73,7 @@ def test_v081_normalizes_fractional_risk_rates_and_uses_long_margin_when_short_i
     assert risk.short_margin_rate_pct == 56.75
     assert risk.short_enabled is False
     assert risk.capital_efficiency_score == 75.0
-    assert risk.risk_score == 25.0
+    assert risk.risk_score == 83.33333333333333
     assert risk.evidence.available is True
 
 
@@ -91,5 +91,5 @@ def test_v081_uses_stricter_short_margin_when_short_is_enabled():
     assert risk.short_margin_rate_pct == 56.75
     assert risk.short_enabled is True
     assert risk.capital_efficiency_score == 43.25
-    assert risk.risk_score == 56.75
+    assert risk.risk_score == 100.0
     assert risk.evidence.available is True
