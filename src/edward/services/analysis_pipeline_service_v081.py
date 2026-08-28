@@ -142,6 +142,7 @@ class AnalysisPipelineServiceV081:
         session_name: str | None = None,
         session_execution_allowed: bool = True,
         risk_data: Any = None,
+        instrument_risk_metadata: Any = None,
         current_weight_pct: float = 0.0,
         marginal_risk_pct: float = 0.0,
         diversification_benefit_pct: float = 0.0,
@@ -161,10 +162,15 @@ class AnalysisPipelineServiceV081:
             candidate_weight=candidate_weight,
             concentration_penalty_pct=concentration_penalty_pct,
         )
-        normalized_risk_data = _normalize_risk_data(risk_data)
+        # Instrument metadata is the contract-correct source for dlong/dshort/client
+        # and short-enabled state. Keep GetRiskRates available as a fallback for
+        # callers that do not provide instrument metadata directly.
+        effective_risk_data = instrument_risk_metadata if instrument_risk_metadata is not None else risk_data
+        normalized_risk_data = _normalize_risk_data(effective_risk_data)
         logger.info(
-            "[V081 RISK BEFORE FACTOR] instrument_uid=%s risk_data=%r",
+            "[V081 RISK BEFORE FACTOR] instrument_uid=%s source=%s risk_data=%r",
             instrument_uid,
+            "instrument_metadata" if instrument_risk_metadata is not None else "risk_rates",
             normalized_risk_data,
         )
         multifactor = MultiFactorAnalysisServiceV081.analyze(
