@@ -85,10 +85,14 @@ class FundamentalAnalysisServiceV082:
     @classmethod
     def _weighted_overall(cls,groups,profile):
         defaults=cls.STRATEGY_WEIGHTS[profile]; usable=tuple(g for g in groups if g.coverage>0 and defaults.get(g.name,0.0)>0)
-        if not usable:return 0.0,0.0,()
+        if not usable:return 0.0,0.0,(("fundamental_momentum",0.0),) if "fundamental_momentum" in defaults else ()
         total=sum(defaults[g.name] for g in usable); normalized=tuple((g.name,defaults[g.name]/total) for g in usable)
-        overall=sum(g.score*w for g,(name,w) in zip(usable,normalized)); confidence=sum(g.confidence*w for g,(name,w) in zip(usable,normalized))
-        return FundamentalScoringEngineV082.clamp(overall),FundamentalScoringEngineV082.clamp(confidence),normalized
+        normalized_map=dict(normalized)
+        if "fundamental_momentum" in defaults:
+            normalized_map.setdefault("fundamental_momentum",0.0)
+        ordered=tuple((name,normalized_map[name]) for name in defaults if name in normalized_map)
+        overall=sum(g.score*normalized_map[g.name] for g in usable); confidence=sum(g.confidence*normalized_map[g.name] for g in usable)
+        return FundamentalScoringEngineV082.clamp(overall),FundamentalScoringEngineV082.clamp(confidence),ordered
     @classmethod
     def analyze(cls,fundamentals=None,*,profile="medium_term"):
         selected=cls._profile(profile)
