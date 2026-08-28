@@ -93,6 +93,14 @@ def _open_analysis_v08(app: Any) -> None:
         else:
             progress.stop()
 
+    def set_metric(key: str, value: Any, suffix: str = "") -> None:
+        if value is None:
+            metric_vars[key].set("N/A")
+        elif isinstance(value, str):
+            metric_vars[key].set(value)
+        else:
+            metric_vars[key].set(f"{value}{suffix}")
+
     def show_result(pipeline_result: Any) -> None:
         result = pipeline_result.analysis
         for row in table.get_children():
@@ -101,30 +109,45 @@ def _open_analysis_v08(app: Any) -> None:
             table.insert("", "end", values=(item.strategy, f"{item.score:.1f}", f"{item.return_pct:.2f}", f"{item.max_drawdown_pct:.2f}", f"{item.sharpe:.2f}", f"{item.stability:.1f}", item.wf_windows, "PASS" if item.quality_gate else "FAIL"))
 
         ev = pipeline_result.expected_value
-        impact = pipeline_result.portfolio_impact
-        metric_vars["ev"].set(f"{ev.expected_value_pct:+.2f}%")
-        metric_vars["prob"].set(f"{ev.probability_profit_pct:.1f}%")
-        metric_vars["loss"].set(f"-{ev.expected_loss_pct:.2f}%")
-        metric_vars["dist"].set(f"{ev.p10_pct:+.2f}% → {ev.p90_pct:+.2f}%")
-        metric_vars["forecast"].set("validated")
-        metric_vars["regime"].set(result.market_regime)
-        metric_vars["portfolio"].set(f"{impact.portfolio_impact_score:.1f}")
-        metric_vars["confidence"].set(ev.confidence)
+        if ev.available:
+            metric_vars["ev"].set(f"{ev.expected_value_pct:+.2f}%")
+            metric_vars["prob"].set(f"{ev.probability_profit_pct:.1f}%")
+            metric_vars["loss"].set(f"-{ev.expected_loss_pct:.2f}%")
+            metric_vars["dist"].set(f"{ev.p10_pct:+.2f}% → {ev.p90_pct:+.2f}%")
+            metric_vars["confidence"].set(ev.confidence)
+        else:
+            reason = ev.unavailable_reason or "данных недостаточно"
+            for key in ("ev", "prob", "loss", "dist"):
+                metric_vars[key].set("N/A")
+            metric_vars["confidence"].set("N/A")
+
+        if pipeline_result.forecast_quality_score is not None:
+            metric_vars["forecast"].set(f"{pipeline_result.forecast_quality_score:.1f}")
+        else:
+            metric_vars["forecast"].set("N/A")
+
+        regime_text = result.market_regime
+        if pipeline_result.regime_confidence is not None:
+            regime_text += f" ({pipeline_result.regime_confidence:.0f}%)"
+        metric_vars["regime"].set(regime_text)
+
+        if pipeline_result.portfolio_context_available:
+            metric_vars["portfolio"].set(f"{pipeline_result.portfolio_impact.portfolio_impact_score:.1f}")
+        else:
+            metric_vars["portfolio"].set("N/A")
 
         winner = next((item for item in result.strategies if item.quality_gate), None)
-        if winner is not None:
-            position = legacy._position_context(app, str(detail.get("instrument_uid", "")))
-            request = legacy._build_decision_request(app, detail, result, pipeline_result.opportunity, winner, position, profile_var.get())
-            decision = DecisionEngine.evaluate(request)
-            decision_var.set(f"Решение: {decision.decision.value if decision.decision else '—'}")
-            reason_var.set(decision.explanation)
-        else:
-            decision_var.set("Решение: PASS")
-            reason_var.set("Ни одна стратегия не прошла v0.8 Quality Gate.")
+        position = legacy._position_context(app, str(detail.get("instrument_uid", "")))
+        request = legacy._build_decision_request(app, detail, result, pipeline_result.opportunity, winner, position, profile_var.get())
+        decision = DecisionEngine.evaluate(request)
+        decision_var.set(f"Решение: {decision.decision.value if decision.decision else '—'}")
+        reason_var.set(decision.explanation)
 
         explanation.configure(state="normal")
         explanation.delete("1.0", "end")
-        explanation.insert("1.0", pipeline_result.opportunity.explanation + "\n\n" + result.explanation)
+        ev_note = "EV: недоступен — нет реализованных исходов." if not ev.available else f"EV: {ev.expected_value_pct:+.2f}% на {ev.observations} наблюдениях."
+        portfolio_note = "Portfolio Impact: N/A — портфельный контекст не передан." if not pipeline_result.portfolio_context_available else f"Portfolio Impact: {pipeline_result.portfolio_impact.portfolio_impact_score:.1f}."
+        explanation.insert("1.0", pipeline_result.opportunity.explanation + "\n\n" + result.explanation + f"\n\n{ev_note} {portfolio_note}")
         explanation.configure(state="disabled")
 
     def run() -> None:
