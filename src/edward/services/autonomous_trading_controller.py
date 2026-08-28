@@ -26,16 +26,16 @@ class AutonomousTradingControlResult:
 
 
 class AutonomousTradingController:
-    def __init__(self, sequence_service: AutonomousExecutionSequenceService, *, preflight_service: AutonomousExecutionPreflightService | None = None, protection_reconciliation: ProtectionReconciliationService | None = None) -> None:
+    def __init__(self, sequence_service: AutonomousExecutionSequenceService, *, preflight_service: AutonomousExecutionPreflightService | None = None, protection_reconciliation: ProtectionReconciliationService | None = None, protection_recovery: Any | None = None, recovery_stop_prices: Callable[[AccountState], dict[str, Any]] | None = None) -> None:
         self._sequence = sequence_service
         self._preflight = preflight_service or AutonomousExecutionPreflightService()
         self._protection_reconciliation = protection_reconciliation
+        self._protection_recovery = protection_recovery
+        self._recovery_stop_prices = recovery_stop_prices
         self._enabled = False
 
     @property
-    def enabled(self) -> bool:
-        return self._enabled
-
+    def enabled(self) -> bool: return self._enabled
     def enable(self) -> None: self._enabled = True
     def disable(self) -> None: self._enabled = False
 
@@ -46,7 +46,15 @@ class AutonomousTradingController:
         if budget is None or state is None: return False, "FRESH_ACCOUNT_STATE_REQUIRED", ()
         if self._protection_reconciliation is not None:
             reconciliation = self._protection_reconciliation.reconcile(account_id=account_id, positions=state.positions)
-            if not reconciliation.protected: return False, "PROTECTION_RECONCILIATION_FAILED", reconciliation.reasons
+            if not reconciliation.protected:
+                if self._protection_recovery is None or self._recovery_stop_prices is None:
+                    return False, "PROTECTION_RECONCILIATION_FAILED", reconciliation.reasons
+                recovery = self._protection_recovery.recover(account_id=account_id, state=state, stop_prices=self._recovery_stop_prices(state))
+                if not recovery.recovered:
+                    return False, "PROTECTION_RECOVERY_FAILED", recovery.reasons
+                reconciliation = self._protection_reconciliation.reconcile(account_id=account_id, positions=state.positions)
+                if not reconciliation.protected:
+                    return False, "PROTECTION_RECONCILIATION_FAILED", reconciliation.reasons
         preflight = self._preflight.validate(plan=plan, budget=budget, state=state)
         if not preflight.passed: return False, "PREFLIGHT_REJECTED", preflight.reasons
         return True, "", ()
