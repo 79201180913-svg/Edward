@@ -95,11 +95,27 @@ class RobustContractAnalysisDataServiceV081(ContractAnalysisDataServiceV081):
                     if mappings and any(cls._looks_like_direct_object(x,g) for x in mappings for g in groups): return list(current)
             if isinstance(payload,Mapping) and any(cls._looks_like_direct_object(payload,g) for g in groups): return [payload]
         return []
+    @staticmethod
+    def _safe_keys(value: Any) -> tuple[str, ...]:
+        return tuple(str(key) for key in value.keys()) if isinstance(value, Mapping) else ()
+    @classmethod
+    def _fundamental_debug_summary(cls, payload: Any, mapped: Any) -> None:
+        logger.info("[V081 FUNDAMENTALS RAW] root_type=%s root_keys=%s", type(payload).__name__, cls._safe_keys(payload))
+        discovered = cls._first(payload, "fundamentals", "statistics", "asset_fundamentals")
+        logger.info("[V081 FUNDAMENTALS DISCOVERY] candidate_type=%s candidate_keys=%s", type(discovered).__name__, cls._safe_keys(discovered))
+        if isinstance(discovered, Mapping):
+            logger.info("[V081 FUNDAMENTALS FIELDS] fields=%s", tuple(sorted(str(key) for key in discovered.keys())))
+        logger.info("[V081 FUNDAMENTALS MAPPED] mapped=%s mapped_type=%s mapped_keys=%s", mapped is not None, type(mapped).__name__, cls._safe_keys(mapped))
     @classmethod
     def _log_risk_item_diagnostics(cls,instrument_uid,raw_risk,risk_items):
-        logger.info("[V081 RISK ITEM DIAG] instrument_uid=%s root_type=%s item_count=%d",instrument_uid,type(raw_risk).__name__,len(risk_items))
+        logger.info("[V081 RISK ITEM DIAG] instrument_uid=%s root_type=%s root_keys=%s item_count=%d",instrument_uid,type(raw_risk).__name__,cls._safe_keys(raw_risk),len(risk_items))
     def collect(self,instrument_uid: str):
         result=super().collect(instrument_uid); failed=set(result.failed_sources); unavailable=set(result.unavailable_sources); fetched=set(result.fetched_sources)
+        if "fundamentals" in fetched:
+            raw_fundamentals = self.client.get_asset_fundamentals(instrument_uid)
+            discovered = self._first(raw_fundamentals, "fundamentals", "statistics", "asset_fundamentals")
+            mapped_debug = map_fundamentals(discovered)
+            self._fundamental_debug_summary(raw_fundamentals, mapped_debug)
         if "fundamentals" in fetched and ("fundamentals_mapping" in failed or "fundamentals" in unavailable):
             mapped=map_fundamentals(self._first(self.client.get_asset_fundamentals(instrument_uid),"fundamentals","statistics","asset_fundamentals"))
             if mapped is not None: failed.discard("fundamentals_mapping"); unavailable.discard("fundamentals"); result=replace(result,fundamentals=mapped)
@@ -112,10 +128,8 @@ class RobustContractAnalysisDataServiceV081(ContractAnalysisDataServiceV081):
         if "news" in fetched and ("news_mapping" in failed or "news" in unavailable or not result.news):
             raw=self.client.get_news(1000)
             items=self._many(raw,"items","news")
-            if not items and isinstance(raw,Mapping) and self._looks_like_direct_object(raw,"news"):
-                items=[raw]
-            if items:
-                failed.discard("news_mapping"); unavailable.discard("news"); result=replace(result,news=tuple(map_news(x) for x in items))
+            if not items and isinstance(raw,Mapping) and self._looks_like_direct_object(raw,"news"): items=[raw]
+            if items: failed.discard("news_mapping"); unavailable.discard("news"); result=replace(result,news=tuple(map_news(x) for x in items))
         if "risk_rates" in fetched and ("risk_rates_mapping" in failed or "risk_rates_mapping" in unavailable or "risk_rates" in unavailable):
             raw=self.client.get_risk_rates([instrument_uid]); items=self._many(raw,"risk_rates","instrument_risk_rates","items"); self._log_risk_item_diagnostics(instrument_uid,raw,items)
             mapped=map_risk_rates({"risk_rates":items}) if items else map_risk_rates(raw)
