@@ -96,16 +96,9 @@ def _open_analysis_v08(app: Any) -> None:
         if widget is not None and is_inside_analysis(widget):
             canvas.yview_scroll(3, "units")
 
-    window.bind_all("<MouseWheel>", on_mousewheel, add="+")
-    window.bind_all("<Button-4>", on_linux_scroll_up, add="+")
-    window.bind_all("<Button-5>", on_linux_scroll_down, add="+")
-
-    def cleanup_scroll_bindings() -> None:
-        window.unbind_all("<MouseWheel>")
-        window.unbind_all("<Button-4>")
-        window.unbind_all("<Button-5>")
-
-    window.protocol("WM_DELETE_WINDOW", lambda: (cleanup_scroll_bindings(), window.destroy()))
+    window.bind("<MouseWheel>", on_mousewheel, add="+")
+    window.bind("<Button-4>", on_linux_scroll_up, add="+")
+    window.bind("<Button-5>", on_linux_scroll_down, add="+")
 
     top = ttk.Frame(content, padding=16)
     top.pack(fill="x")
