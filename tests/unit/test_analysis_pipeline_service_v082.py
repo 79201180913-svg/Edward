@@ -1,14 +1,11 @@
-from dataclasses import dataclass
-
 from edward.services.analysis_pipeline_service_v082 import (
     ANALYSIS_PIPELINE_V082_VERSION,
     AnalysisPipelineServiceV082,
 )
 
 
-@dataclass
 class FakePipelineResult:
-    base_marker: str = "v081"
+    base_marker = "v081"
 
     @property
     def analysis(self):
@@ -66,11 +63,25 @@ def test_pipeline_calculates_fundamental_result_without_changing_base_result():
     assert result.fundamental.status == "PARTIAL"
     assert result.fundamental.coverage > 0
     assert result.fundamental.business_quality.score > 0
+    assert result.fundamental.strategy_profile == "medium_term"
     assert base.calls[0]["fundamentals"] == {
         "roe": 20,
         "revenue_growth": 10,
         "current_ratio": 1.8,
     }
+
+
+def test_pipeline_forwards_profile_to_fundamental_layer():
+    base = FakeBasePipeline()
+    result = AnalysisPipelineServiceV082(base_pipeline=base).analyze(
+        instrument_uid="uid",
+        ticker="TEST",
+        candles=[],
+        profile="long_term",
+        fundamentals={"roe": 20.0, "revenue_growth": 10.0},
+    )
+
+    assert result.fundamental.strategy_profile == "long_term"
 
 
 def test_pipeline_preserves_unavailable_fundamental_state():
