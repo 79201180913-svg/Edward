@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Iterable, Mapping, Sequence
 
@@ -17,6 +18,7 @@ from edward.services.regime_engine_v08 import RegimeEngine
 from edward.services.research_backtest_service_v08 import ResearchBacktestService
 
 ANALYSIS_PIPELINE_V08_VERSION = "0.8.0"
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +41,12 @@ class AnalysisPipelineServiceV08:
     def __init__(self, *, analysis_service: AnalysisServiceV08 | None = None) -> None:
         self.analysis_service = analysis_service or AnalysisServiceV08()
         self.forecast_quality = ForecastQualityAdapterV08()
+        logger.warning(
+            "[V083 EXEC] INIT AnalysisPipelineServiceV08 file=%s analysis_service=%s version=%s",
+            __file__,
+            type(self.analysis_service).__name__,
+            ANALYSIS_PIPELINE_V08_VERSION,
+        )
 
     @staticmethod
     def _returns(candles: Sequence[Candle]) -> list[float]:
@@ -81,6 +89,16 @@ class AnalysisPipelineServiceV08:
         concentration_penalty_pct: float = 0.0,
     ) -> AnalysisPipelineV08Result:
         ordered = sorted(list(candles), key=lambda item: item.timestamp)
+        logger.warning(
+            "[V083 EXEC] ENTER AnalysisPipelineServiceV08.analyze file=%s ticker=%s instrument_uid=%s profile=%s candles=%d risk_profile=%s horizon=%s",
+            __file__, ticker, instrument_uid, profile, len(ordered), risk_profile, horizon,
+        )
+        logger.warning(
+            "[V083 EXEC] AnalysisPipelineServiceV08 analysis_service=%s module=%s version=%s",
+            type(self.analysis_service).__name__,
+            type(self.analysis_service).__module__,
+            getattr(self.analysis_service, "ANALYSIS_V08_VERSION", "unknown"),
+        )
         analysis = self.analysis_service.analyze(
             instrument_uid=instrument_uid,
             ticker=ticker,
@@ -89,16 +107,23 @@ class AnalysisPipelineServiceV08:
             risk_profile=risk_profile,
             horizon=horizon,
         )
+        logger.warning(
+            "[V083 EXEC] EXIT AnalysisServiceV08 ticker=%s strategies=%d recommendation=%s score=%.4f",
+            ticker, len(analysis.strategies), analysis.recommendation, analysis.score,
+        )
         evidence_strategy_result = max(analysis.strategies, key=lambda item: item.score) if analysis.strategies else None
         evidence_strategy = evidence_strategy_result.strategy if evidence_strategy_result else None
+        logger.warning(
+            "[V083 EXEC] evidence_strategy ticker=%s strategy=%s quality_gate=%s stability=%s",
+            ticker, evidence_strategy,
+            evidence_strategy_result.quality_gate if evidence_strategy_result else None,
+            evidence_strategy_result.stability if evidence_strategy_result else None,
+        )
         raw_regime = RegimeEngine.classify(ordered)
         regime_confidence = cap_regime_confidence(raw_regime.confidence)
         forecast_quality_score = None
         try:
-            forecast_quality_score = self.forecast_quality.evaluate(
-                candles=ordered,
-                horizons=(1, 5, 20),
-            ).overall_quality_score
+            forecast_quality_score = self.forecast_quality.evaluate(candles=ordered, horizons=(1, 5, 20)).overall_quality_score
         except ValueError:
             pass
 
@@ -106,37 +131,22 @@ class AnalysisPipelineServiceV08:
             ev = ExpectedValueEngine.from_returns(())
             impact = self._empty_portfolio()
             confidence = calculate_confidence(
-                strategy_quality=0.0,
-                forecast_quality=forecast_quality_score or 0.0,
-                regime_confidence=regime_confidence,
-                portfolio_confidence=0.0,
-                observations=0,
+                strategy_quality=0.0, forecast_quality=forecast_quality_score or 0.0,
+                regime_confidence=regime_confidence, portfolio_confidence=0.0, observations=0,
             )
             opportunity = OpportunityEngineV08.evaluate(
-                analysis=analysis,
-                candles=ordered,
-                strategy_result=None,
-                expected_value=ev,
-                portfolio_impact=impact,
-                confidence_score=confidence.overall_confidence,
+                analysis=analysis, candles=ordered, strategy_result=None, expected_value=ev,
+                portfolio_impact=impact, confidence_score=confidence.overall_confidence,
             )
+            logger.warning("[V083 EXEC] EXIT AnalysisPipelineServiceV08 ticker=%s no_evidence_strategy", ticker)
             return AnalysisPipelineV08Result(
-                analysis,
-                opportunity,
-                ev,
-                impact,
-                forecast_quality_score,
-                regime_confidence,
-                None,
-                False,
-                confidence,
+                analysis, opportunity, ev, impact, forecast_quality_score,
+                regime_confidence, None, False, confidence,
             )
 
         backtest = ResearchBacktestService.run_simple_strategy(
-            candles=ordered,
-            strategy=evidence_strategy_result.strategy,
-            parameters=evidence_strategy_result.parameters,
-            costs=self.analysis_service.costs,
+            candles=ordered, strategy=evidence_strategy_result.strategy,
+            parameters=evidence_strategy_result.parameters, costs=self.analysis_service.costs,
         )
         ev = ExpectedValueEngine.from_trades(backtest.trades_detail)
         weights = dict(portfolio_weights or {})
@@ -147,11 +157,8 @@ class AnalysisPipelineServiceV08:
             asset_returns[candidate_id] = self._returns(ordered)
         impact = (
             PortfolioImpactService.calculate(
-                weights=weights,
-                asset_returns=asset_returns,
-                candidate_id=candidate_id,
-                candidate_weight=candidate_weight,
-                candidate_expected_return_pct=ev.expected_value_pct,
+                weights=weights, asset_returns=asset_returns, candidate_id=candidate_id,
+                candidate_weight=candidate_weight, candidate_expected_return_pct=ev.expected_value_pct,
                 concentration_penalty_pct=concentration_penalty_pct,
             )
             if portfolio_context_available and (candidate_weight > 0 or weights)
@@ -161,33 +168,25 @@ class AnalysisPipelineServiceV08:
         edge_reliability = ev.edge_reliability_pct if ev.available and ev.edge_reliability_pct is not None else 0.0
         strategy_confidence_component = min(evidence_strategy_result.stability, edge_reliability)
         confidence = calculate_confidence(
-            strategy_quality=strategy_confidence_component,
-            forecast_quality=forecast_quality_score or 0.0,
-            regime_confidence=regime_confidence,
-            portfolio_confidence=portfolio_confidence,
+            strategy_quality=strategy_confidence_component, forecast_quality=forecast_quality_score or 0.0,
+            regime_confidence=regime_confidence, portfolio_confidence=portfolio_confidence,
             observations=ev.observations if ev.available else 0,
             uncertainty_width_pct=ev.uncertainty_width_pct if ev.available else None,
         )
         opportunity = OpportunityEngineV08.evaluate(
-            analysis=analysis,
-            candles=ordered,
-            strategy_result=evidence_strategy_result,
-            expected_value=ev,
-            portfolio_impact=impact,
+            analysis=analysis, candles=ordered, strategy_result=evidence_strategy_result,
+            expected_value=ev, portfolio_impact=impact,
             robustness_score=evidence_strategy_result.stability,
             forecast_quality_score=forecast_quality_score,
             confidence_score=confidence.overall_confidence,
         )
+        logger.warning(
+            "[V083 EXEC] EXIT AnalysisPipelineServiceV08 ticker=%s evidence_strategy=%s opportunity=%.4f confidence=%.4f",
+            ticker, evidence_strategy, float(opportunity.score), confidence.overall_confidence,
+        )
         return AnalysisPipelineV08Result(
-            analysis,
-            opportunity,
-            ev,
-            impact,
-            forecast_quality_score,
-            regime_confidence,
-            evidence_strategy,
-            portfolio_context_available,
-            confidence,
+            analysis, opportunity, ev, impact, forecast_quality_score,
+            regime_confidence, evidence_strategy, portfolio_context_available, confidence,
         )
 
 
