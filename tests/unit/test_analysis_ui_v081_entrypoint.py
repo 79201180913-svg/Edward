@@ -19,6 +19,9 @@ def test_v081_installer_replaces_active_analysis_entrypoint(monkeypatch):
     app_class = type("FakeApp", (), {})
     target.install(app_class, object)
 
+    # v0.8.2.2 installs a wrapper around the v0.8 entrypoint so the
+    # canonical v0.8.2 pipeline can be bridged without replacing the
+    # runtime implementation with the raw function object.
     assert legacy._open_analysis is runtime._open_analysis_v08
     assert app_class._analysis_ui_v081_installed is True
 
