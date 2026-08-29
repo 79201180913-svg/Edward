@@ -36,6 +36,10 @@ class QualityGateDiagnostics:
             return "Все критерии Quality Gate выполнены"
         return "; ".join(self.failed_checks)
 
+    @property
+    def blocking_checks(self) -> tuple[QualityGateCheck, ...]:
+        return tuple(check for check in self.checks if not check.passed)
+
 
 class QualityGateDiagnosticsServiceV0822:
     """Single source of truth for v0.8 Quality Gate diagnostics.
@@ -91,10 +95,6 @@ class QualityGateDiagnosticsServiceV0822:
         )
 
         for fallback_index, window in enumerate(windows):
-            # Production WFWindow has index/date/metric fields. The lightweight
-            # test fixtures intentionally use opaque objects; diagnostics must
-            # never make the Quality Gate itself fail merely because detailed
-            # logging cannot inspect an optional field.
             index = getattr(window, "index", fallback_index)
             train_start = getattr(window, "train_start", "?")
             train_end = getattr(window, "train_end", "?")
@@ -149,12 +149,14 @@ class QualityGateDiagnosticsServiceV0822:
         failed = tuple(check.label for check in checks if not check.passed)
 
         for check in checks:
+            margin = check.actual - check.threshold
             logger.info(
-                "[V083 QG CHECK] strategy=%s key=%s actual=%.6f threshold=%.6f passed=%s",
+                "[V083 QG CHECK] strategy=%s key=%s actual=%.6f threshold=%.6f margin=%.6f passed=%s",
                 result.strategy,
                 check.key,
                 check.actual,
                 check.threshold,
+                margin,
                 check.passed,
             )
 
@@ -165,6 +167,27 @@ class QualityGateDiagnosticsServiceV0822:
             failed_checks=failed,
             passed=not failed,
         )
+        if diagnostics.blocking_checks:
+            logger.warning(
+                "[V083 QG BLOCKERS] strategy=%s profile=%s blockers=%s",
+                result.strategy,
+                profile,
+                tuple(
+                    {
+                        "key": check.key,
+                        "actual": round(check.actual, 6),
+                        "threshold": round(check.threshold, 6),
+                        "margin": round(check.actual - check.threshold, 6),
+                    }
+                    for check in diagnostics.blocking_checks
+                ),
+            )
+        else:
+            logger.info(
+                "[V083 QG BLOCKERS] strategy=%s profile=%s blockers=none",
+                result.strategy,
+                profile,
+            )
         logger.info(
             "[V083 QG RESULT] strategy=%s profile=%s passed=%s failed_checks=%s reason=%s",
             result.strategy,
