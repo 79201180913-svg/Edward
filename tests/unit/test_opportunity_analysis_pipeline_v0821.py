@@ -13,9 +13,21 @@ class FakeBase:
 
 
 @dataclass(frozen=True)
+class FakeAnalysis:
+    market_regime: str = "TRANSITION"
+    strategies: tuple = ()
+
+
+@dataclass(frozen=True)
 class FakePipelineResult:
     base: FakeBase
-    analysis: str = "analysis"
+    analysis: FakeAnalysis
+    evidence_strategy: str = "Breakout"
+    confidence: object = None
+
+    @property
+    def opportunity(self):
+        return self.base.opportunity
 
 
 class FakeCollector:
@@ -42,7 +54,10 @@ class FakeCollector:
 class FakePipeline:
     def __init__(self):
         self.calls = []
-        self.result = FakePipelineResult(base=FakeBase(base="base-v08"))
+        self.result = FakePipelineResult(
+            base=FakeBase(base="base-v08"),
+            analysis=FakeAnalysis(),
+        )
 
     def analyze(self, **kwargs):
         self.calls.append(kwargs)
@@ -87,7 +102,7 @@ def test_adapter_reuses_v082_pipeline_and_contract_data(monkeypatch):
     )
 
     assert collector.calls == ["uid"]
-    assert result is not pipeline.result
+    assert result.pipeline_result is not pipeline.result
     call = pipeline.calls[0]
     assert call["instrument_uid"] == "uid"
     assert call["ticker"] == "SBER"
@@ -105,7 +120,8 @@ def test_adapter_reuses_v082_pipeline_and_contract_data(monkeypatch):
     assert call["fundamentals"]["roe"] == 20.0
     assert call["fundamentals"]["__instrument_context"]["ticker"] == "SBER"
     assert call["fundamentals"]["__instrument_context"]["name"] == "Sberbank"
-    assert result.base.base == "news-adjusted-base"
+    assert result.pipeline_result.base.base == "news-adjusted-base"
+    assert result.strategies == ()
 
 
 def test_live_opportunity_service_uses_v0821_adapter(monkeypatch):
