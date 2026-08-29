@@ -150,6 +150,7 @@ class RobustWalkForwardService:
             strategy, len(ordered), train_size, test_size, expected_windows, len(parameter_grid), max_drawdown_pct,
         )
         windows: list[WalkForwardWindowResult] = []
+        exposures: list[float] = []
         start = 0
         while start + train_size + test_size <= len(ordered):
             train = ordered[start:start + train_size]
@@ -173,6 +174,7 @@ class RobustWalkForwardService:
                 candles=test, strategy=strategy, parameters=selected_params,
                 signal_fn=signal_factory(strategy, selected_params), costs=costs,
             )
+            exposures.append(test_result.exposure_pct)
             window = WalkForwardWindowResult(
                 window_index, train[0].timestamp, train[-1].timestamp,
                 test[0].timestamp, test[-1].timestamp, dict(selected_params),
@@ -237,8 +239,7 @@ class RobustWalkForwardService:
             "active_pct=%.2f total_trades=%d mean_exposure=%.2f",
             strategy, count, active_windows, inactive_windows,
             active_windows / count * 100.0,
-            sum(item.test_trades for item in windows),
-            mean(cls._window_exposure_placeholder(item) for item in windows),
+            sum(item.test_trades for item in windows), mean(exposures),
         )
         logger.warning(
             "[V083 WF RESULT] strategy=%s windows=%d mean_return=%.4f median_return=%.4f std_return=%.4f "
@@ -254,13 +255,6 @@ class RobustWalkForwardService:
             result.robustness_score,
         )
         return result
-
-    @staticmethod
-    def _window_exposure_placeholder(window: WalkForwardWindowResult) -> float:
-        # WalkForwardWindowResult remains the stable public contract in v0.8.3.
-        # Exposure is emitted per window from the underlying backtest result above.
-        # This helper intentionally does not infer exposure from return/trades.
-        return 0.0
 
     @staticmethod
     def _empty(strategy: str) -> RobustWalkForwardResult:
