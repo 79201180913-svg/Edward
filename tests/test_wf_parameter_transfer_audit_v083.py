@@ -43,8 +43,23 @@ def test_audit_window_zero_has_empty_history_and_later_window_has_prior_entries(
     @dataclass(frozen=True)
     class CandleStub:
         timestamp: datetime
+        open: float
+        high: float
+        low: float
+        close: float
+        volume: float
 
-    candles = [CandleStub(datetime(2026, 1, 1) + timedelta(days=i)) for i in range(8)]
+    candles = [
+        CandleStub(
+            timestamp=datetime(2026, 1, 1) + timedelta(days=i),
+            open=100.0 + i,
+            high=101.0 + i,
+            low=99.0 + i,
+            close=100.0 + i,
+            volume=1000.0,
+        )
+        for i in range(8)
+    ]
 
     def factory(strategy, params):
         def signal(candles, index):
