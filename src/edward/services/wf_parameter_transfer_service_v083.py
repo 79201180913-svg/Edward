@@ -11,10 +11,24 @@ WF_PARAMETER_TRANSFER_V083_VERSION = "0.8.3"
 
 
 @dataclass(frozen=True, slots=True)
+class ParameterTransferHistoryEntry:
+    """Previously completed WF window evidence available before the current window."""
+
+    window_index: int
+    parameters: dict[str, Any]
+    oos_net_return_pct: float
+    oos_sharpe: float
+    oos_drawdown_pct: float
+    selection_confidence: float = 0.0
+
+
+@dataclass(frozen=True, slots=True)
 class ParameterTransferCandidate:
     parameters: dict[str, Any]
     consensus_score: float
     neighborhood_stability_pct: float
+    historical_score: float
+    historical_support: int
     selection_score: float
 
 
@@ -32,17 +46,20 @@ class ParameterTransferSelection:
 
 
 class WFParameterTransferSelectorV083:
-    """Train-only shadow selector for improving parameter transfer.
+    """Train-only shadow selector with optional historical WF transfer evidence.
 
-    The selector deliberately uses only Train results. OOS results are never
-    used to choose parameters, preventing look-ahead leakage. It is intended
-    to run in shadow mode first so the existing production selection remains
-    unchanged while transfer quality is measured objectively.
+    Current-window Train results are the only current-window inputs. Historical
+    evidence must come from windows that completed before the current window.
+    OOS data from the current window is deliberately absent from this API so
+    the selector cannot use look-ahead information to choose parameters.
     """
 
     CRITERIA = ("excess_return", "sharpe", "sortino", "return_dd")
     CONSENSUS_WEIGHT = 0.80
     NEIGHBORHOOD_WEIGHT = 0.20
+    HISTORICAL_WEIGHT = 0.35
+    CURRENT_WEIGHT = 0.65
+    MIN_HISTORICAL_SUPPORT = 2
 
     @staticmethod
     def _criterion_value(criterion: str, result: ResearchBacktestResult) -> float:
@@ -66,10 +83,31 @@ class WFParameterTransferSelectorV083:
         ordered = sorted(set(value for _, value in values))
         if len(ordered) <= 1:
             return {key: 100.0 for key, _ in values}
-        return {
-            key: (ordered.index(value) / (len(ordered) - 1)) * 100.0
-            for key, value in values
-        }
+        return {key: (ordered.index(value) / (len(ordered) - 1)) * 100.0 for key, value in values}
+
+    @staticmethod
+    def _historical_score(entries: Sequence[ParameterTransferHistoryEntry]) -> tuple[float, int]:
+        if not entries:
+            return 0.0, 0
+
+        returns = [entry.oos_net_return_pct for entry in entries]
+        sharpes = [entry.oos_sharpe for entry in entries]
+        drawdowns = [entry.oos_drawdown_pct for entry in entries]
+        confidences = [max(0.0, min(100.0, entry.selection_confidence)) for entry in entries]
+
+        def percentile(value: float, values: list[float], reverse: bool = False) -> float:
+            ordered = sorted(set(values), reverse=reverse)
+            if len(ordered) <= 1:
+                return 100.0
+            index = ordered.index(value)
+            return index / (len(ordered) - 1) * 100.0
+
+        return_score = mean(percentile(value, returns) for value in returns)
+        sharpe_score = mean(percentile(value, sharpes) for value in sharpes)
+        dd_score = mean(percentile(value, drawdowns, reverse=True) for value in drawdowns)
+        confidence_score = mean(confidences)
+        score = return_score * 0.35 + sharpe_score * 0.30 + dd_score * 0.20 + confidence_score * 0.15
+        return round(score, 4), len(entries)
 
     @classmethod
     def select(
@@ -77,30 +115,67 @@ class WFParameterTransferSelectorV083:
         candidates: Sequence[tuple[dict[str, Any], ResearchBacktestResult]],
         baseline_parameters: dict[str, Any] | None = None,
     ) -> ParameterTransferSelection:
+        return cls._select(candidates, baseline_parameters=baseline_parameters, history=())
+
+    @classmethod
+    def select_with_history(
+        cls,
+        candidates: Sequence[tuple[dict[str, Any], ResearchBacktestResult]],
+        *,
+        history: Sequence[ParameterTransferHistoryEntry],
+        baseline_parameters: dict[str, Any] | None = None,
+    ) -> ParameterTransferSelection:
+        """Select from current Train candidates using only prior-window evidence."""
+        return cls._select(candidates, baseline_parameters=baseline_parameters, history=history)
+
+    @classmethod
+    def _select(
+        cls,
+        candidates: Sequence[tuple[dict[str, Any], ResearchBacktestResult]],
+        *,
+        baseline_parameters: dict[str, Any] | None,
+        history: Sequence[ParameterTransferHistoryEntry],
+    ) -> ParameterTransferSelection:
         if not candidates:
             raise ValueError("candidates cannot be empty")
 
         baseline = dict(baseline_parameters or max(candidates, key=lambda item: item[1].excess_return_pct)[0])
         percentile_maps = {criterion: cls._criterion_percentiles(candidates, criterion) for criterion in cls.CRITERIA}
-        candidate_rows: list[ParameterTransferCandidate] = []
+        history_by_key: dict[tuple[tuple[str, Any], ...], list[ParameterTransferHistoryEntry]] = {}
+        for entry in history:
+            history_by_key.setdefault(parameter_key(entry.parameters), []).append(entry)
 
+        candidate_rows: list[ParameterTransferCandidate] = []
         for params, _ in candidates:
             key = parameter_key(params)
             consensus = mean(percentile_maps[criterion][key] for criterion in cls.CRITERIA)
             neighborhood, _ = neighborhood_stability_pct(params, candidates)
-            score = consensus * cls.CONSENSUS_WEIGHT + neighborhood * cls.NEIGHBORHOOD_WEIGHT
+            current_score = consensus * cls.CONSENSUS_WEIGHT + neighborhood * cls.NEIGHBORHOOD_WEIGHT
+            historical_score, support = cls._historical_score(history_by_key.get(key, ()))
+            if support >= cls.MIN_HISTORICAL_SUPPORT:
+                score = current_score * cls.CURRENT_WEIGHT + historical_score * cls.HISTORICAL_WEIGHT
+            else:
+                score = current_score
             candidate_rows.append(
                 ParameterTransferCandidate(
                     parameters=dict(params),
                     consensus_score=round(consensus, 4),
                     neighborhood_stability_pct=round(neighborhood, 4),
+                    historical_score=round(historical_score, 4),
+                    historical_support=support,
                     selection_score=round(score, 4),
                 )
             )
 
         ranked = sorted(
             candidate_rows,
-            key=lambda item: (item.selection_score, item.consensus_score, item.neighborhood_stability_pct),
+            key=lambda item: (
+                item.selection_score,
+                item.historical_support,
+                item.consensus_score,
+                item.neighborhood_stability_pct,
+                tuple(sorted(item.parameters.items())),
+            ),
             reverse=True,
         )
         selected = ranked[0]
@@ -116,6 +191,7 @@ class WFParameterTransferSelectorV083:
 
 __all__ = [
     "WF_PARAMETER_TRANSFER_V083_VERSION",
+    "ParameterTransferHistoryEntry",
     "ParameterTransferCandidate",
     "ParameterTransferSelection",
     "WFParameterTransferSelectorV083",
