@@ -45,7 +45,6 @@ from edward.ui import analysis_ui_v081_runtime as analysis_ui_v081_runtime_modul
 from edward.ui.analysis_ui_v081_runtime import install as install_analysis_ui_v081
 from edward.services.analysis_pipeline_service_v082 import AnalysisPipelineServiceV082
 from edward.ui.decision_context_ui_v04 import install_decision_context_ui
-from edward.ui.analysis_ui_consistency_v04 import install_analysis_ui_consistency
 from edward.ui.opportunity_search_ui_v04 import install_opportunity_search_ui
 from edward.ui.execution_center_ui_v06 import install_execution_center_ui
 from edward.ui.execution_opportunity_action_ui_v06 import install_execution_opportunity_action_ui
@@ -113,7 +112,10 @@ install_ev_reliability_ui_v08()
 analysis_ui_v081_runtime_module.AnalysisPipelineServiceV081 = AnalysisPipelineServiceV082
 install_analysis_ui_v081(EdwardApp, TInvestAdapterClient)
 
-install_analysis_ui_consistency()
+# Do not install the legacy v0.4 UI consistency monkeypatch here.
+# It introduces a fallback recommendation after Quality Gate failure and
+# globally mutates AnalysisService.analyze(), which contaminates later tests
+# and conflicts with the canonical v0.8.2 analysis semantics.
 install_decision_context_ui(EdwardApp)
 install_opportunity_search_ui(EdwardApp)
 install_execution_center_ui(EdwardApp)
