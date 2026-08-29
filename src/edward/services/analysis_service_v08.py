@@ -37,6 +37,12 @@ class AnalysisServiceV08:
     def __init__(self, *, costs: BacktestCostModel | None = None) -> None:
         self.costs = costs or BacktestCostModel()
         self.last_diagnostics: AnalysisV08Diagnostics | None = None
+        logger.info(
+            "[V083 TRACE] INIT AnalysisServiceV08 version=%s strategies=%s profiles=%s",
+            ANALYSIS_V08_VERSION,
+            self.STRATEGIES,
+            self.PROFILES,
+        )
 
     @staticmethod
     def _grid(strategy: str, profile: str) -> list[dict[str, Any]]:
@@ -56,7 +62,16 @@ class AnalysisServiceV08:
 
     def _robust(self, candles: list[Candle], strategy: str, profile: str) -> RobustWalkForwardResult:
         cfg = self.PROFILES[profile]
-        return RobustWalkForwardService.run(
+        logger.info(
+            "[V083 TRACE] ENTER robust strategy=%s profile=%s candles=%d train=%d test=%d grid=%d",
+            strategy,
+            profile,
+            len(candles),
+            cfg["train"],
+            cfg["test"],
+            len(self._grid(strategy, profile)),
+        )
+        result = RobustWalkForwardService.run(
             candles=candles,
             strategy=strategy,
             parameter_grid=self._grid(strategy, profile),
@@ -66,31 +81,37 @@ class AnalysisServiceV08:
             costs=self.costs,
             max_drawdown_pct=cfg["max_drawdown_pct"],
         )
+        logger.info(
+            "[V083 TRACE] EXIT robust strategy=%s windows=%d robustness=%.2f mean_oos_return=%.4f mean_oos_dd=%.4f mean_oos_sharpe=%.4f",
+            strategy,
+            len(result.windows),
+            result.robustness_score,
+            result.mean_test_return_pct,
+            result.mean_test_drawdown_pct,
+            result.mean_test_sharpe,
+        )
+        return result
 
     @staticmethod
     def _quality(result: RobustWalkForwardResult, profile: str) -> bool:
         diagnostics = QualityGateDiagnosticsServiceV0822.evaluate(result, profile)
         logger.info(
-            "[QUALITY GATE] strategy=%s profile=%s result=%s",
+            "[V083 QG RESULT] strategy=%s profile=%s passed=%s failed_checks=%s reason=%s",
             result.strategy,
             profile,
-            "PASS" if diagnostics.passed else "FAIL",
+            diagnostics.passed,
+            diagnostics.failed_checks,
+            diagnostics.failure_reason or "none",
         )
         for check in diagnostics.checks:
             logger.info(
-                "[QUALITY GATE] strategy=%s check=%s actual=%.4f threshold=%.4f result=%s",
+                "[V083 QG CHECK] strategy=%s check=%s actual=%.6f threshold=%.6f passed=%s",
                 result.strategy,
                 check.key,
                 check.actual,
                 check.threshold,
-                "PASS" if check.passed else "FAIL",
+                check.passed,
             )
-        logger.info(
-            "[QUALITY GATE] strategy=%s failed_checks=%s reason=%s",
-            result.strategy,
-            diagnostics.failed_checks,
-            diagnostics.failure_reason or "none",
-        )
         return diagnostics.passed
 
     @staticmethod
@@ -131,12 +152,51 @@ class AnalysisServiceV08:
             raise ValueError(f"Unsupported profile: {profile}")
         ordered = sorted(list(candles), key=lambda item: item.timestamp)
         minimum = self.PROFILES[profile]["train"] + self.PROFILES[profile]["test"]
+        logger.info(
+            "[V083 TRACE] ENTER AnalysisServiceV08.analyze ticker=%s instrument_uid=%s profile=%s candles=%d minimum=%d",
+            ticker,
+            instrument_uid,
+            profile,
+            len(ordered),
+            minimum,
+        )
         if len(ordered) < minimum:
+            logger.warning(
+                "[V083 TRACE] REJECT insufficient candles ticker=%s candles=%d minimum=%d",
+                ticker,
+                len(ordered),
+                minimum,
+            )
             raise ValueError(f"Для v0.8-анализа требуется не менее {minimum} исторических свечей для профиля {profile}")
 
         regime_result = RegimeEngine.classify(ordered)
+        logger.info(
+            "[V083 TRACE] REGIME ticker=%s regime=%s confidence=%.4f",
+            ticker,
+            regime_result.regime,
+            regime_result.confidence,
+        )
         robust_results = [self._robust(ordered, strategy, profile) for strategy in self.STRATEGIES]
         strategies = [self._legacy_strategy_result(item, profile) for item in robust_results]
+        for item in strategies:
+            logger.info(
+                "[V083 STRATEGY SUMMARY] ticker=%s strategy=%s qg=%s score=%.4f return=%.4f dd=%.4f sharpe=%.4f "
+                "wf=%d positive=%d risk_ok=%d sharpe_positive=%d return_consistency=%.2f risk_consistency=%.2f sharpe_consistency=%.2f",
+                ticker,
+                item.strategy,
+                item.quality_gate,
+                item.score,
+                item.return_pct,
+                item.max_drawdown_pct,
+                item.sharpe,
+                item.wf_windows,
+                item.positive_return_windows,
+                item.risk_ok_windows,
+                item.positive_sharpe_windows,
+                item.return_consistency,
+                item.risk_consistency,
+                item.sharpe_consistency,
+            )
         passed = [item for item in strategies if item.quality_gate]
         winner = max(passed, key=lambda item: item.score) if passed else None
         score_winner = max(strategies, key=lambda item: item.score) if strategies else None
@@ -155,7 +215,7 @@ class AnalysisServiceV08:
             },
         )
         logger.info(
-            "[STRATEGY SELECTION] ticker=%s profile=%s quality_gate_winner=%s max_score_strategy=%s "
+            "[V083 STRATEGY SELECTION] ticker=%s profile=%s quality_gate_winner=%s max_score_strategy=%s "
             "quality_gate_pass_count=%d total_strategies=%d",
             ticker,
             profile,
@@ -172,7 +232,7 @@ class AnalysisServiceV08:
             f"Ни одна стратегия не прошла v0.8 Quality Gate; режим {regime_result.regime}, "
             f"regime confidence {regime_result.confidence:.0f}%."
         )
-        return AnalysisResult(
+        result = AnalysisResult(
             instrument_uid=instrument_uid,
             ticker=ticker,
             profile=profile,
@@ -187,6 +247,15 @@ class AnalysisServiceV08:
             created_at=ordered[-1].timestamp.isoformat(),
             analysis_version=ANALYSIS_V08_VERSION,
         )
+        logger.info(
+            "[V083 TRACE] EXIT AnalysisServiceV08.analyze ticker=%s recommendation=%s passed=%d/%d score=%.4f",
+            ticker,
+            recommendation,
+            len(passed),
+            len(strategies),
+            result.score,
+        )
+        return result
 
 
 __all__ = ["ANALYSIS_V08_VERSION", "AnalysisV08Diagnostics", "AnalysisServiceV08"]
