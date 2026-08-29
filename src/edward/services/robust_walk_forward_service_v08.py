@@ -59,7 +59,7 @@ class RobustWalkForwardResult:
     version: str = ROBUST_WF_VERSION
 
 class RobustWalkForwardService:
-    """Rolling out-of-sample research with parameter/performance robustness."""
+    """Rolling out-of-sample research with robust parameter-region selection."""
     @staticmethod
     def _parameter_key(parameters: dict[str, Any]) -> tuple[tuple[str, Any], ...]: return parameter_key(parameters)
 
@@ -91,6 +91,55 @@ class RobustWalkForwardService:
             values=[cls._criterion_key(criterion,item) for item in candidates]; ordered=sorted(set(values)); value=cls._criterion_key(criterion,result)
             scores.append((ordered.index(value)+1)/max(len(ordered),1))
         return mean(scores)
+
+    @classmethod
+    def _robust_selection_key(cls, params: dict[str, Any], result: ResearchBacktestResult, candidates: Sequence[tuple[dict[str, Any], ResearchBacktestResult]]) -> float:
+        """Score a parameter region using only train-window evidence.
+
+        The selector deliberately rewards consistency across several train metrics
+        and local neighborhood stability instead of selecting the single highest
+        excess-return point. No OOS data is used here.
+        """
+        results = [item[1] for item in candidates]
+        ranks = []
+        for criterion in ("excess_return", "sharpe", "sortino", "return_dd"):
+            values = [cls._criterion_key(criterion, item) for item in results]
+            ordered = sorted(set(values))
+            value = cls._criterion_key(criterion, result)
+            ranks.append((ordered.index(value) + 1) / max(len(ordered), 1) * 100.0)
+        neighborhood, _ = neighborhood_stability_pct(params, candidates)
+        return 0.40 * ranks[0] + 0.20 * ranks[1] + 0.15 * ranks[2] + 0.10 * ranks[3] + 0.15 * neighborhood
+
+    @classmethod
+    def _select_robust_parameters(cls, candidates: Sequence[tuple[dict[str, Any], ResearchBacktestResult]]) -> tuple[dict[str, Any], ResearchBacktestResult, float]:
+        scored = [
+            (params, result, cls._robust_selection_key(params, result, candidates))
+            for params, result in candidates
+        ]
+        selected_params, selected_result, selected_score = max(
+            scored,
+            key=lambda item: (item[2], item[1].sharpe, -item[1].max_drawdown_pct),
+        )
+        return dict(selected_params), selected_result, selected_score
+
+    @classmethod
+    def _log_robust_selection(cls, *, strategy, window_index, candidates, selected_params, selected_score):
+        ranked = sorted(
+            ((params, result, cls._robust_selection_key(params, result, candidates)) for params, result in candidates),
+            key=lambda item: item[2],
+            reverse=True,
+        )
+        for rank, (params, result, score) in enumerate(ranked, 1):
+            logger.warning(
+                "[V083 WF ROBUST SELECTION] strategy=%s window=%d rank=%d selected=%s params=%s robust_train_score=%.2f excess=%.4f sharpe=%.4f sortino=%.4f dd=%.4f neighborhood=%.2f",
+                strategy, window_index, rank, params == selected_params, params, score,
+                result.excess_return_pct, result.sharpe, result.sortino, result.max_drawdown_pct,
+                neighborhood_stability_pct(params, candidates)[0],
+            )
+        logger.warning(
+            "[V083 WF ROBUST SELECTION RESULT] strategy=%s window=%d selected=%s robust_train_score=%.2f",
+            strategy, window_index, selected_params, selected_score,
+        )
 
     @classmethod
     def _log_selection_criteria_diagnostics(cls, *, strategy, window_index, train_candidates, oos_candidates, production_selected_params):
@@ -157,7 +206,7 @@ class RobustWalkForwardService:
             train=ordered[start:start+train_size]; test=ordered[start+train_size:start+train_size+test_size]; window_index=len(windows); candidates=[]
             for params in parameter_grid:
                 train_result=ResearchBacktestService.run(candles=train,strategy=strategy,parameters=params,signal_fn=signal_factory(strategy,params),costs=costs); candidates.append((dict(params),train_result))
-            selected_params,train_result=max(candidates,key=cls._candidate_sort_key); cls._log_parameter_leaderboard(strategy=strategy,window_index=window_index,candidates=candidates,selected_params=selected_params); margin,neighborhood,confidence=cls._log_parameter_stability(strategy=strategy,window_index=window_index,candidates=candidates,selected_params=selected_params); stability_margins.append(margin); stability_neighborhoods.append(neighborhood); stability_confidences.append(confidence)
+            selected_params,train_result,robust_train_score=cls._select_robust_parameters(candidates); cls._log_parameter_leaderboard(strategy=strategy,window_index=window_index,candidates=candidates,selected_params=selected_params); cls._log_robust_selection(strategy=strategy,window_index=window_index,candidates=candidates,selected_params=selected_params,selected_score=robust_train_score); margin,neighborhood,confidence=cls._log_parameter_stability(strategy=strategy,window_index=window_index,candidates=candidates,selected_params=selected_params); stability_margins.append(margin); stability_neighborhoods.append(neighborhood); stability_confidences.append(confidence)
             oos_candidates=[]
             for params,_ in candidates:
                 oos_result=ResearchBacktestService.run(candles=test,strategy=strategy,parameters=params,signal_fn=signal_factory(strategy,params),costs=costs); oos_candidates.append((dict(params),oos_result))
@@ -170,9 +219,9 @@ class RobustWalkForwardService:
             if changed: shadow_changed+=1
             shadow_deltas.append(shadow_delta)
             test_result=next(result for params,result in oos_candidates if params==selected_params); exposures.append(test_result.exposure_pct)
-            window=WalkForwardWindowResult(window_index,train[0].timestamp,train[-1].timestamp,test[0].timestamp,test[-1].timestamp,dict(selected_params),train_result.excess_return_pct,test_result.net_return_pct,test_result.benchmark_return_pct,test_result.excess_return_pct,test_result.max_drawdown_pct,test_result.sharpe,test_result.sortino,test_result.trades); windows.append(window)
+            window=WalkForwardWindowResult(window_index,train[0].timestamp,train[-1].timestamp,test[0].timestamp,test[-1].timestamp,dict(selected_params),robust_train_score,test_result.net_return_pct,test_result.benchmark_return_pct,test_result.excess_return_pct,test_result.max_drawdown_pct,test_result.sharpe,test_result.sortino,test_result.trades); windows.append(window)
             cls._append_oos_candidate_history(strategy=strategy,window_index=window_index,oos_candidates=oos_candidates,selection_confidence_value=confidence,history=history)
-            logger.warning("[V083 WF WINDOW] strategy=%s window=%d train=%s..%s test=%s..%s params=%s train_excess=%.4f oos_return=%.4f benchmark=%.4f excess=%.4f dd=%.4f sharpe=%.4f sortino=%.4f trades=%d",strategy,window.index,window.train_start,window.train_end,window.test_start,window.test_end,window.parameters,window.train_score,window.test_net_return_pct,window.test_benchmark_return_pct,window.test_excess_return_pct,window.test_max_drawdown_pct,window.test_sharpe,window.test_sortino,window.test_trades); cls._log_window_activity(strategy=strategy,window=window,test_result=test_result); start+=test_size
+            logger.warning("[V083 WF WINDOW] strategy=%s window=%d train=%s..%s test=%s..%s params=%s train_excess=%.4f robust_train_score=%.2f oos_return=%.4f benchmark=%.4f excess=%.4f dd=%.4f sharpe=%.4f sortino=%.4f trades=%d",strategy,window.index,window.train_start,window.train_end,window.test_start,window.test_end,window.parameters,window.train_score,window.test_net_return_pct,window.test_benchmark_return_pct,window.test_excess_return_pct,window.test_max_drawdown_pct,window.test_sharpe,window.test_sortino,window.test_trades); cls._log_window_activity(strategy=strategy,window=window,test_result=test_result); start+=test_size
         if not windows: logger.warning("[V083 WF EMPTY] strategy=%s candles=%d train=%d test=%d",strategy,len(ordered),train_size,test_size); return cls._empty(strategy)
         returns=[i.test_net_return_pct for i in windows]; drawdowns=[i.test_max_drawdown_pct for i in windows]; sharpes=[i.test_sharpe for i in windows]; count=len(windows); positive=sum(v>0 for v in returns); risk_ok=sum(max_drawdown_pct is None or v<=max_drawdown_pct for v in drawdowns); positive_sharpe=sum(v>0 for v in sharpes); return_consistency=positive/count*100; risk_consistency=risk_ok/count*100; sharpe_consistency=positive_sharpe/count*100; stability=cls._parameter_stability(windows); dispersion_penalty=pstdev(returns)/max(abs(mean(returns)),1.0)*10; performance_consistency=max(0.0,min(100.0,100.0-dispersion_penalty)); robustness=round(return_consistency*.35+risk_consistency*.20+sharpe_consistency*.15+stability.stability_pct*.15+performance_consistency*.15,2)
         result=RobustWalkForwardResult(strategy=strategy,windows=tuple(windows),mean_test_return_pct=mean(returns),median_test_return_pct=median(returns),std_test_return_pct=pstdev(returns) if len(returns)>1 else 0.0,worst_test_return_pct=min(returns),best_test_return_pct=max(returns),mean_test_drawdown_pct=mean(drawdowns),mean_test_sharpe=mean(sharpes),positive_return_windows=positive,risk_ok_windows=risk_ok,positive_sharpe_windows=positive_sharpe,return_consistency_pct=return_consistency,risk_consistency_pct=risk_consistency,sharpe_consistency_pct=sharpe_consistency,robustness_score=robustness,parameter_stability=stability)
