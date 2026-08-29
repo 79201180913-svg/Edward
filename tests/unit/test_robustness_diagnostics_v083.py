@@ -1,5 +1,3 @@
-from dataclasses import replace
-
 from edward.services.robustness_diagnostics_v083 import RobustnessDiagnosticsServiceV083
 from edward.services.robust_walk_forward_service_v08 import (
     ParameterStability,
@@ -31,7 +29,8 @@ def _result(windows):
     positive = sum(item.test_net_return_pct > 0 for item in windows)
     risk_ok = sum(item.test_max_drawdown_pct <= 30 for item in windows)
     sharpe_positive = sum(item.test_sharpe > 0 for item in windows)
-    stability = ParameterStability(len(windows), len(windows), 100.0, tuple((tuple(sorted(item.parameters.items())),) for item in windows))
+    selected = tuple(tuple(sorted(item.parameters.items())) for item in windows)
+    stability = ParameterStability(len(windows), len(windows), 100.0, selected)
     returns = [item.test_net_return_pct for item in windows]
     return RobustWalkForwardResult(
         strategy="Test",
