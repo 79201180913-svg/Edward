@@ -31,6 +31,7 @@ class AnalysisPipelineV08Result:
     portfolio_context_available: bool = False
     confidence: ConfidenceResult | None = None
     version: str = ANALYSIS_PIPELINE_V08_VERSION
+    diagnostics: object | None = None
 
 
 class AnalysisPipelineServiceV08:
@@ -130,6 +131,7 @@ class AnalysisPipelineServiceV08:
                 None,
                 False,
                 confidence,
+                diagnostics=self.analysis_service.last_diagnostics,
             )
 
         backtest = ResearchBacktestService.run_simple_strategy(
@@ -188,6 +190,7 @@ class AnalysisPipelineServiceV08:
             evidence_strategy,
             portfolio_context_available,
             confidence,
+            diagnostics=self.analysis_service.last_diagnostics,
         )
 
 
