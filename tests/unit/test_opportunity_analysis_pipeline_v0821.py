@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import edward.services.opportunity_analysis_pipeline_v0821 as adapter_module
 from edward.services.opportunity_analysis_pipeline_v0821 import (
+    OPPORTUNITY_ANALYSIS_V0821_VERSION,
     OpportunityAnalysisPipelineV0821,
     UnifiedOpportunityEngineV0821,
 )
@@ -65,6 +66,10 @@ class FakePipeline:
     def analyze(self, **kwargs):
         self.calls.append(kwargs)
         return self.result
+
+
+def test_version_is_0821():
+    assert OPPORTUNITY_ANALYSIS_V0821_VERSION == "0.8.2.1"
 
 
 def test_adapter_reuses_v082_pipeline_and_contract_data(monkeypatch):
