@@ -25,12 +25,7 @@ class AnalysisV08Diagnostics:
 
 
 class AnalysisServiceV08:
-    """v0.8 analytical facade with the v0.7 AnalysisResult contract.
-
-    The facade keeps the public result shape unchanged while replacing the
-    research calculation underneath with the v0.8 cost-aware backtest,
-    robustness analysis and regime engine.
-    """
+    """v0.8 analytical facade with the v0.7 AnalysisResult contract."""
 
     STRATEGIES = ("Trend Following", "Momentum", "Breakout", "Mean Reversion")
     PROFILES = {
@@ -90,15 +85,12 @@ class AnalysisServiceV08:
                 check.threshold,
                 "PASS" if check.passed else "FAIL",
             )
-        if diagnostics.failed_checks:
-            logger.info(
-                "[QUALITY GATE] strategy=%s failed_checks=%s reason=%s",
-                result.strategy,
-                diagnostics.failed_checks,
-                diagnostics.failure_reason,
-            )
-        else:
-            logger.info("[QUALITY GATE] strategy=%s failed_checks=[] reason=none", result.strategy)
+        logger.info(
+            "[QUALITY GATE] strategy=%s failed_checks=%s reason=%s",
+            result.strategy,
+            diagnostics.failed_checks,
+            diagnostics.failure_reason or "none",
+        )
         return diagnostics.passed
 
     @staticmethod
@@ -147,6 +139,7 @@ class AnalysisServiceV08:
         strategies = [self._legacy_strategy_result(item, profile) for item in robust_results]
         passed = [item for item in strategies if item.quality_gate]
         winner = max(passed, key=lambda item: item.score) if passed else None
+        score_winner = max(strategies, key=lambda item: item.score) if strategies else None
         recommendation = winner.strategy if winner else None
         confidence = "Low"
         if winner:
@@ -160,6 +153,16 @@ class AnalysisServiceV08:
                 item.strategy: QualityGateDiagnosticsServiceV0822.evaluate(item, profile)
                 for item in robust_results
             },
+        )
+        logger.info(
+            "[STRATEGY SELECTION] ticker=%s profile=%s quality_gate_winner=%s max_score_strategy=%s "
+            "quality_gate_pass_count=%d total_strategies=%d",
+            ticker,
+            profile,
+            winner.strategy if winner else None,
+            score_winner.strategy if score_winner else None,
+            len(passed),
+            len(strategies),
         )
         explanation = (
             f"Рекомендована {winner.strategy}: v0.8 robustness {winner.score:.1f}, "
