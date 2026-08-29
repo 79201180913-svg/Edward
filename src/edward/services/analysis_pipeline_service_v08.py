@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Iterable, Mapping, Sequence
 
@@ -17,6 +18,7 @@ from edward.services.regime_engine_v08 import RegimeEngine
 from edward.services.research_backtest_service_v08 import ResearchBacktestService
 
 ANALYSIS_PIPELINE_V08_VERSION = "0.8.0"
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +83,21 @@ class AnalysisPipelineServiceV08:
         concentration_penalty_pct: float = 0.0,
     ) -> AnalysisPipelineV08Result:
         ordered = sorted(list(candles), key=lambda item: item.timestamp)
+        logger.info(
+            "[V083 TRACE] ENTER AnalysisPipelineServiceV08.analyze ticker=%s instrument_uid=%s "
+            "profile=%s candles=%d risk_profile=%s horizon=%s",
+            ticker,
+            instrument_uid,
+            profile,
+            len(ordered),
+            risk_profile,
+            horizon,
+        )
+        logger.info(
+            "[V083 TRACE] AnalysisPipelineServiceV08 analysis_service=%s version=%s",
+            type(self.analysis_service).__name__,
+            getattr(self.analysis_service, "ANALYSIS_V08_VERSION", "unknown"),
+        )
         analysis = self.analysis_service.analyze(
             instrument_uid=instrument_uid,
             ticker=ticker,
@@ -89,8 +106,22 @@ class AnalysisPipelineServiceV08:
             risk_profile=risk_profile,
             horizon=horizon,
         )
+        logger.info(
+            "[V083 TRACE] EXIT AnalysisServiceV08 ticker=%s strategies=%d recommendation=%s score=%.4f",
+            ticker,
+            len(analysis.strategies),
+            analysis.recommendation,
+            analysis.score,
+        )
         evidence_strategy_result = max(analysis.strategies, key=lambda item: item.score) if analysis.strategies else None
         evidence_strategy = evidence_strategy_result.strategy if evidence_strategy_result else None
+        logger.info(
+            "[V083 TRACE] evidence_strategy ticker=%s strategy=%s quality_gate=%s stability=%s",
+            ticker,
+            evidence_strategy,
+            evidence_strategy_result.quality_gate if evidence_strategy_result else None,
+            evidence_strategy_result.stability if evidence_strategy_result else None,
+        )
         raw_regime = RegimeEngine.classify(ordered)
         regime_confidence = cap_regime_confidence(raw_regime.confidence)
         forecast_quality_score = None
@@ -120,6 +151,7 @@ class AnalysisPipelineServiceV08:
                 portfolio_impact=impact,
                 confidence_score=confidence.overall_confidence,
             )
+            logger.info("[V083 TRACE] EXIT AnalysisPipelineServiceV08 ticker=%s no_evidence_strategy", ticker)
             return AnalysisPipelineV08Result(
                 analysis,
                 opportunity,
@@ -177,6 +209,13 @@ class AnalysisPipelineServiceV08:
             robustness_score=evidence_strategy_result.stability,
             forecast_quality_score=forecast_quality_score,
             confidence_score=confidence.overall_confidence,
+        )
+        logger.info(
+            "[V083 TRACE] EXIT AnalysisPipelineServiceV08 ticker=%s evidence_strategy=%s opportunity=%.4f confidence=%.4f",
+            ticker,
+            evidence_strategy,
+            float(opportunity.score),
+            confidence.overall_confidence,
         )
         return AnalysisPipelineV08Result(
             analysis,
