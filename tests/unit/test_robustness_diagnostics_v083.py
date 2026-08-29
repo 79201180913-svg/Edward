@@ -57,7 +57,7 @@ def test_breakdown_reconstructs_existing_robustness_formula():
     result = _result([
         _window(0, 1, 1.0),
         _window(1, 1, 2.0),
-        _window(2, 0, -1.0),
+        _window(2, 0, -1.0, sharpe=-0.5),
         _window(3, 1, -2.0),
     ])
 
@@ -74,7 +74,7 @@ def test_breakdown_reconstructs_existing_robustness_formula():
     assert diagnostics.robustness_total == expected
     assert diagnostics.return_consistency_score == 50.0
     assert diagnostics.risk_consistency_score == 100.0
-    assert diagnostics.sharpe_consistency_score == 50.0
+    assert diagnostics.sharpe_consistency_score == 75.0
     assert diagnostics.parameter_stability_score == 100.0
 
 
