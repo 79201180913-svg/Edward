@@ -87,7 +87,7 @@ class RobustWalkForwardService:
     @classmethod
     def _diagnostic_composite_key(cls, result: ResearchBacktestResult, candidates: Sequence[ResearchBacktestResult]) -> float:
         scores=[]
-        for criterion in ("excess_return", "sharpe", "sortino", "return_dd"):
+        for criterion in ("excess_return","sharpe","sortino","return_dd"):
             values=[cls._criterion_key(criterion,item) for item in candidates]; ordered=sorted(set(values)); value=cls._criterion_key(criterion,result)
             scores.append((ordered.index(value)+1)/max(len(ordered),1))
         return mean(scores)
@@ -140,6 +140,13 @@ class RobustWalkForwardService:
         return next(rank for rank,(params,_) in enumerate(ranked,1) if cls._parameter_key(params)==target)
 
     @classmethod
+    def _append_oos_candidate_history(cls, *, strategy, window_index, oos_candidates, selection_confidence_value, history):
+        """Append complete current-window OOS evidence only after shadow selection."""
+        for params, result in oos_candidates:
+            history.append(ParameterTransferHistoryEntry(window_index=window_index,parameters=dict(params),oos_net_return_pct=result.net_return_pct,oos_sharpe=result.sharpe,oos_drawdown_pct=result.max_drawdown_pct,selection_confidence=selection_confidence_value))
+        logger.warning("[V083 WF TRANSFER HISTORY AUDIT APPEND] strategy=%s window=%d candidates_appended=%d history_entries=%d",strategy,window_index,len(oos_candidates),len(history))
+
+    @classmethod
     def run(cls, *, candles: Iterable[Candle], strategy: str, parameter_grid: Sequence[dict[str, Any]], signal_factory: Callable[[str, dict[str, Any]], Callable[[Sequence[Candle], int], bool]], train_size: int, test_size: int, costs: BacktestCostModel | None = None, max_drawdown_pct: float | None = None) -> RobustWalkForwardResult:
         ordered=sorted(list(candles),key=lambda item:item.timestamp)
         if train_size<2 or test_size<1: raise ValueError("train_size must be >= 2 and test_size must be >= 1")
@@ -164,8 +171,7 @@ class RobustWalkForwardService:
             shadow_deltas.append(shadow_delta)
             test_result=next(result for params,result in oos_candidates if params==selected_params); exposures.append(test_result.exposure_pct)
             window=WalkForwardWindowResult(window_index,train[0].timestamp,train[-1].timestamp,test[0].timestamp,test[-1].timestamp,dict(selected_params),train_result.excess_return_pct,test_result.net_return_pct,test_result.benchmark_return_pct,test_result.excess_return_pct,test_result.max_drawdown_pct,test_result.sharpe,test_result.sortino,test_result.trades); windows.append(window)
-            history.append(ParameterTransferHistoryEntry(window_index=window_index,parameters=dict(selected_params),oos_net_return_pct=test_result.net_return_pct,oos_sharpe=test_result.sharpe,oos_drawdown_pct=test_result.max_drawdown_pct,selection_confidence=confidence))
-            logger.warning("[V083 WF TRANSFER HISTORY APPEND] strategy=%s window=%d history_size=%d appended_parameters=%s oos_return=%.4f oos_sharpe=%.4f oos_dd=%.4f",strategy,window_index,len(history),selected_params,test_result.net_return_pct,test_result.sharpe,test_result.max_drawdown_pct)
+            cls._append_oos_candidate_history(strategy=strategy,window_index=window_index,oos_candidates=oos_candidates,selection_confidence_value=confidence,history=history)
             logger.warning("[V083 WF WINDOW] strategy=%s window=%d train=%s..%s test=%s..%s params=%s train_excess=%.4f oos_return=%.4f benchmark=%.4f excess=%.4f dd=%.4f sharpe=%.4f sortino=%.4f trades=%d",strategy,window.index,window.train_start,window.train_end,window.test_start,window.test_end,window.parameters,window.train_score,window.test_net_return_pct,window.test_benchmark_return_pct,window.test_excess_return_pct,window.test_max_drawdown_pct,window.test_sharpe,window.test_sortino,window.test_trades); cls._log_window_activity(strategy=strategy,window=window,test_result=test_result); start+=test_size
         if not windows: logger.warning("[V083 WF EMPTY] strategy=%s candles=%d train=%d test=%d",strategy,len(ordered),train_size,test_size); return cls._empty(strategy)
         returns=[i.test_net_return_pct for i in windows]; drawdowns=[i.test_max_drawdown_pct for i in windows]; sharpes=[i.test_sharpe for i in windows]; count=len(windows); positive=sum(v>0 for v in returns); risk_ok=sum(max_drawdown_pct is None or v<=max_drawdown_pct for v in drawdowns); positive_sharpe=sum(v>0 for v in sharpes); return_consistency=positive/count*100; risk_consistency=risk_ok/count*100; sharpe_consistency=positive_sharpe/count*100; stability=cls._parameter_stability(windows); dispersion_penalty=pstdev(returns)/max(abs(mean(returns)),1.0)*10; performance_consistency=max(0.0,min(100.0,100.0-dispersion_penalty)); robustness=round(return_consistency*.35+risk_consistency*.20+sharpe_consistency*.15+stability.stability_pct*.15+performance_consistency*.15,2)
@@ -176,6 +182,6 @@ class RobustWalkForwardService:
         logger.warning("[V083 WF SELECTION STABILITY RESULT] strategy=%s windows=%d mean_winner_margin_pct=%.2f mean_neighborhood_stability_pct=%.2f mean_selection_confidence=%.2f",strategy,count,mean(stability_margins),mean(stability_neighborhoods),mean(stability_confidences)); logger.warning("[V083 WF RESULT] strategy=%s windows=%d mean_return=%.4f median_return=%.4f std_return=%.4f worst_return=%.4f best_return=%.4f mean_dd=%.4f mean_sharpe=%.4f positive=%d/%d risk_ok=%d/%d positive_sharpe=%d/%d return_consistency=%.2f risk_consistency=%.2f sharpe_consistency=%.2f parameter_stability=%.2f robustness=%.2f",strategy,count,result.mean_test_return_pct,result.median_test_return_pct,result.std_test_return_pct,result.worst_test_return_pct,result.best_test_return_pct,result.mean_test_drawdown_pct,result.mean_test_sharpe,result.positive_return_windows,count,result.risk_ok_windows,count,result.positive_sharpe_windows,count,result.return_consistency_pct,result.risk_consistency_pct,result.sharpe_consistency_pct,result.parameter_stability.stability_pct,result.robustness_score); return result
 
     @staticmethod
-    def _empty(strategy: str) -> RobustWalkForwardResult: return RobustWalkForwardResult(strategy,(),0.0,0.0,0.0,0.0,0.0,0.0,0.0,0,0,0,0.0,0.0,0.0,0.0,ParameterStability(0,0,0.0,()))
+    def _empty(strategy: str) -> RobustWalkForwardResult: return RobustWalkForwardResult(strategy,(),0.0,0.0,0.0,0.0,0.0,0.0,0,0,0,0.0,0.0,0.0,0.0,ParameterStability(0,0,0.0,()))
 
 __all__=["ROBUST_WF_VERSION","WalkForwardWindowResult","ParameterStability","RobustWalkForwardResult","RobustWalkForwardService"]
