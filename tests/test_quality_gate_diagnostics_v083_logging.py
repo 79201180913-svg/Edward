@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 
 from edward.services.quality_gate_diagnostics_v0822 import QualityGateDiagnosticsServiceV0822
@@ -68,3 +69,21 @@ def test_v083_quality_gate_logging_exposes_summary_windows_and_checks(caplog):
     assert any("[V083 QG PARAMETER STABILITY]" in message for message in messages)
     assert sum("[V083 QG CHECK]" in message for message in messages) == 6
     assert any("[V083 QG RESULT]" in message and "passed=True" in message for message in messages)
+
+
+def test_v083_quality_gate_exposes_blockers_and_check_margins(caplog):
+    caplog.set_level("INFO")
+
+    result = replace(_result(), return_consistency_pct=40.0)
+    diagnostics = QualityGateDiagnosticsServiceV0822.evaluate(result, "speculative")
+
+    assert diagnostics.passed is False
+    assert [check.key for check in diagnostics.blocking_checks] == ["return_consistency"]
+    check = diagnostics.blocking_checks[0]
+    assert check.actual == 40.0
+    assert check.threshold == 60.0
+    assert check.actual - check.threshold == -20.0
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("[V083 QG CHECK]" in message and "margin=-20.000000" in message for message in messages)
+    assert any("[V083 QG BLOCKERS]" in message and "return_consistency" in message for message in messages)
