@@ -53,6 +53,15 @@ class AnalysisPipelineV082Result:
     def confidence(self):
         return self.base.confidence
 
+    @property
+    def evidence_strategy(self):
+        """Expose the canonical evidence strategy from the wrapped v0.8.1 pipeline."""
+        return self.base.evidence_strategy
+
+    @property
+    def portfolio_context_available(self):
+        return self.base.portfolio_context_available
+
 
 class AnalysisPipelineServiceV082:
     """v0.8.2 facade reusing the stable v0.8.1 factor pipeline.
