@@ -3,10 +3,14 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any, Callable
 
+import edward.services.opportunity_search_service as opportunity_search_module
 from edward.services.execution_readiness_service import ExecutionReadinessInput, ExecutionReadinessService
 from edward.services.forecast_quality_gate_service import ForecastQualityGateService
 from edward.services.forecast_walk_forward_service import ForecastWalkForwardService
-from edward.services.opportunity_analysis_pipeline_v0821 import OpportunityAnalysisPipelineV0821
+from edward.services.opportunity_analysis_pipeline_v0821 import (
+    OpportunityAnalysisPipelineV0821,
+    UnifiedOpportunityEngineV0821,
+)
 from edward.services.opportunity_search_service import (
     MARKET_SCOPE,
     ProgressCallback,
@@ -26,6 +30,10 @@ class LiveOpportunitySearchService(OpportunitySearchService):
         # search must consume the same v0.8.2 analysis result.
         self.force_recompute = force_recompute
         super().__init__(client, analysis_service=OpportunityAnalysisPipelineV0821(client))
+        # Keep the existing OpportunitySearchService call graph intact while
+        # making its OpportunityEngine consume the canonical v0.8.2 result.
+        # The bridge falls back to the legacy engine for non-v0.8.2 callers.
+        opportunity_search_module.OpportunityEngine = UnifiedOpportunityEngineV0821
 
     @property
     def cache_info(self) -> dict[str, int]:
