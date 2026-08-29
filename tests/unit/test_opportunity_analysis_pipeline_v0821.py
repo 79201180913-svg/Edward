@@ -2,7 +2,10 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 
 import edward.services.opportunity_analysis_pipeline_v0821 as adapter_module
-from edward.services.opportunity_analysis_pipeline_v0821 import OpportunityAnalysisPipelineV0821
+from edward.services.opportunity_analysis_pipeline_v0821 import (
+    OpportunityAnalysisPipelineV0821,
+    UnifiedOpportunityEngineV0821,
+)
 from edward.services.opportunity_search_service_live_v04 import LiveOpportunitySearchService
 
 
@@ -55,7 +58,7 @@ class FakePipeline:
     def __init__(self):
         self.calls = []
         self.result = FakePipelineResult(
-            base=FakeBase(base="base-v08"),
+            base=FakeBase(base="base-v08", opportunity="unified-opportunity"),
             analysis=FakeAnalysis(),
         )
 
@@ -122,6 +125,21 @@ def test_adapter_reuses_v082_pipeline_and_contract_data(monkeypatch):
     assert call["fundamentals"]["__instrument_context"]["name"] == "Sberbank"
     assert result.pipeline_result.base.base == "news-adjusted-base"
     assert result.strategies == ()
+
+
+def test_unified_opportunity_engine_returns_v082_opportunity():
+    view = SimpleNamespace(
+        pipeline_result=SimpleNamespace(opportunity="v082-opportunity"),
+    )
+
+    result = UnifiedOpportunityEngineV0821.evaluate(
+        view,
+        candles=[],
+        strategy_result=None,
+        position_weight_pct=0.0,
+    )
+
+    assert result == "v082-opportunity"
 
 
 def test_live_opportunity_service_uses_v0821_adapter(monkeypatch):
