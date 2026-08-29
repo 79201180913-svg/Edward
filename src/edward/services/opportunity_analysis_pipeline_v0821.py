@@ -15,6 +15,8 @@ from edward.services.semantic_robust_contract_analysis_data_service_v081 import 
     SemanticRobustContractAnalysisDataServiceV081,
 )
 
+OPPORTUNITY_ANALYSIS_V0821_VERSION = "0.8.2.1"
+
 
 @dataclass(frozen=True, slots=True)
 class OpportunityAnalysisViewV0821:
@@ -183,6 +185,7 @@ class OpportunityAnalysisPipelineV0821:
 
 
 __all__ = [
+    "OPPORTUNITY_ANALYSIS_V0821_VERSION",
     "OpportunityAnalysisPipelineV0821",
     "OpportunityAnalysisViewV0821",
     "UnifiedOpportunityEngineV0821",
