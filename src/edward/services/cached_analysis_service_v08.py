@@ -10,7 +10,9 @@ from edward.services.strategy_optimization_cache import StrategyOptimizationCach
 
 
 class CachedAnalysisServiceV08(AnalysisServiceV08):
-    """v0.8 analysis facade with the existing persisted WF cache contract."""
+    """v0.8 analysis facade with a version-isolated persisted WF cache."""
+
+    CACHE_NAMESPACE = "v0.8"
 
     def __init__(self, store, *, force_recompute: bool = False):
         super().__init__()
@@ -38,6 +40,7 @@ class CachedAnalysisServiceV08(AnalysisServiceV08):
             raise ValueError(f"Для v0.8-анализа требуется не менее {minimum} исторических свечей для профиля {profile}")
 
         cache = StrategyOptimizationCache(self.store.data_dir if self.store is not None else "data")
+        cache_uid = f"{self.CACHE_NAMESPACE}:{instrument_uid}"
         regime_result = RegimeEngine.classify(ordered)
         strategies = []
         self.last_cache_hits = 0
@@ -46,14 +49,14 @@ class CachedAnalysisServiceV08(AnalysisServiceV08):
 
         for strategy in self.STRATEGIES:
             fingerprint = cache.fingerprint(
-                instrument_uid=instrument_uid,
+                instrument_uid=cache_uid,
                 profile=profile,
                 risk_profile=risk_profile,
                 strategy=strategy,
                 candles=ordered,
             )
             cached = None if self.force_recompute else cache.get(
-                instrument_uid=instrument_uid,
+                instrument_uid=cache_uid,
                 profile=profile,
                 risk_profile=risk_profile,
                 strategy=strategy,
@@ -70,7 +73,7 @@ class CachedAnalysisServiceV08(AnalysisServiceV08):
             robust_result = self._robust(ordered, strategy, profile)
             strategy_result = self._legacy_strategy_result(robust_result, profile)
             run_id = cache.save(
-                instrument_uid=instrument_uid,
+                instrument_uid=cache_uid,
                 ticker=ticker,
                 profile=profile,
                 risk_profile=risk_profile,
