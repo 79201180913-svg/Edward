@@ -21,7 +21,10 @@ from edward.services.forecast_model_selection_service import ForecastModelSelect
 from edward.services.instrument_catalog_service import InstrumentCatalogService
 from edward.services.instrument_decision_context_service import InstrumentDecisionContextService
 from edward.services.market_decision_context_service import MarketDecisionContextService
-from edward.services.opportunity_engine import OpportunityEngine
+from edward.services.opportunity_analysis_pipeline_v0821 import (
+    OpportunityAnalysisPipelineV0821,
+    UnifiedOpportunityEngineV0821,
+)
 from edward.services.portfolio_decision_context_service import PortfolioDecisionContextService
 from edward.services.position_sizing_service import PositionSizingInput, PositionSizingService
 from edward.services.trade_plan_service import TradePlanInput, TradePlanService
@@ -67,11 +70,12 @@ class OpportunitySearchResult:
 
 
 class OpportunitySearchService:
-    """Run the v0.4/v0.5 decision pipeline over a deliberately bounded instrument universe."""
+    """Run opportunity search using the canonical v0.8.2.1 analysis pipeline."""
 
     def __init__(self, client: Any, analysis_service: AnalysisService | None = None):
         self.client = client
-        self.analysis = analysis_service or AnalysisService()
+        self.analysis = analysis_service or OpportunityAnalysisPipelineV0821(client)
+        self.opportunity_engine = UnifiedOpportunityEngineV0821()
         self.catalog = InstrumentCatalogService(client)
         self.instrument_context = InstrumentDecisionContextService()
         self.market_context = MarketDecisionContextService()
@@ -90,6 +94,11 @@ class OpportunitySearchService:
         scope = str(scope or MARKET_SCOPE).upper()
         if scope not in SUPPORTED_SCOPES:
             raise ValueError(f"Unsupported opportunity scope: {scope}")
+        if force_recompute and hasattr(self.analysis, "force_recompute"):
+            try:
+                self.analysis.force_recompute()
+            except Exception:
+                logger.exception("[OPPORTUNITY CACHE] failed to force recompute")
         self._notify(progress_callback, "Загрузка списка инструментов", 2.0, 0, 0)
         account_id = self._active_account()
         positions = self.client.get_positions(account_id) if account_id else None
@@ -204,7 +213,7 @@ class OpportunitySearchService:
                 return self._unavailable(instrument, price, position_data.quantity, reason)
 
             self._notify(progress_callback, f"Анализ стратегий: {ticker}", progress_base + progress_span * 0.28, current, total)
-            analysis = self.analysis.analyze(instrument_uid=uid, ticker=ticker, candles=candles, profile=profile)
+            analysis = self.analysis.analyze(instrument_uid=uid, ticker=ticker, candles=candles, profile=profile, instrument=instrument)
             selected = self._best_strategy(analysis.strategies)
             market = self.market_context.build(last_price=_field(instrument, "last_price", None), candles=candles, market_regime=analysis.market_regime)
 
@@ -230,7 +239,8 @@ class OpportunitySearchService:
                 estimated_trade_value = None
                 if not position_data.is_open and portfolio_data.available_cash is not None and price is not None:
                     estimated_trade_value = max(0.0, portfolio_data.available_cash * 0.10)
-                opportunity = OpportunityEngine.evaluate(analysis, candles, selected, position_weight_pct=position_data.portfolio_weight_pct or portfolio_data.current_weight_pct, target_weight_pct=position_data.target_weight_pct or portfolio_data.target_weight_pct, max_position_weight_pct=portfolio_data.max_position_weight_pct, portfolio_available=portfolio_data.available, available_cash=portfolio_data.available_cash, estimated_trade_value=estimated_trade_value)
+                opportunity_engine = getattr(self, "opportunity_engine", None) or UnifiedOpportunityEngineV0821()
+                opportunity = opportunity_engine.evaluate(analysis, candles, selected, position_weight_pct=position_data.portfolio_weight_pct or portfolio_data.current_weight_pct, target_weight_pct=position_data.target_weight_pct or portfolio_data.target_weight_pct, max_position_weight_pct=portfolio_data.max_position_weight_pct, portfolio_available=portfolio_data.available, available_cash=portfolio_data.available_cash, estimated_trade_value=estimated_trade_value)
                 opportunity_context = opportunity.context
                 risk = getattr(opportunity, "risk", None)
                 risk_score = float(getattr(risk, "score", 0.0) or 0.0)

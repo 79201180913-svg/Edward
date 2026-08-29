@@ -3,11 +3,15 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any, Callable
 
+import edward.services.opportunity_search_service as opportunity_search_module
 from edward.config.application_settings import ApplicationSettingsStore
-from edward.services.cached_analysis_service import CachedAnalysisService
 from edward.services.execution_readiness_service import ExecutionReadinessInput, ExecutionReadinessService
 from edward.services.forecast_quality_gate_service import ForecastQualityGateService
 from edward.services.forecast_walk_forward_service import ForecastWalkForwardService
+from edward.services.opportunity_analysis_pipeline_v0821 import (
+    OpportunityAnalysisPipelineV0821,
+    UnifiedOpportunityEngineV0821,
+)
 from edward.services.opportunity_search_service import (
     MARKET_SCOPE,
     ProgressCallback,
@@ -20,17 +24,26 @@ ResultCallback = Callable[[OpportunitySearchResult, int, int], None]
 
 
 class LiveOpportunitySearchService(OpportunitySearchService):
-    """Opportunity search that streams results and reuses Walk Forward cache."""
+    """Opportunity search that streams results through the canonical v0.8.2 analysis."""
 
     def __init__(self, client: Any, *, force_recompute: bool = False):
         settings = ApplicationSettingsStore().load()
         store = SQLiteStore(settings.storage_path)
-        super().__init__(client, analysis_service=CachedAnalysisService(store, force_recompute=force_recompute))
+        self.force_recompute = force_recompute
+        self.analysis_pipeline = OpportunityAnalysisPipelineV0821(
+            client,
+            cache_store=store,
+            force_recompute=force_recompute,
+        )
+        super().__init__(client, analysis_service=self.analysis_pipeline)
+        # Keep the existing OpportunitySearchService call graph intact while
+        # making its OpportunityEngine consume the canonical v0.8.2 result.
+        # The bridge falls back to the legacy engine for non-v0.8.2 callers.
+        opportunity_search_module.OpportunityEngine = UnifiedOpportunityEngineV0821
 
     @property
     def cache_info(self) -> dict[str, int]:
-        analysis = self.analysis
-        return analysis.cache_info() if isinstance(analysis, CachedAnalysisService) else {"hits": 0, "misses": 0, "total": 0}
+        return self.analysis_pipeline.cache_info()
 
     @staticmethod
     def _enforce_execution_readiness(
@@ -69,7 +82,12 @@ class LiveOpportunitySearchService(OpportunitySearchService):
 
         readiness_text = "Исполнение: ДА" if gate.execution_ready else "Исполнение: НЕТ"
         gate_reason_text = " | ".join(gate.reasons) if gate.reasons else ""
-        execution_parts = [str(result.reason or ""), *([gate_reason_text] if gate_reason_text else []), f"Контроль качества прогноза: {forecast_quality_label}", readiness_text]
+        execution_parts = [
+            str(result.reason or ""),
+            *([gate_reason_text] if gate_reason_text else []),
+            f"Контроль качества прогноза: {forecast_quality_label}",
+            readiness_text,
+        ]
         execution_explanation = " | ".join(part for part in execution_parts if part)
         changes: dict[str, Any] = {"execution_ready": gate.execution_ready}
         if hasattr(result, "reason"):
@@ -110,6 +128,8 @@ class LiveOpportunitySearchService(OpportunitySearchService):
         scope = str(scope or MARKET_SCOPE).upper()
         if scope not in {"MARKET", "PORTFOLIO"}:
             raise ValueError(f"Unsupported opportunity scope: {scope}")
+        if force_recompute:
+            self.analysis_pipeline.force_recompute()
 
         self._notify(progress_callback, "Загрузка списка инструментов", 2.0, 0, 0)
         account_id = self._active_account()
@@ -129,8 +149,6 @@ class LiveOpportunitySearchService(OpportunitySearchService):
             if not uid:
                 continue
             valid_index += 1
-            if force_recompute and isinstance(self.analysis, CachedAnalysisService):
-                self.analysis.force_recompute = True
             progress_base = 15.0 + ((valid_index - 1) / max(1, total)) * 80.0
             progress_span = 80.0 / max(1, total)
             ticker = str(self._field(instrument, "ticker", ""))
