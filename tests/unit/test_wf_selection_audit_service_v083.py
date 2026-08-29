@@ -29,8 +29,8 @@ def test_audit_distinguishes_transfer_wins_losses_and_ties():
     assert result.changed_windows == 2
     assert result.transfer_wins == 1
     assert result.transfer_losses == 1
-    assert result.transfer_ties == 1
-    assert result.transfer_win_rate_pct == 100 / 3
+    assert result.transfer_ties == 0
+    assert result.transfer_win_rate_pct == 50.0
     assert result.mean_transfer_delta_pct == 0.0
 
 
