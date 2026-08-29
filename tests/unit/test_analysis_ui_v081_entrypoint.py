@@ -12,6 +12,7 @@ def test_v081_installer_replaces_active_analysis_entrypoint(monkeypatch):
         _open_analysis_v08=lambda _app: None,
         AnalysisPipelineServiceV08=object,
     )
+    original = runtime._open_analysis_v08
     monkeypatch.setitem(sys.modules, "edward.ui.analysis_ui_v04", legacy)
     monkeypatch.setitem(sys.modules, "edward.ui.analysis_ui_v08_runtime", runtime)
     monkeypatch.setattr(target, "install_client_patch", lambda: None)
@@ -19,10 +20,11 @@ def test_v081_installer_replaces_active_analysis_entrypoint(monkeypatch):
     app_class = type("FakeApp", (), {})
     target.install(app_class, object)
 
-    # v0.8.2.2 installs a wrapper around the v0.8 entrypoint so the
-    # canonical v0.8.2 pipeline can be bridged without replacing the
-    # runtime implementation with the raw function object.
-    assert legacy._open_analysis is runtime._open_analysis_v08
+    # v0.8.2.2 installs a wrapper around the v0.8 entrypoint. The legacy
+    # entrypoint must be replaced, while the runtime implementation remains
+    # the original function used by the wrapper.
+    assert legacy._open_analysis is not original
+    assert runtime._open_analysis_v08 is original
     assert app_class._analysis_ui_v081_installed is True
 
 
