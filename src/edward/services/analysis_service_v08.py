@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Iterable
 
@@ -9,6 +10,8 @@ from edward.services.regime_engine_v08 import RegimeEngine
 from edward.services.research_backtest_service_v08 import BacktestCostModel, ResearchBacktestService
 from edward.services.robust_walk_forward_service_v08 import RobustWalkForwardResult, RobustWalkForwardService
 
+
+logger = logging.getLogger(__name__)
 
 ANALYSIS_V08_VERSION = "0.8.0"
 
@@ -71,7 +74,32 @@ class AnalysisServiceV08:
 
     @staticmethod
     def _quality(result: RobustWalkForwardResult, profile: str) -> bool:
-        return QualityGateDiagnosticsServiceV0822.evaluate(result, profile).passed
+        diagnostics = QualityGateDiagnosticsServiceV0822.evaluate(result, profile)
+        logger.info(
+            "[QUALITY GATE] strategy=%s profile=%s result=%s",
+            result.strategy,
+            profile,
+            "PASS" if diagnostics.passed else "FAIL",
+        )
+        for check in diagnostics.checks:
+            logger.info(
+                "[QUALITY GATE] strategy=%s check=%s actual=%.4f threshold=%.4f result=%s",
+                result.strategy,
+                check.key,
+                check.actual,
+                check.threshold,
+                "PASS" if check.passed else "FAIL",
+            )
+        if diagnostics.failed_checks:
+            logger.info(
+                "[QUALITY GATE] strategy=%s failed_checks=%s reason=%s",
+                result.strategy,
+                diagnostics.failed_checks,
+                diagnostics.failure_reason,
+            )
+        else:
+            logger.info("[QUALITY GATE] strategy=%s failed_checks=[] reason=none", result.strategy)
+        return diagnostics.passed
 
     @staticmethod
     def _legacy_strategy_result(result: RobustWalkForwardResult, profile: str) -> StrategyResult:
