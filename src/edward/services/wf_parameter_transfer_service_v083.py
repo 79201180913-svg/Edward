@@ -46,12 +46,12 @@ class ParameterTransferSelection:
 
 
 class WFParameterTransferSelectorV083:
-    """Train-only shadow selector with optional historical WF transfer evidence.
+    """Train-only shadow selector with historical WF transfer evidence.
 
     Current-window Train results are the only current-window inputs. Historical
     evidence must come from windows that completed before the current window.
-    OOS data from the current window is deliberately absent from this API so
-    the selector cannot use look-ahead information to choose parameters.
+    Current-window OOS data is deliberately absent from this API, preventing
+    look-ahead leakage.
     """
 
     CRITERIA = ("excess_return", "sharpe", "sortino", "return_dd")
@@ -86,26 +86,31 @@ class WFParameterTransferSelectorV083:
         return {key: (ordered.index(value) / (len(ordered) - 1)) * 100.0 for key, value in values}
 
     @staticmethod
-    def _historical_score(entries: Sequence[ParameterTransferHistoryEntry]) -> tuple[float, int]:
+    def _percentile(value: float, values: Sequence[float], *, higher_is_better: bool = True) -> float:
+        ordered = sorted(set(values), reverse=not higher_is_better)
+        if len(ordered) <= 1:
+            return 100.0
+        index = ordered.index(value)
+        return index / (len(ordered) - 1) * 100.0
+
+    @classmethod
+    def _historical_score(
+        cls,
+        entries: Sequence[ParameterTransferHistoryEntry],
+        all_history: Sequence[ParameterTransferHistoryEntry],
+    ) -> tuple[float, int]:
         if not entries:
             return 0.0, 0
+        if not all_history:
+            return 0.0, len(entries)
 
-        returns = [entry.oos_net_return_pct for entry in entries]
-        sharpes = [entry.oos_sharpe for entry in entries]
-        drawdowns = [entry.oos_drawdown_pct for entry in entries]
-        confidences = [max(0.0, min(100.0, entry.selection_confidence)) for entry in entries]
-
-        def percentile(value: float, values: list[float], reverse: bool = False) -> float:
-            ordered = sorted(set(values), reverse=reverse)
-            if len(ordered) <= 1:
-                return 100.0
-            index = ordered.index(value)
-            return index / (len(ordered) - 1) * 100.0
-
-        return_score = mean(percentile(value, returns) for value in returns)
-        sharpe_score = mean(percentile(value, sharpes) for value in sharpes)
-        dd_score = mean(percentile(value, drawdowns, reverse=True) for value in drawdowns)
-        confidence_score = mean(confidences)
+        returns = [entry.oos_net_return_pct for entry in all_history]
+        sharpes = [entry.oos_sharpe for entry in all_history]
+        drawdowns = [entry.oos_drawdown_pct for entry in all_history]
+        return_score = mean(cls._percentile(entry.oos_net_return_pct, returns) for entry in entries)
+        sharpe_score = mean(cls._percentile(entry.oos_sharpe, sharpes) for entry in entries)
+        dd_score = mean(cls._percentile(entry.oos_drawdown_pct, drawdowns, higher_is_better=False) for entry in entries)
+        confidence_score = mean(max(0.0, min(100.0, entry.selection_confidence)) for entry in entries)
         score = return_score * 0.35 + sharpe_score * 0.30 + dd_score * 0.20 + confidence_score * 0.15
         return round(score, 4), len(entries)
 
@@ -151,7 +156,7 @@ class WFParameterTransferSelectorV083:
             consensus = mean(percentile_maps[criterion][key] for criterion in cls.CRITERIA)
             neighborhood, _ = neighborhood_stability_pct(params, candidates)
             current_score = consensus * cls.CONSENSUS_WEIGHT + neighborhood * cls.NEIGHBORHOOD_WEIGHT
-            historical_score, support = cls._historical_score(history_by_key.get(key, ()))
+            historical_score, support = cls._historical_score(history_by_key.get(key, ()), history)
             if support >= cls.MIN_HISTORICAL_SUPPORT:
                 score = current_score * cls.CURRENT_WEIGHT + historical_score * cls.HISTORICAL_WEIGHT
             else:
