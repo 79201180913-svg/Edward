@@ -8,6 +8,7 @@ from typing import Any, Callable, Iterable, Sequence
 from edward.services.analysis_service import Candle
 from edward.services.research_backtest_service_v08 import BacktestCostModel, ResearchBacktestResult, ResearchBacktestService
 from edward.services.wf_parameter_stability_diagnostics_v08 import neighborhood_stability_pct, parameter_key, selection_confidence, winner_margin_pct
+from edward.services.wf_parameter_transfer_service_v083 import WFParameterTransferSelectorV083
 
 ROBUST_WF_VERSION = "0.8.0"
 logger = logging.getLogger(__name__)
@@ -165,6 +166,25 @@ class RobustWalkForwardService:
         return selected_params == oos_winner_params, gap
 
     @classmethod
+    def _log_parameter_transfer_shadow(cls, *, strategy: str, window_index: int, candidates: Sequence[tuple[dict[str, Any], ResearchBacktestResult]], oos_candidates: Sequence[tuple[dict[str, Any], ResearchBacktestResult]], baseline_parameters: dict[str, Any]) -> tuple[dict[str, Any], bool, float]:
+        selection = WFParameterTransferSelectorV083.select(candidates, baseline_parameters=baseline_parameters)
+        oos_by_key = {cls._parameter_key(params): result for params, result in oos_candidates}
+        baseline_key = cls._parameter_key(baseline_parameters)
+        shadow_key = cls._parameter_key(selection.selected_parameters)
+        baseline_oos = oos_by_key[baseline_key]
+        shadow_oos = oos_by_key[shadow_key]
+        changed = shadow_key != baseline_key
+        delta = shadow_oos.net_return_pct - baseline_oos.net_return_pct
+        logger.warning("[V083 WF TRANSFER SHADOW WINDOW] strategy=%s window=%d baseline=%s shadow=%s changed=%s baseline_oos_return=%.4f shadow_oos_return=%.4f delta=%.4f baseline_rank=%d shadow_rank=%d baseline_sharpe=%.4f shadow_sharpe=%.4f baseline_dd=%.4f shadow_dd=%.4f", strategy, window_index, baseline_parameters, selection.selected_parameters, changed, baseline_oos.net_return_pct, shadow_oos.net_return_pct, delta, cls._oos_rank(oos_candidates, baseline_parameters), cls._oos_rank(oos_candidates, selection.selected_parameters), baseline_oos.sharpe, shadow_oos.sharpe, baseline_oos.max_drawdown_pct, shadow_oos.max_drawdown_pct)
+        return dict(selection.selected_parameters), changed, delta
+
+    @classmethod
+    def _oos_rank(cls, candidates: Sequence[tuple[dict[str, Any], ResearchBacktestResult]], parameters: dict[str, Any]) -> int:
+        ranked = sorted(candidates, key=lambda item: (item[1].net_return_pct, item[1].sharpe, -item[1].max_drawdown_pct), reverse=True)
+        target = cls._parameter_key(parameters)
+        return next(rank for rank, (params, _) in enumerate(ranked, start=1) if cls._parameter_key(params) == target)
+
+    @classmethod
     def run(cls, *, candles: Iterable[Candle], strategy: str, parameter_grid: Sequence[dict[str, Any]], signal_factory: Callable[[str, dict[str, Any]], Callable[[Sequence[Candle], int], bool]], train_size: int, test_size: int, costs: BacktestCostModel | None = None, max_drawdown_pct: float | None = None) -> RobustWalkForwardResult:
         ordered = sorted(list(candles), key=lambda item: item.timestamp)
         if train_size < 2 or test_size < 1:
@@ -182,6 +202,9 @@ class RobustWalkForwardService:
         stability_margins: list[float] = []
         stability_neighborhoods: list[float] = []
         stability_confidences: list[float] = []
+        shadow_changed = 0
+        shadow_deltas: list[float] = []
+        shadow_start = 0
         start = 0
         while start + train_size + test_size <= len(ordered):
             train = ordered[start:start + train_size]
@@ -209,6 +232,10 @@ class RobustWalkForwardService:
             if transfer_match:
                 transfer_matches += 1
             transfer_gaps.append(transfer_gap)
+            _, changed, shadow_delta = cls._log_parameter_transfer_shadow(strategy=strategy, window_index=window_index, candidates=candidates, oos_candidates=oos_candidates, baseline_parameters=selected_params)
+            if changed:
+                shadow_changed += 1
+            shadow_deltas.append(shadow_delta)
             test_result = next(result for params, result in oos_candidates if params == selected_params)
             exposures.append(test_result.exposure_pct)
             window = WalkForwardWindowResult(window_index, train[0].timestamp, train[-1].timestamp, test[0].timestamp, test[-1].timestamp, dict(selected_params), train_result.excess_return_pct, test_result.net_return_pct, test_result.benchmark_return_pct, test_result.excess_return_pct, test_result.max_drawdown_pct, test_result.sharpe, test_result.sortino, test_result.trades)
@@ -237,6 +264,7 @@ class RobustWalkForwardService:
         active_windows = sum(item.test_trades > 0 for item in windows)
         logger.warning("[V083 WF ACTIVITY RESULT] strategy=%s windows=%d active_windows=%d inactive_windows=%d active_pct=%.2f total_trades=%d mean_exposure=%.2f", strategy, count, active_windows, count - active_windows, active_windows / count * 100.0, sum(item.test_trades for item in windows), mean(exposures))
         logger.warning("[V083 WF TRANSFER RESULT] strategy=%s windows=%d transfer_matches=%d transfer_match_pct=%.2f mean_oos_selection_gap=%.4f max_oos_selection_gap=%.4f", strategy, count, transfer_matches, transfer_matches / count * 100.0, mean(transfer_gaps) if transfer_gaps else 0.0, max(transfer_gaps) if transfer_gaps else 0.0)
+        logger.warning("[V083 WF TRANSFER SHADOW RESULT] strategy=%s windows=%d changed_windows=%d changed_pct=%.2f mean_return_delta=%.4f positive_delta_windows=%d", strategy, count, shadow_changed, shadow_changed / count * 100.0, mean(shadow_deltas) if shadow_deltas else 0.0, sum(delta > 0 for delta in shadow_deltas))
         for criterion in criterion_matches:
             gaps = criterion_gaps[criterion]
             logger.warning("[V083 WF SELECTION RESULT] strategy=%s criterion=%s transfer_matches=%d transfer_match_pct=%.2f mean_oos_selection_gap=%.4f max_oos_selection_gap=%.4f", strategy, criterion, criterion_matches[criterion], criterion_matches[criterion] / count * 100.0, mean(gaps) if gaps else 0.0, max(gaps) if gaps else 0.0)
