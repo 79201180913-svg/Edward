@@ -21,6 +21,14 @@ class QualityGateCheck:
 
 
 @dataclass(frozen=True, slots=True)
+class QualityGateScoreComponent:
+    key: str
+    actual: float
+    weight_pct: float
+    contribution: float
+
+
+@dataclass(frozen=True, slots=True)
 class QualityGateDiagnostics:
     """Explain the existing v0.8 Quality Gate without changing its rules."""
 
@@ -29,6 +37,7 @@ class QualityGateDiagnostics:
     checks: tuple[QualityGateCheck, ...]
     failed_checks: tuple[str, ...]
     passed: bool
+    robustness_components: tuple[QualityGateScoreComponent, ...] = ()
 
     @property
     def failure_reason(self) -> str:
@@ -55,44 +64,32 @@ class QualityGateDiagnosticsServiceV0822:
     }
 
     @classmethod
+    def _robustness_components(cls, result: RobustWalkForwardResult) -> tuple[QualityGateScoreComponent, ...]:
+        returns = [window.test_net_return_pct for window in result.windows]
+        mean_return_abs = max(abs(result.mean_test_return_pct), 1.0)
+        dispersion_penalty = (result.std_test_return_pct / mean_return_abs) * 10.0
+        performance_consistency = max(0.0, min(100.0, 100.0 - dispersion_penalty))
+        components = (
+            QualityGateScoreComponent("return_consistency", result.return_consistency_pct, 35.0, result.return_consistency_pct * 0.35),
+            QualityGateScoreComponent("risk_consistency", result.risk_consistency_pct, 20.0, result.risk_consistency_pct * 0.20),
+            QualityGateScoreComponent("sharpe_consistency", result.sharpe_consistency_pct, 15.0, result.sharpe_consistency_pct * 0.15),
+            QualityGateScoreComponent("parameter_stability", result.parameter_stability.stability_pct, 15.0, result.parameter_stability.stability_pct * 0.15),
+            QualityGateScoreComponent("performance_consistency", performance_consistency, 15.0, performance_consistency * 0.15),
+        )
+        return components
+
+    @classmethod
     def evaluate(cls, result: RobustWalkForwardResult, profile: str) -> QualityGateDiagnostics:
         if profile not in cls.PROFILES:
             raise ValueError(f"Unsupported profile: {profile}")
         cfg = cls.PROFILES[profile]
         windows = tuple(result.windows)
+        components = cls._robustness_components(result)
 
-        logger.info(
-            "[V083 QG START] strategy=%s profile=%s windows=%d train_test_windows=%d",
-            result.strategy,
-            profile,
-            len(windows),
-            len(windows),
-        )
-        logger.info(
-            "[V083 QG WF SUMMARY] strategy=%s mean_oos_return=%.4f median_oos_return=%.4f "
-            "worst_oos_return=%.4f best_oos_return=%.4f mean_oos_dd=%.4f mean_oos_sharpe=%.4f "
-            "return_consistency=%.2f risk_consistency=%.2f sharpe_consistency=%.2f robustness=%.2f",
-            result.strategy,
-            result.mean_test_return_pct,
-            result.median_test_return_pct,
-            result.worst_test_return_pct,
-            result.best_test_return_pct,
-            result.mean_test_drawdown_pct,
-            result.mean_test_sharpe,
-            result.return_consistency_pct,
-            result.risk_consistency_pct,
-            result.sharpe_consistency_pct,
-            result.robustness_score,
-        )
-        logger.info(
-            "[V083 QG PARAMETER STABILITY] strategy=%s windows=%d dominant_windows=%d "
-            "stability=%.2f selected_parameters=%s",
-            result.strategy,
-            result.parameter_stability.windows,
-            result.parameter_stability.dominant_windows,
-            result.parameter_stability.stability_pct,
-            result.parameter_stability.selected_parameters,
-        )
+        logger.info("[V083 QG START] strategy=%s profile=%s windows=%d train_test_windows=%d", result.strategy, profile, len(windows), len(windows))
+        logger.info("[V083 QG WF SUMMARY] strategy=%s mean_oos_return=%.4f median_oos_return=%.4f worst_oos_return=%.4f best_oos_return=%.4f mean_oos_dd=%.4f mean_oos_sharpe=%.4f return_consistency=%.2f risk_consistency=%.2f sharpe_consistency=%.2f robustness=%.2f", result.strategy, result.mean_test_return_pct, result.median_test_return_pct, result.worst_test_return_pct, result.best_test_return_pct, result.mean_test_drawdown_pct, result.mean_test_sharpe, result.return_consistency_pct, result.risk_consistency_pct, result.sharpe_consistency_pct, result.robustness_score)
+        logger.info("[V083 QG PARAMETER STABILITY] strategy=%s windows=%d dominant_windows=%d stability=%.2f selected_parameters=%s", result.strategy, result.parameter_stability.windows, result.parameter_stability.dominant_windows, result.parameter_stability.stability_pct, result.parameter_stability.selected_parameters)
+        logger.info("[V083 QG ROBUSTNESS COMPONENTS] strategy=%s components=%s weighted_sum=%.4f reported_score=%.4f", result.strategy, tuple({"key": item.key, "actual": round(item.actual, 6), "weight_pct": item.weight_pct, "contribution": round(item.contribution, 6)} for item in components), sum(item.contribution for item in components), result.robustness_score)
 
         for fallback_index, window in enumerate(windows):
             index = getattr(window, "index", fallback_index)
@@ -110,33 +107,9 @@ class QualityGateDiagnosticsServiceV0822:
             sortino = getattr(window, "test_sortino", None)
             trades = getattr(window, "test_trades", None)
             if all(value is not None for value in (train_score, oos_return, benchmark, excess, dd, sharpe, sortino, trades)):
-                logger.info(
-                    "[V083 WF WINDOW] strategy=%s window=%s train=%s..%s test=%s..%s "
-                    "params=%s train_score=%.4f oos_return=%.4f benchmark=%.4f excess=%.4f "
-                    "dd=%.4f sharpe=%.4f sortino=%.4f trades=%d",
-                    result.strategy,
-                    index,
-                    train_start,
-                    train_end,
-                    test_start,
-                    test_end,
-                    parameters,
-                    train_score,
-                    oos_return,
-                    benchmark,
-                    excess,
-                    dd,
-                    sharpe,
-                    sortino,
-                    trades,
-                )
+                logger.info("[V083 WF WINDOW] strategy=%s window=%s train=%s..%s test=%s..%s params=%s train_score=%.4f oos_return=%.4f benchmark=%.4f excess=%.4f dd=%.4f sharpe=%.4f sortino=%.4f trades=%d", result.strategy, index, train_start, train_end, test_start, test_end, parameters, train_score, oos_return, benchmark, excess, dd, sharpe, sortino, trades)
             else:
-                logger.info(
-                    "[V083 WF WINDOW] strategy=%s window=%s detailed_metrics=unavailable fixture_type=%s",
-                    result.strategy,
-                    index,
-                    type(window).__name__,
-                )
+                logger.info("[V083 WF WINDOW] strategy=%s window=%s detailed_metrics=unavailable fixture_type=%s", result.strategy, index, type(window).__name__)
 
         checks = (
             QualityGateCheck("wf_windows", "WF окон", float(len(windows)), 5.0, len(windows) >= 5),
@@ -150,58 +123,15 @@ class QualityGateDiagnosticsServiceV0822:
 
         for check in checks:
             margin = check.actual - check.threshold
-            logger.info(
-                "[V083 QG CHECK] strategy=%s key=%s actual=%.6f threshold=%.6f margin=%.6f passed=%s",
-                result.strategy,
-                check.key,
-                check.actual,
-                check.threshold,
-                margin,
-                check.passed,
-            )
+            logger.info("[V083 QG CHECK] strategy=%s key=%s actual=%.6f threshold=%.6f margin=%.6f passed=%s", result.strategy, check.key, check.actual, check.threshold, margin, check.passed)
 
-        diagnostics = QualityGateDiagnostics(
-            profile=profile,
-            robustness_threshold=cfg["min_stability_pct"],
-            checks=checks,
-            failed_checks=failed,
-            passed=not failed,
-        )
+        diagnostics = QualityGateDiagnostics(profile=profile, robustness_threshold=cfg["min_stability_pct"], checks=checks, failed_checks=failed, passed=not failed, robustness_components=components)
         if diagnostics.blocking_checks:
-            logger.warning(
-                "[V083 QG BLOCKERS] strategy=%s profile=%s blockers=%s",
-                result.strategy,
-                profile,
-                tuple(
-                    {
-                        "key": check.key,
-                        "actual": round(check.actual, 6),
-                        "threshold": round(check.threshold, 6),
-                        "margin": round(check.actual - check.threshold, 6),
-                    }
-                    for check in diagnostics.blocking_checks
-                ),
-            )
+            logger.warning("[V083 QG BLOCKERS] strategy=%s profile=%s blockers=%s", result.strategy, profile, tuple({"key": check.key, "actual": round(check.actual, 6), "threshold": round(check.threshold, 6), "margin": round(check.actual - check.threshold, 6)} for check in diagnostics.blocking_checks))
         else:
-            logger.info(
-                "[V083 QG BLOCKERS] strategy=%s profile=%s blockers=none",
-                result.strategy,
-                profile,
-            )
-        logger.info(
-            "[V083 QG RESULT] strategy=%s profile=%s passed=%s failed_checks=%s reason=%s",
-            result.strategy,
-            profile,
-            diagnostics.passed,
-            diagnostics.failed_checks,
-            diagnostics.failure_reason,
-        )
+            logger.info("[V083 QG BLOCKERS] strategy=%s profile=%s blockers=none", result.strategy, profile)
+        logger.info("[V083 QG RESULT] strategy=%s profile=%s passed=%s failed_checks=%s reason=%s", result.strategy, profile, diagnostics.passed, diagnostics.failed_checks, diagnostics.failure_reason)
         return diagnostics
 
 
-__all__ = [
-    "QUALITY_GATE_DIAGNOSTICS_V0822_VERSION",
-    "QualityGateCheck",
-    "QualityGateDiagnostics",
-    "QualityGateDiagnosticsServiceV0822",
-]
+__all__ = ["QUALITY_GATE_DIAGNOSTICS_V0822_VERSION", "QualityGateCheck", "QualityGateScoreComponent", "QualityGateDiagnostics", "QualityGateDiagnosticsServiceV0822"]
