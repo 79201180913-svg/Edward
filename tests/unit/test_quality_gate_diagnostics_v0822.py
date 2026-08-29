@@ -92,3 +92,20 @@ def test_analysis_service_exposes_diagnostics_for_every_strategy_without_changin
         diagnostics = service.last_diagnostics.quality_gate_by_strategy[item.strategy]
         assert diagnostics.passed is item.quality_gate
         assert diagnostics.profile == "speculative"
+
+
+def test_quality_gate_logs_each_check(caplog):
+    result = _result(return_consistency=50.0, robustness=64.0)
+
+    with caplog.at_level("INFO", logger="edward.services.analysis_service_v08"):
+        AnalysisServiceV08._quality(result, "speculative")
+
+    text = caplog.text
+    assert "[QUALITY GATE] strategy=Breakout profile=speculative result=FAIL" in text
+    assert "check=wf_windows" in text
+    assert "check=mean_test_return" in text
+    assert "check=mean_test_drawdown" in text
+    assert "check=mean_test_sharpe" in text
+    assert "check=return_consistency" in text
+    assert "check=robustness_score" in text
+    assert "failed_checks=('Положительные OOS окна',)" in text
