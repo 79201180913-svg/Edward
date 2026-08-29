@@ -1,4 +1,4 @@
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from edward.services.research_backtest_service_v08 import ResearchBacktestResult
@@ -68,11 +68,12 @@ def test_audit_exposes_oos_oracle_separately_from_train_baseline(monkeypatch):
     ]
 
     def fake_run(*, candles, strategy, parameters, signal_fn, costs=None):
-        value = 2.0 if len(candles) == 2 and parameters["p"] == 1 else 1.0
-        if len(candles) == 2 and parameters["p"] == 2:
-            value = 3.0
-        if len(candles) == 2 and parameters["p"] == 1 and candles[0].timestamp.day == 3:
-            value = -1.0
+        # Train (days 1-2): p=1 is the baseline winner.
+        # OOS (days 3-4): p=2 is the oracle winner and p=1 loses.
+        if candles[0].timestamp.day == 1:
+            value = 3.0 if parameters["p"] == 1 else 1.0
+        else:
+            value = -1.0 if parameters["p"] == 1 else 3.0
         return _result(parameters, value)
 
     monkeypatch.setattr("edward.services.wf_parameter_transfer_audit_service_v083.ResearchBacktestService.run", fake_run)
