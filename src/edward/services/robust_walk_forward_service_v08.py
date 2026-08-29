@@ -7,7 +7,7 @@ from typing import Any, Callable, Iterable, Sequence
 
 from edward.services.analysis_service import Candle
 from edward.services.research_backtest_service_v08 import BacktestCostModel, ResearchBacktestResult, ResearchBacktestService
-
+from edward.services.wf_parameter_stability_diagnostics_v08 import neighborhood_stability_pct, parameter_key, selection_confidence, winner_margin_pct
 
 ROBUST_WF_VERSION = "0.8.0"
 logger = logging.getLogger(__name__)
@@ -66,7 +66,7 @@ class RobustWalkForwardService:
 
     @staticmethod
     def _parameter_key(parameters: dict[str, Any]) -> tuple[tuple[str, Any], ...]:
-        return tuple(sorted(parameters.items()))
+        return parameter_key(parameters)
 
     @classmethod
     def _parameter_stability(cls, windows: Sequence[WalkForwardWindowResult]) -> ParameterStability:
@@ -98,40 +98,22 @@ class RobustWalkForwardService:
 
     @classmethod
     def _diagnostic_composite_key(cls, result: ResearchBacktestResult, candidates: Sequence[ResearchBacktestResult]) -> float:
-        """Rank-average composite used only for diagnostics, never production selection."""
-        metrics = (
-            ("excess_return", True),
-            ("sharpe", True),
-            ("sortino", True),
-            ("return_dd", True),
-        )
         scores: list[float] = []
-        for criterion, _ in metrics:
+        for criterion in ("excess_return", "sharpe", "sortino", "return_dd"):
             values = [cls._criterion_key(criterion, item) for item in candidates]
             ordered = sorted(set(values))
             value = cls._criterion_key(criterion, result)
-            rank = ordered.index(value) + 1
-            scores.append(rank / max(len(ordered), 1))
+            scores.append((ordered.index(value) + 1) / max(len(ordered), 1))
         return mean(scores)
 
     @classmethod
-    def _log_selection_criteria_diagnostics(
-        cls,
-        *,
-        strategy: str,
-        window_index: int,
-        train_candidates: Sequence[tuple[dict[str, Any], ResearchBacktestResult]],
-        oos_candidates: Sequence[tuple[dict[str, Any], ResearchBacktestResult]],
-        production_selected_params: dict[str, Any],
-    ) -> tuple[dict[str, bool], dict[str, float]]:
+    def _log_selection_criteria_diagnostics(cls, *, strategy: str, window_index: int, train_candidates: Sequence[tuple[dict[str, Any], ResearchBacktestResult]], oos_candidates: Sequence[tuple[dict[str, Any], ResearchBacktestResult]], production_selected_params: dict[str, Any]) -> tuple[dict[str, bool], dict[str, float]]:
         train_results = [result for _, result in train_candidates]
         oos_by_key = {cls._parameter_key(params): result for params, result in oos_candidates}
         train_by_key = {cls._parameter_key(params): result for params, result in train_candidates}
         criteria = ("excess_return", "sharpe", "sortino", "return_dd", "composite")
         matches: dict[str, bool] = {}
         gaps: dict[str, float] = {}
-        oos_ranked: dict[str, list[tuple[tuple[tuple[str, Any], ...], float]]] = {}
-
         for criterion in criteria:
             if criterion == "composite":
                 train_values = {key: cls._diagnostic_composite_key(result, train_results) for key, result in train_by_key.items()}
@@ -140,7 +122,6 @@ class RobustWalkForwardService:
             else:
                 train_values = {key: cls._criterion_key(criterion, result) for key, result in train_by_key.items()}
                 oos_values = {key: cls._criterion_key(criterion, result) for key, result in oos_by_key.items()}
-
             train_key = max(train_values, key=train_values.get)
             oos_key = max(oos_values, key=oos_values.get)
             production_key = cls._parameter_key(production_selected_params)
@@ -148,48 +129,28 @@ class RobustWalkForwardService:
             winner_oos = oos_by_key[oos_key]
             matches[criterion] = train_key == oos_key
             gaps[criterion] = winner_oos.net_return_pct - selected_oos.net_return_pct
-            logger.warning(
-                "[V083 WF SELECTION CRITERION] strategy=%s window=%d criterion=%s "
-                "train_winner=%s oos_winner=%s production_selected=%s transfer_match=%s "
-                "production_oos_return=%.4f criterion_oos_winner_return=%.4f selection_gap=%.4f",
-                strategy, window_index, criterion, dict(train_key), dict(oos_key), production_selected_params,
-                matches[criterion], selected_oos.net_return_pct, winner_oos.net_return_pct, gaps[criterion],
-            )
-            ranked = sorted(oos_values.items(), key=lambda item: item[1], reverse=True)
-            oos_ranked[criterion] = ranked
-
-        for criterion in criteria:
-            ranked = oos_ranked[criterion]
-            for rank, (key, value) in enumerate(ranked, start=1):
-                logger.warning(
-                    "[V083 WF SELECTION OOS RANK] strategy=%s window=%d criterion=%s rank=%d params=%s criterion_value=%.6f oos_return=%.4f oos_sharpe=%.4f oos_dd=%.4f",
-                    strategy, window_index, criterion, rank, dict(key), value,
-                    oos_by_key[key].net_return_pct, oos_by_key[key].sharpe, oos_by_key[key].max_drawdown_pct,
-                )
+            logger.warning("[V083 WF SELECTION CRITERION] strategy=%s window=%d criterion=%s train_winner=%s oos_winner=%s production_selected=%s transfer_match=%s production_oos_return=%.4f criterion_oos_winner_return=%.4f selection_gap=%.4f", strategy, window_index, criterion, dict(train_key), dict(oos_key), production_selected_params, matches[criterion], selected_oos.net_return_pct, winner_oos.net_return_pct, gaps[criterion])
         return matches, gaps
+
+    @classmethod
+    def _log_parameter_stability(cls, *, strategy: str, window_index: int, candidates: Sequence[tuple[dict[str, Any], ResearchBacktestResult]], selected_params: dict[str, Any]) -> tuple[float, float, float]:
+        margin = winner_margin_pct(candidates)
+        neighborhood, nearby_count = neighborhood_stability_pct(selected_params, candidates)
+        confidence = selection_confidence(margin, neighborhood)
+        logger.warning("[V083 WF SELECTION STABILITY] strategy=%s window=%d selected=%s winner_margin_pct=%.2f neighborhood_stability_pct=%.2f nearby_candidates=%d selection_confidence=%.2f", strategy, window_index, selected_params, margin, neighborhood, nearby_count, confidence)
+        return margin, neighborhood, confidence
 
     @classmethod
     def _log_parameter_leaderboard(cls, *, strategy: str, window_index: int, candidates: Sequence[tuple[dict[str, Any], ResearchBacktestResult]], selected_params: dict[str, Any]) -> None:
         ranked = sorted(candidates, key=cls._candidate_sort_key, reverse=True)
         for rank, (params, result) in enumerate(ranked, start=1):
-            logger.warning(
-                "[V083 WF LEADERBOARD] strategy=%s window=%d rank=%d selected=%s params=%s train_excess=%.4f sharpe=%.4f sortino=%.4f dd=%.4f trades=%d exposure=%.2f return=%.4f benchmark=%.4f turnover=%.2f win_rate=%.2f",
-                strategy, window_index, rank, params == selected_params, params,
-                result.excess_return_pct, result.sharpe, result.sortino, result.max_drawdown_pct,
-                result.trades, result.exposure_pct, result.net_return_pct, result.benchmark_return_pct,
-                result.turnover_pct, result.win_rate_pct,
-            )
+            logger.warning("[V083 WF LEADERBOARD] strategy=%s window=%d rank=%d selected=%s params=%s train_excess=%.4f sharpe=%.4f sortino=%.4f dd=%.4f trades=%d exposure=%.2f return=%.4f benchmark=%.4f turnover=%.2f win_rate=%.2f", strategy, window_index, rank, params == selected_params, params, result.excess_return_pct, result.sharpe, result.sortino, result.max_drawdown_pct, result.trades, result.exposure_pct, result.net_return_pct, result.benchmark_return_pct, result.turnover_pct, result.win_rate_pct)
 
     @staticmethod
     def _log_window_activity(*, strategy: str, window: WalkForwardWindowResult, test_result: ResearchBacktestResult) -> None:
         active = test_result.trades > 0
         active_bars = max(0, round(test_result.exposure_pct / 100.0 * max(0, len(test_result.equity) - 1)))
-        logger.warning(
-            "[V083 WF ACTIVITY] strategy=%s window=%d active=%s trades=%d active_bars=%d exposure_pct=%.2f turnover_pct=%.2f oos_return=%.4f oos_excess=%.4f dd=%.4f sharpe=%.4f",
-            strategy, window.index, active, test_result.trades, active_bars, test_result.exposure_pct,
-            test_result.turnover_pct, window.test_net_return_pct, window.test_excess_return_pct,
-            window.test_max_drawdown_pct, window.test_sharpe,
-        )
+        logger.warning("[V083 WF ACTIVITY] strategy=%s window=%d active=%s trades=%d active_bars=%d exposure_pct=%.2f turnover_pct=%.2f oos_return=%.4f oos_excess=%.4f dd=%.4f sharpe=%.4f", strategy, window.index, active, test_result.trades, active_bars, test_result.exposure_pct, test_result.turnover_pct, window.test_net_return_pct, window.test_excess_return_pct, window.test_max_drawdown_pct, window.test_sharpe)
 
     @classmethod
     def _log_oos_parameter_transfer(cls, *, strategy: str, window_index: int, candidates: Sequence[tuple[dict[str, Any], ResearchBacktestResult]], selected_params: dict[str, Any]) -> tuple[bool, float]:
@@ -200,13 +161,7 @@ class RobustWalkForwardService:
             return False, 0.0
         oos_winner_params, oos_winner_result = ranked[0]
         gap = oos_winner_result.net_return_pct - selected_result.net_return_pct
-        logger.warning(
-            "[V083 WF OOS TRANSFER] strategy=%s window=%d train_selected=%s train_selected_oos_rank=%d oos_winner=%s transfer_match=%s selected_oos_return=%.4f oos_winner_return=%.4f selection_gap=%.4f selected_oos_sharpe=%.4f oos_winner_sharpe=%.4f selected_oos_dd=%.4f oos_winner_dd=%.4f",
-            strategy, window_index, selected_params, selected_rank, oos_winner_params,
-            selected_params == oos_winner_params, selected_result.net_return_pct,
-            oos_winner_result.net_return_pct, gap, selected_result.sharpe, oos_winner_result.sharpe,
-            selected_result.max_drawdown_pct, oos_winner_result.max_drawdown_pct,
-        )
+        logger.warning("[V083 WF OOS TRANSFER] strategy=%s window=%d train_selected=%s train_selected_oos_rank=%d oos_winner=%s transfer_match=%s selected_oos_return=%.4f oos_winner_return=%.4f selection_gap=%.4f selected_oos_sharpe=%.4f oos_winner_sharpe=%.4f selected_oos_dd=%.4f oos_winner_dd=%.4f", strategy, window_index, selected_params, selected_rank, oos_winner_params, selected_params == oos_winner_params, selected_result.net_return_pct, oos_winner_result.net_return_pct, gap, selected_result.sharpe, oos_winner_result.sharpe, selected_result.max_drawdown_pct, oos_winner_result.max_drawdown_pct)
         return selected_params == oos_winner_params, gap
 
     @classmethod
@@ -224,6 +179,9 @@ class RobustWalkForwardService:
         transfer_gaps: list[float] = []
         criterion_matches: dict[str, int] = {key: 0 for key in ("excess_return", "sharpe", "sortino", "return_dd", "composite")}
         criterion_gaps: dict[str, list[float]] = {key: [] for key in criterion_matches}
+        stability_margins: list[float] = []
+        stability_neighborhoods: list[float] = []
+        stability_confidences: list[float] = []
         start = 0
         while start + train_size + test_size <= len(ordered):
             train = ordered[start:start + train_size]
@@ -235,15 +193,15 @@ class RobustWalkForwardService:
                 candidates.append((dict(params), train_result))
             selected_params, train_result = max(candidates, key=cls._candidate_sort_key)
             cls._log_parameter_leaderboard(strategy=strategy, window_index=window_index, candidates=candidates, selected_params=selected_params)
-
+            margin, neighborhood, confidence = cls._log_parameter_stability(strategy=strategy, window_index=window_index, candidates=candidates, selected_params=selected_params)
+            stability_margins.append(margin)
+            stability_neighborhoods.append(neighborhood)
+            stability_confidences.append(confidence)
             oos_candidates: list[tuple[dict[str, Any], ResearchBacktestResult]] = []
             for params, _ in candidates:
                 oos_result = ResearchBacktestService.run(candles=test, strategy=strategy, parameters=params, signal_fn=signal_factory(strategy, params), costs=costs)
                 oos_candidates.append((dict(params), oos_result))
-            matches, gaps = cls._log_selection_criteria_diagnostics(
-                strategy=strategy, window_index=window_index, train_candidates=candidates,
-                oos_candidates=oos_candidates, production_selected_params=selected_params,
-            )
+            matches, gaps = cls._log_selection_criteria_diagnostics(strategy=strategy, window_index=window_index, train_candidates=candidates, oos_candidates=oos_candidates, production_selected_params=selected_params)
             for criterion, matched in matches.items():
                 criterion_matches[criterion] += int(matched)
                 criterion_gaps[criterion].append(gaps[criterion])
@@ -258,7 +216,6 @@ class RobustWalkForwardService:
             logger.warning("[V083 WF WINDOW] strategy=%s window=%d train=%s..%s test=%s..%s params=%s train_excess=%.4f oos_return=%.4f benchmark=%.4f excess=%.4f dd=%.4f sharpe=%.4f sortino=%.4f trades=%d", strategy, window.index, window.train_start, window.train_end, window.test_start, window.test_end, window.parameters, window.train_score, window.test_net_return_pct, window.test_benchmark_return_pct, window.test_excess_return_pct, window.test_max_drawdown_pct, window.test_sharpe, window.test_sortino, window.test_trades)
             cls._log_window_activity(strategy=strategy, window=window, test_result=test_result)
             start += test_size
-
         if not windows:
             logger.warning("[V083 WF EMPTY] strategy=%s candles=%d train=%d test=%d", strategy, len(ordered), train_size, test_size)
             return cls._empty(strategy)
@@ -283,6 +240,7 @@ class RobustWalkForwardService:
         for criterion in criterion_matches:
             gaps = criterion_gaps[criterion]
             logger.warning("[V083 WF SELECTION RESULT] strategy=%s criterion=%s transfer_matches=%d transfer_match_pct=%.2f mean_oos_selection_gap=%.4f max_oos_selection_gap=%.4f", strategy, criterion, criterion_matches[criterion], criterion_matches[criterion] / count * 100.0, mean(gaps) if gaps else 0.0, max(gaps) if gaps else 0.0)
+        logger.warning("[V083 WF SELECTION STABILITY RESULT] strategy=%s windows=%d mean_winner_margin_pct=%.2f mean_neighborhood_stability_pct=%.2f mean_selection_confidence=%.2f", strategy, count, mean(stability_margins), mean(stability_neighborhoods), mean(stability_confidences))
         logger.warning("[V083 WF RESULT] strategy=%s windows=%d mean_return=%.4f median_return=%.4f std_return=%.4f worst_return=%.4f best_return=%.4f mean_dd=%.4f mean_sharpe=%.4f positive=%d/%d risk_ok=%d/%d positive_sharpe=%d/%d return_consistency=%.2f risk_consistency=%.2f sharpe_consistency=%.2f parameter_stability=%.2f robustness=%.2f", strategy, count, result.mean_test_return_pct, result.median_test_return_pct, result.std_test_return_pct, result.worst_test_return_pct, result.best_test_return_pct, result.mean_test_drawdown_pct, result.mean_test_sharpe, result.positive_return_windows, count, result.risk_ok_windows, count, result.positive_sharpe_windows, count, result.return_consistency_pct, result.risk_consistency_pct, result.sharpe_consistency_pct, result.parameter_stability.stability_pct, result.robustness_score)
         return result
 
