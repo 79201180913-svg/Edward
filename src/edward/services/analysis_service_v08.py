@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 
 from edward.services.analysis_service import AnalysisResult, Candle, StrategyResult
+from edward.services.quality_gate_diagnostics_v0822 import QualityGateDiagnostics, QualityGateDiagnosticsServiceV0822
 from edward.services.regime_engine_v08 import RegimeEngine
 from edward.services.research_backtest_service_v08 import BacktestCostModel, ResearchBacktestService
 from edward.services.robust_walk_forward_service_v08 import RobustWalkForwardResult, RobustWalkForwardService
@@ -17,6 +18,7 @@ class AnalysisV08Diagnostics:
     regime_confidence: float
     regime: str
     robustness_by_strategy: dict[str, float]
+    quality_gate_by_strategy: dict[str, QualityGateDiagnostics]
 
 
 class AnalysisServiceV08:
@@ -69,15 +71,7 @@ class AnalysisServiceV08:
 
     @staticmethod
     def _quality(result: RobustWalkForwardResult, profile: str) -> bool:
-        threshold = AnalysisServiceV08.PROFILES[profile]["min_stability_pct"]
-        return (
-            len(result.windows) >= 5
-            and result.mean_test_return_pct > 0.0
-            and result.mean_test_drawdown_pct <= AnalysisServiceV08.PROFILES[profile]["max_drawdown_pct"]
-            and result.mean_test_sharpe > 0.0
-            and result.return_consistency_pct >= 60.0
-            and result.robustness_score >= threshold
-        )
+        return QualityGateDiagnosticsServiceV0822.evaluate(result, profile).passed
 
     @staticmethod
     def _legacy_strategy_result(result: RobustWalkForwardResult, profile: str) -> StrategyResult:
@@ -134,6 +128,10 @@ class AnalysisServiceV08:
             regime_confidence=regime_result.confidence,
             regime=regime_result.regime,
             robustness_by_strategy={item.strategy: item.robustness_score for item in robust_results},
+            quality_gate_by_strategy={
+                item.strategy: QualityGateDiagnosticsServiceV0822.evaluate(item, profile)
+                for item in robust_results
+            },
         )
         explanation = (
             f"Рекомендована {winner.strategy}: v0.8 robustness {winner.score:.1f}, "
