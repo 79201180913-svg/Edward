@@ -3,34 +3,35 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any, Callable
 
-from edward.config.application_settings import ApplicationSettingsStore
-from edward.services.cached_analysis_service import CachedAnalysisService
 from edward.services.execution_readiness_service import ExecutionReadinessInput, ExecutionReadinessService
 from edward.services.forecast_quality_gate_service import ForecastQualityGateService
 from edward.services.forecast_walk_forward_service import ForecastWalkForwardService
+from edward.services.opportunity_analysis_pipeline_v0821 import OpportunityAnalysisPipelineV0821
 from edward.services.opportunity_search_service import (
     MARKET_SCOPE,
     ProgressCallback,
     OpportunitySearchResult,
     OpportunitySearchService,
 )
-from edward.storage.sqlite_store import SQLiteStore
 
 ResultCallback = Callable[[OpportunitySearchResult, int, int], None]
 
 
 class LiveOpportunitySearchService(OpportunitySearchService):
-    """Opportunity search that streams results and reuses Walk Forward cache."""
+    """Opportunity search that streams results through the canonical v0.8.2 analysis."""
 
     def __init__(self, client: Any, *, force_recompute: bool = False):
-        settings = ApplicationSettingsStore().load()
-        store = SQLiteStore(settings.storage_path)
-        super().__init__(client, analysis_service=CachedAnalysisService(store, force_recompute=force_recompute))
+        # v0.8.2.1 deliberately removes the legacy CachedAnalysisService from
+        # the live opportunity path. The single-instrument UI and opportunity
+        # search must consume the same v0.8.2 analysis result.
+        self.force_recompute = force_recompute
+        super().__init__(client, analysis_service=OpportunityAnalysisPipelineV0821(client))
 
     @property
     def cache_info(self) -> dict[str, int]:
-        analysis = self.analysis
-        return analysis.cache_info() if isinstance(analysis, CachedAnalysisService) else {"hits": 0, "misses": 0, "total": 0}
+        # Walk Forward cache used by the legacy opportunity pipeline is no
+        # longer authoritative for v0.8.2.1. Keep the UI contract intact.
+        return {"hits": 0, "misses": 0, "total": 0}
 
     @staticmethod
     def _enforce_execution_readiness(
@@ -69,7 +70,12 @@ class LiveOpportunitySearchService(OpportunitySearchService):
 
         readiness_text = "Исполнение: ДА" if gate.execution_ready else "Исполнение: НЕТ"
         gate_reason_text = " | ".join(gate.reasons) if gate.reasons else ""
-        execution_parts = [str(result.reason or ""), *([gate_reason_text] if gate_reason_text else []), f"Контроль качества прогноза: {forecast_quality_label}", readiness_text]
+        execution_parts = [
+            str(result.reason or ""),
+            *([gate_reason_text] if gate_reason_text else []),
+            f"Контроль качества прогноза: {forecast_quality_label}",
+            readiness_text,
+        ]
         execution_explanation = " | ".join(part for part in execution_parts if part)
         changes: dict[str, Any] = {"execution_ready": gate.execution_ready}
         if hasattr(result, "reason"):
@@ -129,8 +135,6 @@ class LiveOpportunitySearchService(OpportunitySearchService):
             if not uid:
                 continue
             valid_index += 1
-            if force_recompute and isinstance(self.analysis, CachedAnalysisService):
-                self.analysis.force_recompute = True
             progress_base = 15.0 + ((valid_index - 1) / max(1, total)) * 80.0
             progress_span = 80.0 / max(1, total)
             ticker = str(self._field(instrument, "ticker", ""))
