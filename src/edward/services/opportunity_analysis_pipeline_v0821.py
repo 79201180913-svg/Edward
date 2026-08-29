@@ -4,7 +4,10 @@ from dataclasses import dataclass, replace
 from typing import Any, Mapping
 
 from edward.api.tinvest_multifactor_client_patch_v081 import install as install_client_patch
+from edward.services.analysis_pipeline_service_v08 import AnalysisPipelineServiceV08
+from edward.services.analysis_pipeline_service_v081 import AnalysisPipelineServiceV081
 from edward.services.analysis_pipeline_service_v082 import AnalysisPipelineServiceV082
+from edward.services.cached_analysis_service_v08 import CachedAnalysisServiceV08
 from edward.services.news_intelligence_service_v081 import NewsIntelligenceServiceV081
 from edward.services.news_overlay_service_v081 import NewsOverlayServiceV081
 from edward.services.opportunity_engine import OpportunityEngine as LegacyOpportunityEngine
@@ -59,11 +62,33 @@ class OpportunityAnalysisPipelineV0821:
         *,
         pipeline: AnalysisPipelineServiceV082 | None = None,
         collector: SemanticRobustContractAnalysisDataServiceV081 | None = None,
+        cache_store: Any = None,
+        force_recompute: bool = False,
     ) -> None:
         install_client_patch()
         self.client = client
-        self.pipeline = pipeline or AnalysisPipelineServiceV082()
+        if pipeline is not None:
+            self.pipeline = pipeline
+            self.cached_analysis = None
+        elif cache_store is not None:
+            cached_v08 = CachedAnalysisServiceV08(cache_store, force_recompute=force_recompute)
+            base_v08 = AnalysisPipelineServiceV08(analysis_service=cached_v08)
+            base_v081 = AnalysisPipelineServiceV081(base_pipeline=base_v08)
+            self.pipeline = AnalysisPipelineServiceV082(base_pipeline=base_v081)
+            self.cached_analysis = cached_v08
+        else:
+            self.pipeline = AnalysisPipelineServiceV082()
+            self.cached_analysis = None
         self.collector = collector or SemanticRobustContractAnalysisDataServiceV081(client)
+
+    def cache_info(self) -> dict[str, int]:
+        if self.cached_analysis is None:
+            return {"hits": 0, "misses": 0, "total": 0}
+        return self.cached_analysis.cache_info()
+
+    def force_recompute(self) -> None:
+        if self.cached_analysis is not None:
+            self.cached_analysis.force_recompute = True
 
     @staticmethod
     def _fundamental_input(fundamentals: Any, instrument: Mapping[str, Any] | None) -> Any:
