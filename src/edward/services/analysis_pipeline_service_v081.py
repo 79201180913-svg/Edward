@@ -136,10 +136,26 @@ class AnalysisPipelineServiceV081:
                 current_weight_pct: float = 0.0, marginal_risk_pct: float = 0.0,
                 diversification_benefit_pct: float = 0.0, expected_return_impact_pct: float = 0.0,
                 max_position_weight_pct: float | None = None, current_price: float | None = None) -> AnalysisPipelineV081Result:
+        logger.info(
+            "[V081 WF ENTRY] ticker=%s profile=%s candles=%d base_pipeline=%s analysis_service=%s",
+            ticker,
+            profile,
+            len(candles) if hasattr(candles, "__len__") else -1,
+            type(self.base_pipeline).__name__,
+            type(getattr(self.base_pipeline, "analysis_service", None)).__name__,
+        )
+        logger.info("[V081 WF BASE START] ticker=%s", ticker)
         base = self.base_pipeline.analyze(instrument_uid=instrument_uid, ticker=ticker, candles=candles, profile=profile,
                                           risk_profile=risk_profile, horizon=horizon, portfolio_weights=portfolio_weights,
                                           portfolio_returns=portfolio_returns, candidate_weight=candidate_weight,
                                           concentration_penalty_pct=concentration_penalty_pct)
+        logger.info(
+            "[V081 WF BASE DONE] ticker=%s recommendation=%s strategy_count=%d diagnostics=%s",
+            ticker,
+            getattr(base.analysis, "recommendation", None),
+            len(getattr(base.analysis, "strategies", ()) or ()),
+            type(getattr(base.analysis, "diagnostics", None)).__name__,
+        )
         effective_risk_data = instrument_risk_metadata if instrument_risk_metadata is not None else risk_data
         normalized_risk_data = _normalize_risk_data(effective_risk_data)
         multifactor = MultiFactorAnalysisServiceV081.analyze(
