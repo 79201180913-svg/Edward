@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from statistics import mean, median, pstdev
 from typing import Any, Callable, Iterable, Sequence
@@ -9,6 +10,7 @@ from edward.services.research_backtest_service_v08 import BacktestCostModel, Res
 
 
 ROBUST_WF_VERSION = "0.8.0"
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +98,17 @@ class RobustWalkForwardService:
         if not parameter_grid:
             raise ValueError("parameter_grid cannot be empty")
 
+        expected_windows = max(0, (len(ordered) - train_size) // test_size)
+        logger.info(
+            "[V083 WF START] strategy=%s candles=%d train=%d test=%d expected_windows=%d grid=%d max_dd=%s",
+            strategy,
+            len(ordered),
+            train_size,
+            test_size,
+            expected_windows,
+            len(parameter_grid),
+            max_drawdown_pct,
+        )
         windows: list[WalkForwardWindowResult] = []
         start = 0
         while start + train_size + test_size <= len(ordered):
@@ -103,13 +116,24 @@ class RobustWalkForwardService:
             test = ordered[start + train_size:start + train_size + test_size]
             candidates: list[tuple[dict[str, Any], ResearchBacktestResult]] = []
             for params in parameter_grid:
-                candidates.append((dict(params), ResearchBacktestService.run(
+                train_result = ResearchBacktestService.run(
                     candles=train,
                     strategy=strategy,
                     parameters=params,
                     signal_fn=signal_factory(strategy, params),
                     costs=costs,
-                )))
+                )
+                candidates.append((dict(params), train_result))
+                logger.debug(
+                    "[V083 WF TRAIN] strategy=%s window=%d params=%s excess=%.4f sharpe=%.4f dd=%.4f trades=%d",
+                    strategy,
+                    len(windows),
+                    params,
+                    train_result.excess_return_pct,
+                    train_result.sharpe,
+                    train_result.max_drawdown_pct,
+                    train_result.trades,
+                )
             selected_params, train_result = max(
                 candidates,
                 key=lambda item: (item[1].excess_return_pct, item[1].sharpe, -item[1].max_drawdown_pct),
@@ -122,17 +146,38 @@ class RobustWalkForwardService:
                 costs=costs,
             )
             window_index = len(windows)
-            windows.append(WalkForwardWindowResult(
+            window = WalkForwardWindowResult(
                 window_index, train[0].timestamp, train[-1].timestamp,
                 test[0].timestamp, test[-1].timestamp, dict(selected_params),
                 train_result.excess_return_pct, test_result.net_return_pct,
                 test_result.benchmark_return_pct, test_result.excess_return_pct,
                 test_result.max_drawdown_pct, test_result.sharpe,
                 test_result.sortino, test_result.trades,
-            ))
+            )
+            windows.append(window)
+            logger.info(
+                "[V083 WF WINDOW] strategy=%s window=%d train=%s..%s test=%s..%s params=%s "
+                "train_excess=%.4f oos_return=%.4f benchmark=%.4f excess=%.4f dd=%.4f sharpe=%.4f sortino=%.4f trades=%d",
+                strategy,
+                window.index,
+                window.train_start,
+                window.train_end,
+                window.test_start,
+                window.test_end,
+                window.parameters,
+                window.train_score,
+                window.test_net_return_pct,
+                window.test_benchmark_return_pct,
+                window.test_excess_return_pct,
+                window.test_max_drawdown_pct,
+                window.test_sharpe,
+                window.test_sortino,
+                window.test_trades,
+            )
             start += test_size
 
         if not windows:
+            logger.warning("[V083 WF EMPTY] strategy=%s candles=%d train=%d test=%d", strategy, len(ordered), train_size, test_size)
             return cls._empty(strategy)
 
         returns = [item.test_net_return_pct for item in windows]
@@ -154,7 +199,7 @@ class RobustWalkForwardService:
             performance_consistency * 0.15,
             2,
         )
-        return RobustWalkForwardResult(
+        result = RobustWalkForwardResult(
             strategy=strategy, windows=tuple(windows),
             mean_test_return_pct=mean(returns), median_test_return_pct=median(returns),
             std_test_return_pct=pstdev(returns) if len(returns) > 1 else 0.0,
@@ -167,6 +212,33 @@ class RobustWalkForwardService:
             sharpe_consistency_pct=sharpe_consistency,
             robustness_score=robustness, parameter_stability=stability,
         )
+        logger.info(
+            "[V083 WF RESULT] strategy=%s windows=%d mean_return=%.4f median_return=%.4f std_return=%.4f "
+            "worst_return=%.4f best_return=%.4f mean_dd=%.4f mean_sharpe=%.4f "
+            "positive=%d/%d risk_ok=%d/%d positive_sharpe=%d/%d return_consistency=%.2f "
+            "risk_consistency=%.2f sharpe_consistency=%.2f parameter_stability=%.2f robustness=%.2f",
+            strategy,
+            count,
+            result.mean_test_return_pct,
+            result.median_test_return_pct,
+            result.std_test_return_pct,
+            result.worst_test_return_pct,
+            result.best_test_return_pct,
+            result.mean_test_drawdown_pct,
+            result.mean_test_sharpe,
+            result.positive_return_windows,
+            count,
+            result.risk_ok_windows,
+            count,
+            result.positive_sharpe_windows,
+            count,
+            result.return_consistency_pct,
+            result.risk_consistency_pct,
+            result.sharpe_consistency_pct,
+            result.parameter_stability.stability_pct,
+            result.robustness_score,
+        )
+        return result
 
     @staticmethod
     def _empty(strategy: str) -> RobustWalkForwardResult:
