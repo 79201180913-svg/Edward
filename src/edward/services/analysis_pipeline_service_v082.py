@@ -50,8 +50,12 @@ class AnalysisPipelineV082Result:
         return self.base.portfolio_impact
 
     @property
-    def confidence(self):
-        return self.base.confidence
+    def forecast_quality_score(self):
+        return self.base.forecast_quality_score
+
+    @property
+    def regime_confidence(self):
+        return self.base.regime_confidence
 
     @property
     def evidence_strategy(self):
@@ -61,6 +65,16 @@ class AnalysisPipelineV082Result:
     @property
     def portfolio_context_available(self):
         return self.base.portfolio_context_available
+
+    @property
+    def multifactor(self):
+        """Expose the canonical multifactor result required by the v0.8.x UI contract."""
+        return self.base.multifactor
+
+    @property
+    def overlay(self):
+        """Expose the canonical multifactor overlay required by the v0.8.x UI contract."""
+        return self.base.overlay
 
 
 class AnalysisPipelineServiceV082:

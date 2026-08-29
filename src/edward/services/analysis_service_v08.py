@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Iterable
 
 from edward.services.analysis_service import AnalysisResult, Candle, StrategyResult
+from edward.services.quality_gate_diagnostics_v0822 import QualityGateDiagnostics, QualityGateDiagnosticsServiceV0822
 from edward.services.regime_engine_v08 import RegimeEngine
 from edward.services.research_backtest_service_v08 import BacktestCostModel, ResearchBacktestService
 from edward.services.robust_walk_forward_service_v08 import RobustWalkForwardResult, RobustWalkForwardService
 
+
+logger = logging.getLogger(__name__)
 
 ANALYSIS_V08_VERSION = "0.8.0"
 
@@ -17,15 +21,11 @@ class AnalysisV08Diagnostics:
     regime_confidence: float
     regime: str
     robustness_by_strategy: dict[str, float]
+    quality_gate_by_strategy: dict[str, QualityGateDiagnostics]
 
 
 class AnalysisServiceV08:
-    """v0.8 analytical facade with the v0.7 AnalysisResult contract.
-
-    The facade keeps the public result shape unchanged while replacing the
-    research calculation underneath with the v0.8 cost-aware backtest,
-    robustness analysis and regime engine.
-    """
+    """v0.8 analytical facade with the v0.7 AnalysisResult contract."""
 
     STRATEGIES = ("Trend Following", "Momentum", "Breakout", "Mean Reversion")
     PROFILES = {
@@ -69,15 +69,29 @@ class AnalysisServiceV08:
 
     @staticmethod
     def _quality(result: RobustWalkForwardResult, profile: str) -> bool:
-        threshold = AnalysisServiceV08.PROFILES[profile]["min_stability_pct"]
-        return (
-            len(result.windows) >= 5
-            and result.mean_test_return_pct > 0.0
-            and result.mean_test_drawdown_pct <= AnalysisServiceV08.PROFILES[profile]["max_drawdown_pct"]
-            and result.mean_test_sharpe > 0.0
-            and result.return_consistency_pct >= 60.0
-            and result.robustness_score >= threshold
+        diagnostics = QualityGateDiagnosticsServiceV0822.evaluate(result, profile)
+        logger.info(
+            "[QUALITY GATE] strategy=%s profile=%s result=%s",
+            result.strategy,
+            profile,
+            "PASS" if diagnostics.passed else "FAIL",
         )
+        for check in diagnostics.checks:
+            logger.info(
+                "[QUALITY GATE] strategy=%s check=%s actual=%.4f threshold=%.4f result=%s",
+                result.strategy,
+                check.key,
+                check.actual,
+                check.threshold,
+                "PASS" if check.passed else "FAIL",
+            )
+        logger.info(
+            "[QUALITY GATE] strategy=%s failed_checks=%s reason=%s",
+            result.strategy,
+            diagnostics.failed_checks,
+            diagnostics.failure_reason or "none",
+        )
+        return diagnostics.passed
 
     @staticmethod
     def _legacy_strategy_result(result: RobustWalkForwardResult, profile: str) -> StrategyResult:
@@ -125,6 +139,7 @@ class AnalysisServiceV08:
         strategies = [self._legacy_strategy_result(item, profile) for item in robust_results]
         passed = [item for item in strategies if item.quality_gate]
         winner = max(passed, key=lambda item: item.score) if passed else None
+        score_winner = max(strategies, key=lambda item: item.score) if strategies else None
         recommendation = winner.strategy if winner else None
         confidence = "Low"
         if winner:
@@ -134,6 +149,20 @@ class AnalysisServiceV08:
             regime_confidence=regime_result.confidence,
             regime=regime_result.regime,
             robustness_by_strategy={item.strategy: item.robustness_score for item in robust_results},
+            quality_gate_by_strategy={
+                item.strategy: QualityGateDiagnosticsServiceV0822.evaluate(item, profile)
+                for item in robust_results
+            },
+        )
+        logger.info(
+            "[STRATEGY SELECTION] ticker=%s profile=%s quality_gate_winner=%s max_score_strategy=%s "
+            "quality_gate_pass_count=%d total_strategies=%d",
+            ticker,
+            profile,
+            winner.strategy if winner else None,
+            score_winner.strategy if score_winner else None,
+            len(passed),
+            len(strategies),
         )
         explanation = (
             f"Рекомендована {winner.strategy}: v0.8 robustness {winner.score:.1f}, "
