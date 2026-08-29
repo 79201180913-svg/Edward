@@ -1,19 +1,51 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Any, Mapping
 
 from edward.api.tinvest_multifactor_client_patch_v081 import install as install_client_patch
 from edward.services.analysis_pipeline_service_v082 import AnalysisPipelineServiceV082
 from edward.services.news_intelligence_service_v081 import NewsIntelligenceServiceV081
 from edward.services.news_overlay_service_v081 import NewsOverlayServiceV081
+from edward.services.opportunity_engine import OpportunityEngine as LegacyOpportunityEngine
 from edward.services.semantic_robust_contract_analysis_data_service_v081 import (
     SemanticRobustContractAnalysisDataServiceV081,
 )
 
 
+@dataclass(frozen=True, slots=True)
+class OpportunityAnalysisViewV0821:
+    """Legacy-shaped view backed by the canonical v0.8.2 pipeline result."""
+
+    pipeline_result: Any
+    strategies: tuple[Any, ...]
+
+    @property
+    def market_regime(self):
+        return self.pipeline_result.analysis.market_regime
+
+    @property
+    def confidence(self):
+        return self.pipeline_result.confidence.overall_confidence if self.pipeline_result.confidence is not None else None
+
+    @property
+    def opportunity(self):
+        return self.pipeline_result.opportunity
+
+
+class UnifiedOpportunityEngineV0821:
+    """Bridge the legacy opportunity-search call site to v0.8.2 opportunity."""
+
+    @staticmethod
+    def evaluate(analysis, candles, strategy_result, **kwargs):
+        pipeline_result = getattr(analysis, "pipeline_result", None)
+        if pipeline_result is not None:
+            return pipeline_result.opportunity
+        return LegacyOpportunityEngine.evaluate(analysis, candles, strategy_result, **kwargs)
+
+
 class OpportunityAnalysisPipelineV0821:
-    """Provide the opportunity search with the canonical v0.8.2 analysis pipeline.
+    """Provide opportunity search with the canonical v0.8.2 analysis pipeline.
 
     The adapter deliberately reuses the same contract-data collection and
     news overlay path as the v0.8.2 single-instrument analysis UI. Portfolio
@@ -72,7 +104,7 @@ class OpportunityAnalysisPipelineV0821:
         portfolio_returns: Mapping[str, list[float]] | None = None,
         candidate_weight: float = 0.0,
         concentration_penalty_pct: float = 0.0,
-    ):
+    ) -> OpportunityAnalysisViewV0821:
         data = self.collector.collect(str(instrument_uid))
         reports = list(data.reports)
         event = reports[0] if reports else None
@@ -110,7 +142,23 @@ class OpportunityAnalysisPipelineV0821:
             result,
             base=replace(result.base, base=adjusted_base),
         )
-        return result
+
+        evidence_strategy = None
+        for strategy in getattr(result.analysis, "strategies", ()):
+            if strategy.strategy == result.evidence_strategy:
+                evidence_strategy = strategy
+                break
+        if evidence_strategy is None and getattr(result.analysis, "strategies", ()):
+            evidence_strategy = max(result.analysis.strategies, key=lambda item: item.score)
+        strategies = (evidence_strategy,) if evidence_strategy is not None else ()
+        return OpportunityAnalysisViewV0821(
+            pipeline_result=result,
+            strategies=strategies,
+        )
 
 
-__all__ = ["OpportunityAnalysisPipelineV0821"]
+__all__ = [
+    "OpportunityAnalysisPipelineV0821",
+    "OpportunityAnalysisViewV0821",
+    "UnifiedOpportunityEngineV0821",
+]
