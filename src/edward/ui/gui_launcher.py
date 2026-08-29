@@ -41,7 +41,9 @@ from edward.ui.settings_page_v04 import install_settings_page
 from edward.ui.analysis_ui_v04 import install_analysis_ui
 from edward.ui.analysis_ui_v08_runtime import install as install_analysis_ui_v08
 from edward.ui.ev_reliability_ui_patch_v08 import install as install_ev_reliability_ui_v08
+from edward.ui import analysis_ui_v081_runtime as analysis_ui_v081_runtime_module
 from edward.ui.analysis_ui_v081_runtime import install as install_analysis_ui_v081
+from edward.services.analysis_pipeline_service_v082 import AnalysisPipelineServiceV082
 from edward.ui.decision_context_ui_v04 import install_decision_context_ui
 from edward.ui.analysis_ui_consistency_v04 import install_analysis_ui_consistency
 from edward.ui.opportunity_search_ui_v04 import install_opportunity_search_ui
@@ -105,7 +107,12 @@ install_settings_page(EdwardApp)
 install_analysis_ui(EdwardApp, TInvestAdapterClient)
 install_analysis_ui_v08(EdwardApp, TInvestAdapterClient)
 install_ev_reliability_ui_v08()
+
+# The v0.8.1 UI wrapper still owns the presentation layer, but its
+# PipelineBridge must use the canonical v0.8.2 service used by Opportunity.
+analysis_ui_v081_runtime_module.AnalysisPipelineServiceV081 = AnalysisPipelineServiceV082
 install_analysis_ui_v081(EdwardApp, TInvestAdapterClient)
+
 install_analysis_ui_consistency()
 install_decision_context_ui(EdwardApp)
 install_opportunity_search_ui(EdwardApp)
