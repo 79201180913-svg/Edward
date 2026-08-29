@@ -55,13 +55,14 @@ class QualityGateDiagnosticsServiceV0822:
         if profile not in cls.PROFILES:
             raise ValueError(f"Unsupported profile: {profile}")
         cfg = cls.PROFILES[profile]
+        windows = tuple(result.windows)
 
         logger.info(
             "[V083 QG START] strategy=%s profile=%s windows=%d train_test_windows=%d",
             result.strategy,
             profile,
-            len(result.windows),
-            len(result.windows),
+            len(windows),
+            len(windows),
         )
         logger.info(
             "[V083 QG WF SUMMARY] strategy=%s mean_oos_return=%.4f median_oos_return=%.4f "
@@ -89,30 +90,56 @@ class QualityGateDiagnosticsServiceV0822:
             result.parameter_stability.selected_parameters,
         )
 
-        for window in result.windows:
-            logger.info(
-                "[V083 WF WINDOW] strategy=%s window=%d train=%s..%s test=%s..%s "
-                "params=%s train_score=%.4f oos_return=%.4f benchmark=%.4f excess=%.4f "
-                "dd=%.4f sharpe=%.4f sortino=%.4f trades=%d",
-                result.strategy,
-                window.index,
-                window.train_start,
-                window.train_end,
-                window.test_start,
-                window.test_end,
-                window.parameters,
-                window.train_score,
-                window.test_net_return_pct,
-                window.test_benchmark_return_pct,
-                window.test_excess_return_pct,
-                window.test_max_drawdown_pct,
-                window.test_sharpe,
-                window.test_sortino,
-                window.test_trades,
-            )
+        for fallback_index, window in enumerate(windows):
+            # Production WFWindow has index/date/metric fields. The lightweight
+            # test fixtures intentionally use opaque objects; diagnostics must
+            # never make the Quality Gate itself fail merely because detailed
+            # logging cannot inspect an optional field.
+            index = getattr(window, "index", fallback_index)
+            train_start = getattr(window, "train_start", "?")
+            train_end = getattr(window, "train_end", "?")
+            test_start = getattr(window, "test_start", "?")
+            test_end = getattr(window, "test_end", "?")
+            parameters = getattr(window, "parameters", "?")
+            train_score = getattr(window, "train_score", None)
+            oos_return = getattr(window, "test_net_return_pct", None)
+            benchmark = getattr(window, "test_benchmark_return_pct", None)
+            excess = getattr(window, "test_excess_return_pct", None)
+            dd = getattr(window, "test_max_drawdown_pct", None)
+            sharpe = getattr(window, "test_sharpe", None)
+            sortino = getattr(window, "test_sortino", None)
+            trades = getattr(window, "test_trades", None)
+            if all(value is not None for value in (train_score, oos_return, benchmark, excess, dd, sharpe, sortino, trades)):
+                logger.info(
+                    "[V083 WF WINDOW] strategy=%s window=%s train=%s..%s test=%s..%s "
+                    "params=%s train_score=%.4f oos_return=%.4f benchmark=%.4f excess=%.4f "
+                    "dd=%.4f sharpe=%.4f sortino=%.4f trades=%d",
+                    result.strategy,
+                    index,
+                    train_start,
+                    train_end,
+                    test_start,
+                    test_end,
+                    parameters,
+                    train_score,
+                    oos_return,
+                    benchmark,
+                    excess,
+                    dd,
+                    sharpe,
+                    sortino,
+                    trades,
+                )
+            else:
+                logger.info(
+                    "[V083 WF WINDOW] strategy=%s window=%s detailed_metrics=unavailable fixture_type=%s",
+                    result.strategy,
+                    index,
+                    type(window).__name__,
+                )
 
         checks = (
-            QualityGateCheck("wf_windows", "WF окон", float(len(result.windows)), 5.0, len(result.windows) >= 5),
+            QualityGateCheck("wf_windows", "WF окон", float(len(windows)), 5.0, len(windows) >= 5),
             QualityGateCheck("mean_test_return", "Средняя OOS доходность", result.mean_test_return_pct, 0.0, result.mean_test_return_pct > 0.0),
             QualityGateCheck("mean_test_drawdown", "Средняя OOS просадка", result.mean_test_drawdown_pct, cfg["max_drawdown_pct"], result.mean_test_drawdown_pct <= cfg["max_drawdown_pct"]),
             QualityGateCheck("mean_test_sharpe", "Средний OOS Sharpe", result.mean_test_sharpe, 0.0, result.mean_test_sharpe > 0.0),
