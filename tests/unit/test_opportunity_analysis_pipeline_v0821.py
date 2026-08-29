@@ -67,22 +67,6 @@ class FakePipeline:
         return self.result
 
 
-class FakeNews:
-    @staticmethod
-    def analyze(news, instrument_uid):
-        assert news == ("news",)
-        assert instrument_uid == "uid"
-        return "news-result"
-
-
-class FakeNewsOverlay:
-    @staticmethod
-    def apply(base, news_result):
-        assert base == "base-v08"
-        assert news_result == "news-result"
-        return "news-adjusted-base", "overlay"
-
-
 def test_adapter_reuses_v082_pipeline_and_contract_data(monkeypatch):
     monkeypatch.setattr(adapter_module, "install_client_patch", lambda: None)
     monkeypatch.setattr(adapter_module, "NewsIntelligenceServiceV081", FakeNews)
@@ -127,6 +111,37 @@ def test_adapter_reuses_v082_pipeline_and_contract_data(monkeypatch):
     assert result.strategies == ()
 
 
+def test_adapter_can_preserve_v08_wf_cache(monkeypatch):
+    monkeypatch.setattr(adapter_module, "install_client_patch", lambda: None)
+    monkeypatch.setattr(adapter_module, "SemanticRobustContractAnalysisDataServiceV081", lambda client: object())
+
+    service = OpportunityAnalysisPipelineV0821(
+        object(),
+        cache_store=SimpleNamespace(data_dir="data"),
+        force_recompute=True,
+    )
+
+    assert service.cached_analysis is not None
+    assert service.cached_analysis.force_recompute is True
+    assert service.cache_info == {"hits": 0, "misses": 0, "total": 0}
+
+
+class FakeNews:
+    @staticmethod
+    def analyze(news, instrument_uid):
+        assert news == ("news",)
+        assert instrument_uid == "uid"
+        return "news-result"
+
+
+class FakeNewsOverlay:
+    @staticmethod
+    def apply(base, news_result):
+        assert base == "base-v08"
+        assert news_result == "news-result"
+        return "news-adjusted-base", "overlay"
+
+
 def test_unified_opportunity_engine_returns_v082_opportunity():
     view = SimpleNamespace(
         pipeline_result=SimpleNamespace(opportunity="v082-opportunity"),
@@ -144,8 +159,12 @@ def test_unified_opportunity_engine_returns_v082_opportunity():
 
 def test_live_opportunity_service_uses_v0821_adapter(monkeypatch):
     class FakeAdapter:
-        def __init__(self, client):
+        def __init__(self, client, **kwargs):
             self.client = client
+            self.kwargs = kwargs
+
+        def cache_info(self):
+            return {"hits": 0, "misses": 0, "total": 0}
 
     monkeypatch.setattr(
         "edward.services.opportunity_search_service_live_v04.OpportunityAnalysisPipelineV0821",
@@ -156,3 +175,4 @@ def test_live_opportunity_service_uses_v0821_adapter(monkeypatch):
 
     assert isinstance(service.analysis, FakeAdapter)
     assert service.cache_info == {"hits": 0, "misses": 0, "total": 0}
+    assert service.analysis.kwargs["cache_store"] is not None
