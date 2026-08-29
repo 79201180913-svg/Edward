@@ -65,18 +65,16 @@ class QualityGateDiagnosticsServiceV0822:
 
     @classmethod
     def _robustness_components(cls, result: RobustWalkForwardResult) -> tuple[QualityGateScoreComponent, ...]:
-        returns = [window.test_net_return_pct for window in result.windows]
         mean_return_abs = max(abs(result.mean_test_return_pct), 1.0)
         dispersion_penalty = (result.std_test_return_pct / mean_return_abs) * 10.0
         performance_consistency = max(0.0, min(100.0, 100.0 - dispersion_penalty))
-        components = (
+        return (
             QualityGateScoreComponent("return_consistency", result.return_consistency_pct, 35.0, result.return_consistency_pct * 0.35),
             QualityGateScoreComponent("risk_consistency", result.risk_consistency_pct, 20.0, result.risk_consistency_pct * 0.20),
             QualityGateScoreComponent("sharpe_consistency", result.sharpe_consistency_pct, 15.0, result.sharpe_consistency_pct * 0.15),
             QualityGateScoreComponent("parameter_stability", result.parameter_stability.stability_pct, 15.0, result.parameter_stability.stability_pct * 0.15),
             QualityGateScoreComponent("performance_consistency", performance_consistency, 15.0, performance_consistency * 0.15),
         )
-        return components
 
     @classmethod
     def evaluate(cls, result: RobustWalkForwardResult, profile: str) -> QualityGateDiagnostics:
@@ -120,7 +118,6 @@ class QualityGateDiagnosticsServiceV0822:
             QualityGateCheck("robustness_score", "Robustness Score", result.robustness_score, cfg["min_stability_pct"], result.robustness_score >= cfg["min_stability_pct"]),
         )
         failed = tuple(check.label for check in checks if not check.passed)
-
         for check in checks:
             margin = check.actual - check.threshold
             logger.info("[V083 QG CHECK] strategy=%s key=%s actual=%.6f threshold=%.6f margin=%.6f passed=%s", result.strategy, check.key, check.actual, check.threshold, margin, check.passed)
