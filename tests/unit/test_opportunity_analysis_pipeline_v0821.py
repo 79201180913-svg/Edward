@@ -1,8 +1,21 @@
+from dataclasses import dataclass
 from types import SimpleNamespace
 
 import edward.services.opportunity_analysis_pipeline_v0821 as adapter_module
 from edward.services.opportunity_analysis_pipeline_v0821 import OpportunityAnalysisPipelineV0821
 from edward.services.opportunity_search_service_live_v04 import LiveOpportunitySearchService
+
+
+@dataclass(frozen=True)
+class FakeBase:
+    base: str
+    opportunity: str = "opportunity"
+
+
+@dataclass(frozen=True)
+class FakePipelineResult:
+    base: FakeBase
+    analysis: str = "analysis"
 
 
 class FakeCollector:
@@ -29,11 +42,7 @@ class FakeCollector:
 class FakePipeline:
     def __init__(self):
         self.calls = []
-        self_result = SimpleNamespace(
-            base=SimpleNamespace(base="base-v08", opportunity="opportunity"),
-            analysis="analysis",
-        )
-        self.result = self_result
+        self.result = FakePipelineResult(base=FakeBase(base="base-v08"))
 
     def analyze(self, **kwargs):
         self.calls.append(kwargs)
@@ -78,7 +87,7 @@ def test_adapter_reuses_v082_pipeline_and_contract_data(monkeypatch):
     )
 
     assert collector.calls == ["uid"]
-    assert result is pipeline.result
+    assert result is not pipeline.result
     call = pipeline.calls[0]
     assert call["instrument_uid"] == "uid"
     assert call["ticker"] == "SBER"
