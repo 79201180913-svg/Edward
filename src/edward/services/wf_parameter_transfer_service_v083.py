@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
-from statistics import mean
+from statistics import mean, median
 from typing import Any, Sequence
 
 from edward.services.research_backtest_service_v08 import ResearchBacktestResult
 from edward.services.wf_parameter_stability_diagnostics_v08 import neighborhood_stability_pct, parameter_key
 
 WF_PARAMETER_TRANSFER_V083_VERSION = "0.8.3"
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +32,11 @@ class ParameterTransferCandidate:
     historical_score: float
     historical_support: int
     selection_score: float
+    historical_mean_return_pct: float = 0.0
+    historical_median_return_pct: float = 0.0
+    historical_mean_sharpe: float = 0.0
+    historical_mean_drawdown_pct: float = 0.0
+    historical_positive_pct: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +101,19 @@ class WFParameterTransferSelectorV083:
         return index / (len(ordered) - 1) * 100.0
 
     @classmethod
+    def _historical_statistics(
+        cls,
+        entries: Sequence[ParameterTransferHistoryEntry],
+    ) -> tuple[float, float, float, float, float]:
+        if not entries:
+            return 0.0, 0.0, 0.0, 0.0, 0.0
+        returns = [entry.oos_net_return_pct for entry in entries]
+        sharpes = [entry.oos_sharpe for entry in entries]
+        drawdowns = [entry.oos_drawdown_pct for entry in entries]
+        positive_pct = sum(value > 0.0 for value in returns) / len(returns) * 100.0
+        return mean(returns), median(returns), mean(sharpes), mean(drawdowns), positive_pct
+
+    @classmethod
     def _historical_score(
         cls,
         entries: Sequence[ParameterTransferHistoryEntry],
@@ -156,20 +176,40 @@ class WFParameterTransferSelectorV083:
             consensus = mean(percentile_maps[criterion][key] for criterion in cls.CRITERIA)
             neighborhood, _ = neighborhood_stability_pct(params, candidates)
             current_score = consensus * cls.CONSENSUS_WEIGHT + neighborhood * cls.NEIGHBORHOOD_WEIGHT
-            historical_score, support = cls._historical_score(history_by_key.get(key, ()), history)
+            historical_entries = history_by_key.get(key, ())
+            historical_score, support = cls._historical_score(historical_entries, history)
+            historical_mean_return, historical_median_return, historical_mean_sharpe, historical_mean_drawdown, historical_positive_pct = cls._historical_statistics(historical_entries)
             if support >= cls.MIN_HISTORICAL_SUPPORT:
                 score = current_score * cls.CURRENT_WEIGHT + historical_score * cls.HISTORICAL_WEIGHT
             else:
                 score = current_score
-            candidate_rows.append(
-                ParameterTransferCandidate(
-                    parameters=dict(params),
-                    consensus_score=round(consensus, 4),
-                    neighborhood_stability_pct=round(neighborhood, 4),
-                    historical_score=round(historical_score, 4),
-                    historical_support=support,
-                    selection_score=round(score, 4),
-                )
+            row = ParameterTransferCandidate(
+                parameters=dict(params),
+                consensus_score=round(consensus, 4),
+                neighborhood_stability_pct=round(neighborhood, 4),
+                historical_score=round(historical_score, 4),
+                historical_support=support,
+                selection_score=round(score, 4),
+                historical_mean_return_pct=round(historical_mean_return, 4),
+                historical_median_return_pct=round(historical_median_return, 4),
+                historical_mean_sharpe=round(historical_mean_sharpe, 4),
+                historical_mean_drawdown_pct=round(historical_mean_drawdown, 4),
+                historical_positive_pct=round(historical_positive_pct, 4),
+            )
+            candidate_rows.append(row)
+            logger.warning(
+                "[V083 WF TRANSFER CANDIDATE] params=%s current_score=%.4f historical_score=%.4f support=%d historical_mean_return=%.4f historical_median_return=%.4f historical_mean_sharpe=%.4f historical_mean_dd=%.4f historical_positive_pct=%.2f selection_score=%.4f eligible=%s",
+                params,
+                current_score,
+                row.historical_score,
+                row.historical_support,
+                row.historical_mean_return_pct,
+                row.historical_median_return_pct,
+                row.historical_mean_sharpe,
+                row.historical_mean_drawdown_pct,
+                row.historical_positive_pct,
+                row.selection_score,
+                support >= cls.MIN_HISTORICAL_SUPPORT,
             )
 
         ranked = sorted(
@@ -185,6 +225,18 @@ class WFParameterTransferSelectorV083:
         )
         selected = ranked[0]
         baseline_row = next(row for row in candidate_rows if parameter_key(row.parameters) == parameter_key(baseline))
+        logger.warning(
+            "[V083 WF TRANSFER SELECTION] baseline=%s selected=%s changed=%s history_windows=%d baseline_score=%.4f selected_score=%.4f selected_support=%d selected_historical_return=%.4f selected_historical_positive_pct=%.2f",
+            baseline,
+            selected.parameters,
+            parameter_key(selected.parameters) != parameter_key(baseline),
+            len(history),
+            baseline_row.selection_score,
+            selected.selection_score,
+            selected.historical_support,
+            selected.historical_mean_return_pct,
+            selected.historical_positive_pct,
+        )
         return ParameterTransferSelection(
             selected_parameters=dict(selected.parameters),
             candidates=tuple(ranked),
