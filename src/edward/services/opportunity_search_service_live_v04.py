@@ -4,6 +4,7 @@ from dataclasses import replace
 from typing import Any, Callable
 
 import edward.services.opportunity_search_service as opportunity_search_module
+from edward.config.application_settings import ApplicationSettingsStore
 from edward.services.execution_readiness_service import ExecutionReadinessInput, ExecutionReadinessService
 from edward.services.forecast_quality_gate_service import ForecastQualityGateService
 from edward.services.forecast_walk_forward_service import ForecastWalkForwardService
@@ -17,6 +18,7 @@ from edward.services.opportunity_search_service import (
     OpportunitySearchResult,
     OpportunitySearchService,
 )
+from edward.storage.sqlite_store import SQLiteStore
 
 ResultCallback = Callable[[OpportunitySearchResult, int, int], None]
 
@@ -25,11 +27,15 @@ class LiveOpportunitySearchService(OpportunitySearchService):
     """Opportunity search that streams results through the canonical v0.8.2 analysis."""
 
     def __init__(self, client: Any, *, force_recompute: bool = False):
-        # v0.8.2.1 deliberately removes the legacy CachedAnalysisService from
-        # the live opportunity path. The single-instrument UI and opportunity
-        # search must consume the same v0.8.2 analysis result.
+        settings = ApplicationSettingsStore().load()
+        store = SQLiteStore(settings.storage_path)
         self.force_recompute = force_recompute
-        super().__init__(client, analysis_service=OpportunityAnalysisPipelineV0821(client))
+        self.analysis_pipeline = OpportunityAnalysisPipelineV0821(
+            client,
+            cache_store=store,
+            force_recompute=force_recompute,
+        )
+        super().__init__(client, analysis_service=self.analysis_pipeline)
         # Keep the existing OpportunitySearchService call graph intact while
         # making its OpportunityEngine consume the canonical v0.8.2 result.
         # The bridge falls back to the legacy engine for non-v0.8.2 callers.
@@ -37,9 +43,7 @@ class LiveOpportunitySearchService(OpportunitySearchService):
 
     @property
     def cache_info(self) -> dict[str, int]:
-        # Walk Forward cache used by the legacy opportunity pipeline is no
-        # longer authoritative for v0.8.2.1. Keep the UI contract intact.
-        return {"hits": 0, "misses": 0, "total": 0}
+        return self.analysis_pipeline.cache_info()
 
     @staticmethod
     def _enforce_execution_readiness(
@@ -124,6 +128,8 @@ class LiveOpportunitySearchService(OpportunitySearchService):
         scope = str(scope or MARKET_SCOPE).upper()
         if scope not in {"MARKET", "PORTFOLIO"}:
             raise ValueError(f"Unsupported opportunity scope: {scope}")
+        if force_recompute:
+            self.analysis_pipeline.force_recompute()
 
         self._notify(progress_callback, "Загрузка списка инструментов", 2.0, 0, 0)
         account_id = self._active_account()
