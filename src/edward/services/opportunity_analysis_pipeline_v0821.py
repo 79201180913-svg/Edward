@@ -83,6 +83,7 @@ class OpportunityAnalysisPipelineV0821:
             self.cached_analysis = None
         self.collector = collector or SemanticRobustContractAnalysisDataServiceV081(client)
 
+    @property
     def cache_info(self) -> dict[str, int]:
         if self.cached_analysis is None:
             return {"hits": 0, "misses": 0, "total": 0}
