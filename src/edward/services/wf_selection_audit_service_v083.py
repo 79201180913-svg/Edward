@@ -8,7 +8,6 @@ from typing import Any, Iterable, Mapping, Sequence
 @dataclass(frozen=True, slots=True)
 class WFSelectionAuditWindow:
     """One completed WF window containing baseline, transfer and OOS oracle outcomes."""
-
     window_index: int
     baseline_parameters: Mapping[str, Any]
     transfer_parameters: Mapping[str, Any]
@@ -58,7 +57,6 @@ class WFSelectionAuditResult:
 
 class WFSelectionAuditServiceV083:
     """Audit parameter selection without changing production selection or QG."""
-
     @staticmethod
     def _compound(values: Sequence[float]) -> float:
         value = 1.0
@@ -70,13 +68,13 @@ class WFSelectionAuditServiceV083:
     def evaluate(cls, strategy: str, windows: Iterable[WFSelectionAuditWindow]) -> WFSelectionAuditResult:
         items = tuple(windows)
         if not items:
-            return WFSelectionAuditResult(strategy, 0, 0, 0, 0, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+            return WFSelectionAuditResult(strategy, 0, 0, 0, 0, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
         changed = sum(item.transfer_changed for item in items)
-        wins = sum(item.transfer_wins for item in items)
-        losses = sum(item.transfer_oos_return_pct < item.baseline_oos_return_pct for item in items)
-        ties = len(items) - wins - losses
-        deltas = [item.transfer_delta_pct for item in items]
+        wins = sum(item.transfer_won and item.transfer_changed for item in items)
+        losses = sum(item.transfer_delta_pct < 0.0 and item.transfer_changed for item in items)
+        ties = changed - wins - losses
+        deltas = [item.transfer_delta_pct for item in items if item.transfer_changed]
         baseline = [item.baseline_oos_return_pct for item in items]
         transfer = [item.transfer_oos_return_pct for item in items]
         oracle = [item.oracle_oos_return_pct for item in items]
@@ -87,9 +85,9 @@ class WFSelectionAuditServiceV083:
             transfer_wins=wins,
             transfer_losses=losses,
             transfer_ties=ties,
-            transfer_win_rate_pct=wins / len(items) * 100.0,
-            mean_transfer_delta_pct=mean(deltas),
-            median_transfer_delta_pct=median(deltas),
+            transfer_win_rate_pct=wins / changed * 100.0 if changed else 0.0,
+            mean_transfer_delta_pct=mean(deltas) if deltas else 0.0,
+            median_transfer_delta_pct=median(deltas) if deltas else 0.0,
             cumulative_baseline_return_pct=cls._compound(baseline),
             cumulative_transfer_return_pct=cls._compound(transfer),
             cumulative_oracle_return_pct=cls._compound(oracle),
