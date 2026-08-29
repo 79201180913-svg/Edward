@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Iterable
 
 from edward.services.analysis_service import AnalysisResult, Candle
-from edward.services.analysis_service_v08 import AnalysisServiceV08
+from edward.services.analysis_service_v08 import AnalysisServiceV08, AnalysisV08Diagnostics
 from edward.services.regime_engine_v08 import RegimeEngine
 from edward.services.strategy_optimization_cache import StrategyOptimizationCache
 
@@ -89,11 +89,11 @@ class CachedAnalysisServiceV08(AnalysisServiceV08):
         confidence = "Low"
         if winner:
             confidence = "High" if winner.stability >= 80.0 else "Medium" if winner.stability >= 65.0 else "Low"
-        self.last_diagnostics = type(self.last_diagnostics)(
+        self.last_diagnostics = AnalysisV08Diagnostics(
             regime_confidence=regime_result.confidence,
             regime=regime_result.regime,
             robustness_by_strategy={item.strategy: item.stability for item in strategies},
-        ) if self.last_diagnostics is not None else None
+        )
 
         explanation = (
             f"Рекомендована {winner.strategy}: v0.8 robustness {winner.score:.1f}, "
