@@ -57,3 +57,26 @@ def test_insufficient_history_is_reported_without_exception():
 
     assert result.hypotheses == ()
     assert result.baseline_horizons == ()
+
+
+def test_forward_return_uses_only_prices_after_event_index():
+    candles = _candles([100.0, 101.0, 102.0, 103.0, 104.0])
+
+    assert ResearchDiscoveryServiceV085._forward_return(candles, 1, 2) == (103.0 / 101.0) - 1.0
+    assert ResearchDiscoveryServiceV085._forward_return(candles, 1, 3) == (104.0 / 101.0) - 1.0
+    assert ResearchDiscoveryServiceV085._forward_return(candles, 1, 4) is None
+
+
+def test_baseline_is_unconditional_and_does_not_depend_on_event_indices():
+    candles = _candles([100.0, 101.0, 99.0, 102.0, 98.0, 103.0])
+    baseline = ResearchDiscoveryServiceV085._baseline(candles, 1)
+
+    expected = [
+        101.0 / 100.0 - 1.0,
+        99.0 / 101.0 - 1.0,
+        102.0 / 99.0 - 1.0,
+        98.0 / 102.0 - 1.0,
+        103.0 / 98.0 - 1.0,
+    ]
+    assert baseline == expected
+    assert len(baseline) == len(candles) - 1
