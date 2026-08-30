@@ -23,7 +23,6 @@ logger = logging.getLogger(__name__)
 ANALYSIS_V08_VERSION = "0.8.0"
 ANALYSIS_ENGINE_V084_VERSION = "0.8.4"
 
-
 @dataclass(frozen=True, slots=True)
 class AnalysisV08Diagnostics:
     regime_confidence: float
@@ -40,7 +39,6 @@ class AnalysisV08Diagnostics:
     train_sample_by_strategy: dict[str, TrainSampleDiagnosticsV084] = field(default_factory=dict)
     failure_attribution_by_strategy: dict[str, FailureAttributionV084] = field(default_factory=dict)
 
-
 class AnalysisServiceV08:
     STRATEGIES = ("Trend Following", "Momentum", "Breakout", "Mean Reversion")
     PROFILES = {
@@ -48,26 +46,21 @@ class AnalysisServiceV08:
         "medium_term": {"train": 240, "test": 60, "max_drawdown_pct": 25.0, "min_stability_pct": 60.0, "min_train_trades": 1},
         "speculative": {"train": 120, "test": 30, "max_drawdown_pct": 35.0, "min_stability_pct": 55.0, "min_train_trades": 1},
     }
-
     def __init__(self, *, costs: BacktestCostModel | None = None) -> None:
         self.costs = costs or BacktestCostModel()
         self.last_diagnostics: AnalysisV08Diagnostics | None = None
         logger.warning("[V084 EXEC] INIT AnalysisServiceV08 engine_version=%s contract_version=%s strategies=%s profiles=%s", ANALYSIS_ENGINE_V084_VERSION, ANALYSIS_V08_VERSION, self.STRATEGIES, self.PROFILES)
-
     @staticmethod
     def _grid(strategy: str, profile: str) -> list[dict[str, Any]]:
         if strategy == "Trend Following": return [{"fast": fast, "slow": slow} for fast, slow in ((10, 30), (20, 50), (30, 90))]
         if strategy == "Momentum": return [{"lookback": value} for value in ((20, 40, 80) if profile == "long_term" else (10, 20, 40))]
         if strategy == "Breakout": return [{"lookback": value} for value in ((10, 20, 40) if profile == "speculative" else (20, 40, 80))]
         return [{"lookback": value, "deviation": deviation} for value in (10, 20, 40) for deviation in (1.5, 2.0, 3.0)]
-
     @staticmethod
     def _signal_factory(strategy: str, parameters: dict[str, Any]):
         return lambda candles, index: ResearchBacktestService.simple_signal(strategy, candles, parameters, index)
-
     def _robust(self, candles: list[Candle], strategy: str, profile: str) -> RobustWalkForwardResult:
         cfg = self.PROFILES[profile]
-        logger.warning("[V084 EXEC] ENTER robust strategy=%s profile=%s candles=%d train=%d test=%d grid=%d max_dd=%s min_train_trades=%d", strategy, profile, len(candles), cfg["train"], cfg["test"], len(self._grid(strategy, profile)), cfg["max_drawdown_pct"], cfg["min_train_trades"])
         try:
             result = RobustWalkForwardServiceV084.run(candles=candles, strategy=strategy, parameter_grid=self._grid(strategy, profile), signal_factory=self._signal_factory, train_size=cfg["train"], test_size=cfg["test"], costs=self.costs, max_drawdown_pct=cfg["max_drawdown_pct"], min_train_trades=cfg["min_train_trades"])
         except ValueError as exc:
@@ -75,22 +68,15 @@ class AnalysisServiceV08:
             return RobustWalkForwardServiceV084._empty(strategy)
         diagnostics = RobustnessDiagnosticsServiceV083.evaluate(result)
         logger.warning("[V084 ROBUSTNESS BREAKDOWN] strategy=%s total=%.2f return_score=%.2f risk_score=%.2f sharpe_score=%.2f stability_score=%.2f performance_score=%.2f", strategy, diagnostics.robustness_total, diagnostics.return_consistency_score, diagnostics.risk_consistency_score, diagnostics.sharpe_consistency_score, diagnostics.parameter_stability_score, diagnostics.performance_consistency_score)
-        logger.warning("[V084 ROBUSTNESS ACTIVITY] strategy=%s windows=%d active=%d inactive=%d active_pct=%.2f positive_active=%d positive_active_pct=%.2f positive_all_pct=%.2f", strategy, diagnostics.total_windows, diagnostics.active_windows, diagnostics.inactive_windows, diagnostics.active_pct, diagnostics.positive_active_windows, diagnostics.positive_active_pct, diagnostics.positive_all_pct)
         return result
-
     @staticmethod
     def _quality(result: RobustWalkForwardResult, profile: str) -> bool:
         diagnostics = QualityGateDiagnosticsServiceV0822.evaluate(result, profile)
-        logger.warning("[V084 QG RESULT] strategy=%s profile=%s passed=%s failed_checks=%s reason=%s", result.strategy, profile, diagnostics.passed, diagnostics.failed_checks, diagnostics.failure_reason or "none")
-        for check in diagnostics.checks: logger.warning("[V084 QG CHECK] strategy=%s check=%s actual=%.6f threshold=%.6f passed=%s", result.strategy, check.key, check.actual, check.threshold, check.passed)
-        logger.warning("[QUALITY GATE] strategy=%s profile=%s result=%s", result.strategy, profile, "PASS" if diagnostics.passed else "FAIL")
         return diagnostics.passed
-
     @staticmethod
     def _legacy_strategy_result(result: RobustWalkForwardResult, profile: str) -> StrategyResult:
         quality = AnalysisServiceV08._quality(result, profile)
         return StrategyResult(strategy=result.strategy, parameters=dict(result.windows[-1].parameters) if result.windows else {}, return_pct=round(result.mean_test_return_pct, 8), max_drawdown_pct=round(result.mean_test_drawdown_pct, 8), sharpe=round(result.mean_test_sharpe, 8), trades=sum(item.test_trades for item in result.windows), stability=round(result.robustness_score, 8), quality_gate=quality, score=round(result.robustness_score, 8), train_score=round(sum(item.train_score for item in result.windows) / len(result.windows), 8) if result.windows else 0.0, test_score=round(result.mean_test_return_pct, 8), wf_windows=len(result.windows), positive_return_windows=result.positive_return_windows, risk_ok_windows=result.risk_ok_windows, positive_sharpe_windows=result.positive_sharpe_windows, return_consistency=round(result.return_consistency_pct, 8), risk_consistency=round(result.risk_consistency_pct, 8), sharpe_consistency=round(result.sharpe_consistency_pct, 8))
-
     def analyze(self, *, instrument_uid: str, ticker: str, candles: Iterable[Candle], profile: str = "medium_term", risk_profile: str = "balanced", horizon: str = "medium") -> AnalysisResult:
         if profile not in self.PROFILES: raise ValueError(f"Unsupported profile: {profile}")
         ordered = sorted(list(candles), key=lambda item: item.timestamp)
@@ -112,7 +98,7 @@ class AnalysisServiceV08:
             qg = QualityGateDiagnosticsServiceV0822.evaluate(robust_results[index], profile)
             zone_oos = parameter_zone_oos.get(item.strategy)
             sample = train_sample[item.strategy]
-            failure_attribution[item.strategy] = FailureAttributionServiceV084.evaluate(strategy=item.strategy, quality_gate_passed=qg.passed, quality_gate_failure_reason=qg.failure_reason if not qg.passed else None, quality_gate_failed_checks=qg.failed_checks, low_sample_pct=sample.low_sample_pct, oos_mean_return_pct=zone_oos.stable_mean_oos_return_pct if zone_oos else robust_results[index].mean_test_return_pct, oos_positive_pct=zone_oos.stable_positive_oos_pct if zone_oos else robust_results[index].return_consistency_pct, stable_zone_pct=(zone_oos.stable_windows / zone_oos.windows * 100.0) if zone_oos and zone_oos.windows else 0.0, viable_windows=len(robust_results[index].windows))
+            failure_attribution[item.strategy] = FailureAttributionServiceV084.evaluate(strategy=item.strategy, quality_gate_passed=qg.passed, quality_gate_failure_reason=qg.failure_reason if not qg.passed else None, quality_gate_failed_checks=qg.failed_checks, low_sample_pct=sample.low_sample_pct, oos_mean_return_pct=robust_results[index].mean_test_return_pct, oos_positive_pct=robust_results[index].return_consistency_pct, stable_zone_pct=(zone_oos.stable_windows / zone_oos.windows * 100.0) if zone_oos and zone_oos.windows else 0.0, viable_windows=len(robust_results[index].windows))
         self.last_diagnostics = AnalysisV08Diagnostics(regime_confidence=regime_result.confidence, regime=regime_result.regime, robustness_by_strategy={item.strategy: item.robustness_score for item in robust_results}, quality_gate_by_strategy={item.strategy: QualityGateDiagnosticsServiceV0822.evaluate(item, profile) for item in robust_results}, router_compatibility_by_strategy=compatibility, router_priority_by_strategy={item.strategy: item.priority for item in router.decisions}, router_ordered_strategies=router.ordered_strategies, regime_evidence_by_strategy=regime_evidence, generalization_by_strategy=generalization, parameter_zone_by_strategy=parameter_zones, parameter_zone_oos_by_strategy=parameter_zone_oos, train_sample_by_strategy=train_sample, failure_attribution_by_strategy=failure_attribution)
         logger.warning("[V084 FAILURE ATTRIBUTION] ticker=%s diagnostics=%s", ticker, {key: {"primary": value.primary_reason, "supporting": value.supporting_reasons, "details": dict(value.details)} for key, value in failure_attribution.items()})
         winner = max(passed, key=lambda item: (item.score, compatibility.get(item.strategy, 0.0))) if passed else None
@@ -120,9 +106,6 @@ class AnalysisServiceV08:
         recommendation = winner.strategy if winner else None
         confidence = "Low" if not winner else "High" if winner.stability >= 80.0 else "Medium" if winner.stability >= 65.0 else "Low"
         explanation = f"Рекомендована {winner.strategy}: v0.8.4 robustness {winner.score:.1f}, OOS return {winner.return_pct:.2f}%, Sharpe {winner.sharpe:.2f}, режим {regime_result.regime}, regime confidence {regime_result.confidence:.0f}%." if winner else f"Ни одна стратегия не прошла v0.8.4 Quality Gate; режим {regime_result.regime}, regime confidence {regime_result.confidence:.0f}%."
-        result = AnalysisResult(instrument_uid=instrument_uid, ticker=ticker, profile=profile, risk_profile=risk_profile, horizon=horizon, market_regime=regime_result.regime, recommendation=recommendation, confidence=confidence, score=winner.score if winner else 0.0, strategies=strategies, explanation=explanation, created_at=ordered[-1].timestamp.isoformat(), analysis_version=ANALYSIS_V08_VERSION)
-        logger.warning("[V084 EXEC] EXIT AnalysisServiceV08.analyze ticker=%s recommendation=%s passed=%d/%d score=%.4f contract_version=%s engine_version=%s", ticker, recommendation, len(passed), len(strategies), result.score, ANALYSIS_V08_VERSION, ANALYSIS_ENGINE_V084_VERSION)
-        return result
-
+        return AnalysisResult(instrument_uid=instrument_uid, ticker=ticker, profile=profile, risk_profile=risk_profile, horizon=horizon, market_regime=regime_result.regime, recommendation=recommendation, confidence=confidence, score=winner.score if winner else 0.0, strategies=strategies, explanation=explanation, created_at=ordered[-1].timestamp.isoformat(), analysis_version=ANALYSIS_V08_VERSION)
 
 __all__ = ["ANALYSIS_V08_VERSION", "ANALYSIS_ENGINE_V084_VERSION", "AnalysisV08Diagnostics", "AnalysisServiceV08"]
