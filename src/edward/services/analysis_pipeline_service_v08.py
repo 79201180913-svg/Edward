@@ -66,6 +66,21 @@ class AnalysisPipelineServiceV08:
             ),
         )
 
+    @staticmethod
+    def _is_backtestable_strategy(strategy_result) -> bool:
+        """Return whether a strategy has a real WF result suitable for backtesting.
+
+        A score-only/evidence strategy with zero WF windows is not a viable
+        trading strategy. In that state the v0.8 analysis must not manufacture
+        parameters or call the backtester with an empty parameter mapping.
+        """
+        if strategy_result is None:
+            return False
+        return bool(
+            getattr(strategy_result, "wf_windows", 0) > 0
+            and getattr(strategy_result, "parameters", None)
+        )
+
     def analyze(
         self,
         *,
@@ -91,6 +106,7 @@ class AnalysisPipelineServiceV08:
         )
         evidence_strategy_result = max(analysis.strategies, key=lambda item: item.score) if analysis.strategies else None
         evidence_strategy = evidence_strategy_result.strategy if evidence_strategy_result else None
+        backtestable_strategy = evidence_strategy_result if self._is_backtestable_strategy(evidence_strategy_result) else None
         raw_regime = RegimeEngine.classify(ordered)
         regime_confidence = cap_regime_confidence(raw_regime.confidence)
         forecast_quality_score = None
@@ -102,7 +118,7 @@ class AnalysisPipelineServiceV08:
         except ValueError:
             pass
 
-        if evidence_strategy_result is None:
+        if backtestable_strategy is None:
             ev = ExpectedValueEngine.from_returns(())
             impact = self._empty_portfolio()
             confidence = calculate_confidence(
@@ -127,15 +143,15 @@ class AnalysisPipelineServiceV08:
                 impact,
                 forecast_quality_score,
                 regime_confidence,
-                None,
+                evidence_strategy,
                 False,
                 confidence,
             )
 
         backtest = ResearchBacktestService.run_simple_strategy(
             candles=ordered,
-            strategy=evidence_strategy_result.strategy,
-            parameters=evidence_strategy_result.parameters,
+            strategy=backtestable_strategy.strategy,
+            parameters=backtestable_strategy.parameters,
             costs=self.analysis_service.costs,
         )
         ev = ExpectedValueEngine.from_trades(backtest.trades_detail)
@@ -159,7 +175,7 @@ class AnalysisPipelineServiceV08:
         )
         portfolio_confidence = self._portfolio_confidence(impact, portfolio_context_available)
         edge_reliability = ev.edge_reliability_pct if ev.available and ev.edge_reliability_pct is not None else 0.0
-        strategy_confidence_component = min(evidence_strategy_result.stability, edge_reliability)
+        strategy_confidence_component = min(backtestable_strategy.stability, edge_reliability)
         confidence = calculate_confidence(
             strategy_quality=strategy_confidence_component,
             forecast_quality=forecast_quality_score or 0.0,
@@ -171,10 +187,10 @@ class AnalysisPipelineServiceV08:
         opportunity = OpportunityEngineV08.evaluate(
             analysis=analysis,
             candles=ordered,
-            strategy_result=evidence_strategy_result,
+            strategy_result=backtestable_strategy,
             expected_value=ev,
             portfolio_impact=impact,
-            robustness_score=evidence_strategy_result.stability,
+            robustness_score=backtestable_strategy.stability,
             forecast_quality_score=forecast_quality_score,
             confidence_score=confidence.overall_confidence,
         )
