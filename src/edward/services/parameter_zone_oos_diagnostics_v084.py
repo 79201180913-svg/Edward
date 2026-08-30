@@ -43,6 +43,15 @@ class ParameterZoneOOSDiagnosticsServiceV084:
         windows: Sequence[WalkForwardWindowResult],
         zones: Sequence[ParameterZoneV084],
     ) -> ParameterZoneOOSDiagnosticsV084:
+        if len(windows) != len(zones):
+            logger.error(
+                "[V084 PARAMETER ZONE OOS INVARIANT] strategy=%s windows=%d zones=%d reason=length_mismatch",
+                strategy, len(windows), len(zones),
+            )
+            raise ValueError(
+                "Parameter Zone OOS diagnostics requires windows and zones to have the same length"
+            )
+
         pairs = list(zip(windows, zones))
         stable = [window for window, zone in pairs if zone.stable]
         point = [window for window, zone in pairs if not zone.stable]
