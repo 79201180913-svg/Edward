@@ -104,17 +104,20 @@ class AnalysisServiceV08:
         logger.warning("[V086 EVIDENCE SUMMARY] ticker=%s cells=%d sufficient=%d", ticker, len(evidence_audit), sufficient_evidence)
         robust_results = [self._robust(ordered, strategy, profile) for strategy in self.STRATEGIES]
         wf_evidence: list[WFAwareEvidenceAuditV086] = []
+        wf_contexts: list[tuple[str, tuple[WFAwareEvidenceAuditV086, ...]]] = []
         for robust_result in robust_results:
-            wf_evidence.extend(EvidenceAuditServiceV086.audit_wf(conditional_discovery, robust_result, ordered))
-        research_evidence = ResearchEvidenceReportServiceV086.build(evidence_audit, wf_evidence)
+            context_evidence = tuple(EvidenceAuditServiceV086.audit_wf(conditional_discovery, robust_result, ordered))
+            wf_evidence.extend(context_evidence)
+            wf_contexts.append((robust_result.strategy, context_evidence))
+        research_evidence = ResearchEvidenceReportServiceV086.build_from_wf_contexts(evidence_audit, wf_contexts)
         research_summary = ResearchEvidenceSummaryServiceV087.build(research_evidence)
         logger.warning("[V087 RESEARCH SUMMARY] ticker=%s cells=%d interesting=%d low_sample=%d no_positive_excess=%d low_wf_persistence=%d", ticker, research_summary.total_cells, research_summary.interesting, research_summary.low_sample, research_summary.no_positive_excess, research_summary.low_wf_persistence)
         for row in research_summary.top_magnitude:
-            logger.warning("[V087 RESEARCH MAGNITUDE] ticker=%s rank=%d hypothesis=%s regime=%s volatility=%s direction=%s horizon=%d N=%d excess=%.6f flag=%s", ticker, row.magnitude_rank, row.evidence.hypothesis, row.evidence.regime, row.evidence.volatility_bucket, row.evidence.direction, row.evidence.horizon, row.evidence.observations, row.evidence.excess_return_pct, row.research_flag)
+            logger.warning("[V087 RESEARCH MAGNITUDE] ticker=%s strategy=%s rank=%d hypothesis=%s regime=%s volatility=%s direction=%s horizon=%d N=%d excess=%.6f flag=%s", ticker, row.strategy_context, row.magnitude_rank, row.evidence.hypothesis, row.evidence.regime, row.evidence.volatility_bucket, row.evidence.direction, row.evidence.horizon, row.evidence.observations, row.evidence.excess_return_pct, row.research_flag)
         for row in research_summary.top_consistency:
-            logger.warning("[V087 RESEARCH CONSISTENCY] ticker=%s rank=%d hypothesis=%s regime=%s volatility=%s direction=%s horizon=%d N=%d win_rate=%.2f flag=%s", ticker, row.consistency_rank, row.evidence.hypothesis, row.evidence.regime, row.evidence.volatility_bucket, row.evidence.direction, row.evidence.horizon, row.evidence.observations, row.evidence.win_rate_pct, row.research_flag)
+            logger.warning("[V087 RESEARCH CONSISTENCY] ticker=%s strategy=%s rank=%d hypothesis=%s regime=%s volatility=%s direction=%s horizon=%d N=%d win_rate=%.2f flag=%s", ticker, row.strategy_context, row.consistency_rank, row.evidence.hypothesis, row.evidence.regime, row.evidence.volatility_bucket, row.evidence.direction, row.evidence.horizon, row.evidence.observations, row.evidence.win_rate_pct, row.research_flag)
         for row in research_summary.top_stability:
-            logger.warning("[V087 RESEARCH STABILITY] ticker=%s rank=%d hypothesis=%s regime=%s volatility=%s direction=%s horizon=%d N=%d wf_persistence=%.2f flag=%s", ticker, row.stability_rank, row.evidence.hypothesis, row.evidence.regime, row.evidence.volatility_bucket, row.evidence.direction, row.evidence.horizon, row.evidence.observations, row.wf.wf_persistence_pct if row.wf else 0.0, row.research_flag)
+            logger.warning("[V087 RESEARCH STABILITY] ticker=%s strategy=%s rank=%d hypothesis=%s regime=%s volatility=%s direction=%s horizon=%d N=%d wf_persistence=%.2f flag=%s", ticker, row.strategy_context, row.stability_rank, row.evidence.hypothesis, row.evidence.regime, row.evidence.volatility_bucket, row.evidence.direction, row.evidence.horizon, row.evidence.observations, row.wf.wf_persistence_pct if row.wf else 0.0, row.research_flag)
         strategies = [self._legacy_strategy_result(item, profile) for item in robust_results]
         passed = [item for item in strategies if item.quality_gate]
         winner = max(passed, key=lambda item: item.score) if passed else None
