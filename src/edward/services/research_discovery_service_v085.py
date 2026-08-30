@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from statistics import mean, median
-from typing import Callable, Sequence
+from typing import Sequence
 
 from edward.services.analysis_service import Candle
 
@@ -34,7 +34,22 @@ class DiscoveryEvidence:
 
     @property
     def strongest_horizon(self) -> DiscoveryHorizonEvidence | None:
+        """Descriptive maximum; never used for parameter selection or trading."""
         return max(self.horizons, key=lambda item: item.excess_return_pct, default=None)
+
+    @property
+    def positive_excess_horizons(self) -> int:
+        """Count horizons whose event excess return is positive."""
+        return sum(item.excess_return_pct > 0 for item in self.horizons)
+
+    @property
+    def excess_persistence_pct(self) -> float:
+        """Share of tested horizons with positive excess return."""
+        return (
+            self.positive_excess_horizons / len(self.horizons) * 100.0
+            if self.horizons
+            else 0.0
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,8 +111,20 @@ class ResearchDiscoveryServiceV085:
 
             if hypothesis == "BREAKOUT_EXPANSION":
                 prior_high = max(highs[index - 20:index])
-                true_ranges = [max(highs[j] - lows[j], abs(highs[j] - closes[j - 1]), abs(lows[j] - closes[j - 1])) for j in range(index - 20, index) if closes[j - 1] > 0]
-                current_tr = max(highs[index] - lows[index], abs(highs[index] - closes[index - 1]), abs(lows[index] - closes[index - 1]))
+                true_ranges = [
+                    max(
+                        highs[j] - lows[j],
+                        abs(highs[j] - closes[j - 1]),
+                        abs(lows[j] - closes[j - 1]),
+                    )
+                    for j in range(index - 20, index)
+                    if closes[j - 1] > 0
+                ]
+                current_tr = max(
+                    highs[index] - lows[index],
+                    abs(highs[index] - closes[index - 1]),
+                    abs(lows[index] - closes[index - 1]),
+                )
                 if true_ranges and current_tr >= median(true_ranges) * 1.5 and closes[index] >= prior_high:
                     indices.append(index)
 
@@ -144,8 +171,18 @@ class ResearchDiscoveryServiceV085:
     )
 
     @classmethod
-    def _evidence_for_indices(cls, candles: Sequence[Candle], indices: Sequence[int], horizon: int, baseline: Sequence[float]) -> DiscoveryHorizonEvidence:
-        values = [value for index in indices if (value := cls._forward_return(candles, index, horizon)) is not None]
+    def _evidence_for_indices(
+        cls,
+        candles: Sequence[Candle],
+        indices: Sequence[int],
+        horizon: int,
+        baseline: Sequence[float],
+    ) -> DiscoveryHorizonEvidence:
+        values = [
+            value
+            for index in indices
+            if (value := cls._forward_return(candles, index, horizon)) is not None
+        ]
         baseline_mean = mean(baseline) * 100.0 if baseline else 0.0
         event_mean = mean(values) * 100.0 if values else 0.0
         return DiscoveryHorizonEvidence(
@@ -161,15 +198,21 @@ class ResearchDiscoveryServiceV085:
     @classmethod
     def run(cls, candles: Sequence[Candle]) -> ResearchDiscoveryResult:
         ordered = tuple(sorted(candles, key=lambda item: item.timestamp))
-        logger.warning("[V085 DISCOVERY START] candles=%d hypotheses=%d horizons=%s", len(ordered), len(cls.HYPOTHESES), cls.HORIZONS)
+        logger.warning(
+            "[V085 DISCOVERY START] candles=%d hypotheses=%d horizons=%s",
+            len(ordered),
+            len(cls.HYPOTHESES),
+            cls.HORIZONS,
+        )
         if len(ordered) < cls.MIN_LOOKBACK + 1:
-            logger.warning("[V085 DISCOVERY RESULT] status=INSUFFICIENT_DATA candles=%d minimum=%d", len(ordered), cls.MIN_LOOKBACK + 1)
+            logger.warning(
+                "[V085 DISCOVERY RESULT] status=INSUFFICIENT_DATA candles=%d minimum=%d",
+                len(ordered),
+                cls.MIN_LOOKBACK + 1,
+            )
             return ResearchDiscoveryResult(RESEARCH_DISCOVERY_VERSION, len(ordered), (), ())
 
-        baselines = {
-            horizon: cls._baseline(ordered, horizon)
-            for horizon in cls.HORIZONS
-        }
+        baselines = {horizon: cls._baseline(ordered, horizon) for horizon in cls.HORIZONS}
         baseline_evidence = tuple(
             DiscoveryHorizonEvidence(
                 horizon=horizon,
@@ -186,7 +229,10 @@ class ResearchDiscoveryServiceV085:
         evidence: list[DiscoveryEvidence] = []
         for hypothesis, description in cls.HYPOTHESES:
             indices = cls._event_indices(ordered, hypothesis)
-            horizons = tuple(cls._evidence_for_indices(ordered, indices, horizon, baselines[horizon]) for horizon in cls.HORIZONS)
+            horizons = tuple(
+                cls._evidence_for_indices(ordered, indices, horizon, baselines[horizon])
+                for horizon in cls.HORIZONS
+            )
             item = DiscoveryEvidence(
                 hypothesis=hypothesis,
                 description=description,
@@ -197,25 +243,38 @@ class ResearchDiscoveryServiceV085:
             )
             strongest = item.strongest_horizon
             logger.warning(
-                "[V085 DISCOVERY HYPOTHESIS] hypothesis=%s events=%d strongest_horizon=%s excess=%.4f mean_return=%.4f win_rate=%.2f",
+                "[V085 DISCOVERY HYPOTHESIS] hypothesis=%s events=%d positive_excess_horizons=%d/5 persistence=%.2f strongest_horizon=%s strongest_excess=%.4f",
                 hypothesis,
                 item.events,
+                item.positive_excess_horizons,
+                item.excess_persistence_pct,
                 strongest.horizon if strongest else None,
                 strongest.excess_return_pct if strongest else 0.0,
-                strongest.mean_forward_return_pct if strongest else 0.0,
-                strongest.win_rate_pct if strongest else 0.0,
             )
             for horizon in horizons:
                 logger.info(
                     "[V085 DISCOVERY HORIZON] hypothesis=%s horizon=%d observations=%d mean=%.4f median=%.4f win_rate=%.2f baseline=%.4f excess=%.4f",
-                    hypothesis, horizon.horizon, horizon.observations, horizon.mean_forward_return_pct,
-                    horizon.median_forward_return_pct, horizon.win_rate_pct,
-                    horizon.baseline_mean_return_pct, horizon.excess_return_pct,
+                    hypothesis,
+                    horizon.horizon,
+                    horizon.observations,
+                    horizon.mean_forward_return_pct,
+                    horizon.median_forward_return_pct,
+                    horizon.win_rate_pct,
+                    horizon.baseline_mean_return_pct,
+                    horizon.excess_return_pct,
                 )
             evidence.append(item)
 
-        logger.warning("[V085 DISCOVERY RESULT] status=COMPLETE hypotheses=%d", len(evidence))
-        return ResearchDiscoveryResult(RESEARCH_DISCOVERY_VERSION, len(ordered), baseline_evidence, tuple(evidence))
+        logger.warning(
+            "[V085 DISCOVERY RESULT] status=COMPLETE hypotheses=%d",
+            len(evidence),
+        )
+        return ResearchDiscoveryResult(
+            RESEARCH_DISCOVERY_VERSION,
+            len(ordered),
+            baseline_evidence,
+            tuple(evidence),
+        )
 
 
 __all__ = [
