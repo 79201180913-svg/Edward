@@ -6,16 +6,18 @@ from typing import Any, Iterable
 
 from edward.services.analysis_service import AnalysisResult, Candle, StrategyResult
 from edward.services.conditional_discovery_service_v086 import ConditionalDiscoveryResult, ConditionalDiscoveryServiceV086
-from edward.services.evidence_audit_service_v086 import EvidenceAuditServiceV086, EvidenceAuditV086
+from edward.services.evidence_audit_service_v086 import EvidenceAuditServiceV086, EvidenceAuditV086, WFAwareEvidenceAuditV086
 from edward.services.quality_gate_diagnostics_v0822 import QualityGateDiagnostics, QualityGateDiagnosticsServiceV0822
 from edward.services.regime_engine_v08 import RegimeEngine
 from edward.services.research_backtest_service_v08 import BacktestCostModel, ResearchBacktestService
 from edward.services.research_discovery_service_v085 import ResearchDiscoveryResult, ResearchDiscoveryServiceV085
+from edward.services.research_evidence_report_v086 import ResearchEvidenceReportServiceV086, ResearchEvidenceRowV086
+from edward.services.research_evidence_summary_v087 import ResearchEvidenceSummaryServiceV087, ResearchEvidenceSummaryV087
 from edward.services.robust_walk_forward_service_v08 import RobustWalkForwardResult, RobustWalkForwardService
 from edward.services.robustness_diagnostics_v083 import RobustnessDiagnosticsServiceV083
 
 logger = logging.getLogger(__name__)
-ANALYSIS_V08_VERSION = "0.8.6"
+ANALYSIS_V08_VERSION = "0.8.7"
 
 @dataclass(frozen=True, slots=True)
 class AnalysisV08Diagnostics:
@@ -26,6 +28,9 @@ class AnalysisV08Diagnostics:
     research_discovery: ResearchDiscoveryResult | None = None
     conditional_discovery: ConditionalDiscoveryResult | None = None
     evidence_audit: tuple[EvidenceAuditV086, ...] = ()
+    wf_evidence: tuple[WFAwareEvidenceAuditV086, ...] = ()
+    research_evidence: tuple[ResearchEvidenceRowV086, ...] = ()
+    research_summary: ResearchEvidenceSummaryV087 | None = None
 
 class AnalysisServiceV08:
     STRATEGIES = ("Trend Following", "Momentum", "Breakout", "Mean Reversion")
@@ -38,7 +43,7 @@ class AnalysisServiceV08:
     def __init__(self, *, costs: BacktestCostModel | None = None) -> None:
         self.costs = costs or BacktestCostModel()
         self.last_diagnostics: AnalysisV08Diagnostics | None = None
-        logger.warning("[V086 EXEC] INIT AnalysisServiceV08 file=%s version=%s strategies=%s profiles=%s discovery=%s conditional=%s", __file__, ANALYSIS_V08_VERSION, self.STRATEGIES, self.PROFILES, ResearchDiscoveryServiceV085.HYPOTHESES, ConditionalDiscoveryServiceV086.HYPOTHESES)
+        logger.warning("[V087 EXEC] INIT AnalysisServiceV08 file=%s version=%s strategies=%s profiles=%s discovery=%s conditional=%s", __file__, ANALYSIS_V08_VERSION, self.STRATEGIES, self.PROFILES, ResearchDiscoveryServiceV085.HYPOTHESES, ConditionalDiscoveryServiceV086.HYPOTHESES)
 
     @staticmethod
     def _grid(strategy: str, profile: str) -> list[dict[str, Any]]:
@@ -86,24 +91,31 @@ class AnalysisServiceV08:
             raise ValueError(f"Unsupported profile: {profile}")
         ordered = sorted(list(candles), key=lambda item: item.timestamp)
         minimum = self.PROFILES[profile]["train"] + self.PROFILES[profile]["test"]
-        logger.warning("[V086 EXEC] ENTER AnalysisServiceV08.analyze file=%s ticker=%s instrument_uid=%s profile=%s candles=%d minimum=%d", __file__, ticker, instrument_uid, profile, len(ordered), minimum)
+        logger.warning("[V087 EXEC] ENTER AnalysisServiceV08 file=%s ticker=%s instrument_uid=%s profile=%s candles=%d minimum=%d", __file__, ticker, instrument_uid, profile, len(ordered), minimum)
         if len(ordered) < minimum:
             logger.warning("[V085 TRACE] REJECT insufficient candles ticker=%s candles=%d minimum=%d", ticker, len(ordered), minimum)
             raise ValueError(f"Для v0.8-анализа требуется не менее {minimum} исторических свечей для профиля {profile}")
         regime_result = RegimeEngine.classify(ordered)
         logger.warning("[V085 EXEC] REGIME ticker=%s regime=%s confidence=%.4f", ticker, regime_result.regime, regime_result.confidence)
         discovery = ResearchDiscoveryServiceV085.run(ordered)
-        logger.warning("[V085 DISCOVERY SUMMARY] ticker=%s hypotheses=%d", ticker, len(discovery.hypotheses))
         conditional_discovery = ConditionalDiscoveryServiceV086.run(ordered)
         evidence_audit = EvidenceAuditServiceV086.audit(conditional_discovery)
         sufficient_evidence = sum(1 for item in evidence_audit if item.sufficient_sample)
         logger.warning("[V086 EVIDENCE SUMMARY] ticker=%s cells=%d sufficient=%d", ticker, len(evidence_audit), sufficient_evidence)
-        for item in evidence_audit:
-            logger.warning("[V086 EVIDENCE] ticker=%s hypothesis=%s regime=%s volatility=%s direction=%s horizon=%d N=%d mean=%.6f median=%.6f win_rate=%.2f baseline=%.6f excess=%.6f dispersion=%.6f se=%.6f effect_dispersion=%.6f periods=%d positive_periods=%d negative_periods=%d persistence=%.2f sufficient=%s", ticker, item.hypothesis, item.regime, item.volatility_bucket, item.direction, item.horizon, item.observations, item.mean_forward_return_pct, item.median_forward_return_pct, item.win_rate_pct, item.baseline_mean_return_pct, item.excess_return_pct, item.dispersion_pct, item.standard_error_pct, item.effect_to_dispersion, item.periods, item.positive_periods, item.negative_periods, item.persistence_pct, item.sufficient_sample)
         robust_results = [self._robust(ordered, strategy, profile) for strategy in self.STRATEGIES]
+        wf_evidence: list[WFAwareEvidenceAuditV086] = []
+        for robust_result in robust_results:
+            wf_evidence.extend(EvidenceAuditServiceV086.audit_wf(conditional_discovery, robust_result, ordered))
+        research_evidence = ResearchEvidenceReportServiceV086.build(evidence_audit, wf_evidence)
+        research_summary = ResearchEvidenceSummaryServiceV087.build(research_evidence)
+        logger.warning("[V087 RESEARCH SUMMARY] ticker=%s cells=%d interesting=%d low_sample=%d no_positive_excess=%d low_wf_persistence=%d", ticker, research_summary.total_cells, research_summary.interesting, research_summary.low_sample, research_summary.no_positive_excess, research_summary.low_wf_persistence)
+        for row in research_summary.top_magnitude:
+            logger.warning("[V087 RESEARCH MAGNITUDE] ticker=%s rank=%d hypothesis=%s regime=%s volatility=%s direction=%s horizon=%d N=%d excess=%.6f flag=%s", ticker, row.magnitude_rank, row.evidence.hypothesis, row.evidence.regime, row.evidence.volatility_bucket, row.evidence.direction, row.evidence.horizon, row.evidence.observations, row.evidence.excess_return_pct, row.research_flag)
+        for row in research_summary.top_consistency:
+            logger.warning("[V087 RESEARCH CONSISTENCY] ticker=%s rank=%d hypothesis=%s regime=%s volatility=%s direction=%s horizon=%d N=%d win_rate=%.2f flag=%s", ticker, row.consistency_rank, row.evidence.hypothesis, row.evidence.regime, row.evidence.volatility_bucket, row.evidence.direction, row.evidence.horizon, row.evidence.observations, row.evidence.win_rate_pct, row.research_flag)
+        for row in research_summary.top_stability:
+            logger.warning("[V087 RESEARCH STABILITY] ticker=%s rank=%d hypothesis=%s regime=%s volatility=%s direction=%s horizon=%d N=%d wf_persistence=%.2f flag=%s", ticker, row.stability_rank, row.evidence.hypothesis, row.evidence.regime, row.evidence.volatility_bucket, row.evidence.direction, row.evidence.horizon, row.evidence.observations, row.wf.wf_persistence_pct if row.wf else 0.0, row.research_flag)
         strategies = [self._legacy_strategy_result(item, profile) for item in robust_results]
-        for item in strategies:
-            logger.warning("[V083 STRATEGY SUMMARY] ticker=%s strategy=%s qg=%s score=%.4f return=%.4f dd=%.4f sharpe=%.4f wf=%d positive=%d risk_ok=%d sharpe_positive=%d return_consistency=%.2f risk_consistency=%.2f sharpe_consistency=%.2f", ticker, item.strategy, item.quality_gate, item.score, item.return_pct, item.max_drawdown_pct, item.sharpe, item.wf_windows, item.positive_return_windows, item.risk_ok_windows, item.positive_sharpe_windows, item.return_consistency, item.risk_consistency, item.sharpe_consistency)
         passed = [item for item in strategies if item.quality_gate]
         winner = max(passed, key=lambda item: item.score) if passed else None
         score_winner = max(strategies, key=lambda item: item.score) if strategies else None
@@ -111,11 +123,7 @@ class AnalysisServiceV08:
         confidence = "Low"
         if winner:
             confidence = "High" if winner.stability >= 80.0 else "Medium" if winner.stability >= 65.0 else "Low"
-        self.last_diagnostics = AnalysisV08Diagnostics(regime_confidence=regime_result.confidence, regime=regime_result.regime, robustness_by_strategy={item.strategy: item.robustness_score for item in robust_results}, quality_gate_by_strategy={item.strategy: QualityGateDiagnosticsServiceV0822.evaluate(item, profile) for item in robust_results}, research_discovery=discovery, conditional_discovery=conditional_discovery, evidence_audit=evidence_audit)
-        logger.warning("[V086 STRATEGY SELECTION] ticker=%s profile=%s quality_gate_winner=%s max_score_strategy=%s quality_gate_pass_count=%d total_strategies=%d discovery_hypotheses=%d conditional_hypotheses=%d evidence_cells=%d sufficient_evidence=%d", ticker, profile, winner.strategy if winner else None, score_winner.strategy if score_winner else None, len(passed), len(strategies), len(discovery.hypotheses), len(conditional_discovery.evidence), len(evidence_audit), sufficient_evidence)
-        explanation = (f"Рекомендована {winner.strategy}: v0.8 robustness {winner.score:.1f}, OOS return {winner.return_pct:.2f}%, Sharpe {winner.sharpe:.2f}, режим {regime_result.regime}, regime confidence {regime_result.confidence:.0f}%." if winner else f"Ни одна стратегия не прошла v0.8 Quality Gate; режим {regime_result.regime}, regime confidence {regime_result.confidence:.0f}%. Исследовательские слои v0.8.5/v0.8.6 дополнительно проверили структурные, условные и доказательные гипотезы без влияния на допуск к торговле.")
-        result = AnalysisResult(instrument_uid=instrument_uid, ticker=ticker, profile=profile, risk_profile=risk_profile, horizon=horizon, market_regime=regime_result.regime, recommendation=recommendation, confidence=confidence, score=winner.score if winner else 0.0, strategies=strategies, explanation=explanation, created_at=ordered[-1].timestamp.isoformat(), analysis_version=ANALYSIS_V08_VERSION)
-        logger.warning("[V086 EXEC] EXIT AnalysisServiceV08.analyze ticker=%s recommendation=%s passed=%d/%d score=%.4f discovery=%d conditional=%d evidence=%d", ticker, recommendation, len(passed), len(strategies), result.score, len(discovery.hypotheses), len(conditional_discovery.evidence), len(evidence_audit))
-        return result
-
-__all__ = ["ANALYSIS_V08_VERSION", "AnalysisV08Diagnostics", "AnalysisServiceV08"]
+        self.last_diagnostics = AnalysisV08Diagnostics(regime_confidence=regime_result.confidence, regime=regime_result.regime, robustness_by_strategy={item.strategy: item.robustness_score for item in robust_results}, quality_gate_by_strategy={item.strategy: QualityGateDiagnosticsServiceV0822.evaluate(item, profile) for item in robust_results}, research_discovery=discovery, conditional_discovery=conditional_discovery, evidence_audit=evidence_audit, wf_evidence=tuple(wf_evidence), research_evidence=research_evidence, research_summary=research_summary)
+        logger.warning("[V087 STRATEGY SELECTION] ticker=%s profile=%s quality_gate_winner=%s max_score_strategy=%s quality_gate_pass_count=%d total_strategies=%d research_cells=%d", ticker, profile, winner.strategy if winner else None, score_winner.strategy if score_winner else None, len(passed), len(strategies), len(research_evidence))
+        explanation = (f"Рекомендована {winner.strategy}: v0.8 robustness {winner.score:.1f}, OOS return {winner.return_pct:.2f}%, Sharpe {winner.sharpe:.2f}, режим {regime_result.regime}, regime confidence {regime_result.confidence:.0f}%." if winner else f"Ни одна стратегия не прошла v0.8 Quality Gate; режим {regime_result.regime}, regime confidence {regime_result.confidence:.0f}%. Исследовательские слои v0.8.5/v0.8.6/v0.8.7 дополнительно проверили структурные, условные и доказательные гипотезы без влияния на допуск к торговле.")
+        return AnalysisResult(instrument_uid=instrument_uid, ticker=ticker, profile=profile, risk_profile=risk_profile, horizon=horizon, market_regime=regime_result.regime, recommendation=recommendation, confidence=confidence, score=winner.score if winner else 0.0, strategies=strategies, explanation=explanation, created_at=ordered[-1].timestamp.isoformat(), analysis_version=ANALYSIS_V08_VERSION)
