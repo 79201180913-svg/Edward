@@ -2,10 +2,10 @@ from edward.services.parameter_zone_v084 import ParameterZoneServiceV084
 from edward.services.research_backtest_service_v08 import ResearchBacktestResult
 
 
-def _result(excess: float, sharpe: float = 1.0, dd: float = 2.0) -> ResearchBacktestResult:
+def _result(parameters: dict[str, int], excess: float, sharpe: float = 1.0, dd: float = 2.0) -> ResearchBacktestResult:
     return ResearchBacktestResult(
         strategy="Breakout",
-        parameters={"lookback": 20},
+        parameters=parameters,
         gross_return_pct=excess + 1.0,
         net_return_pct=excess + 1.0,
         benchmark_return_pct=1.0,
@@ -32,9 +32,9 @@ def _result(excess: float, sharpe: float = 1.0, dd: float = 2.0) -> ResearchBack
 
 def test_parameter_zone_uses_only_viable_train_candidates() -> None:
     candidates = [
-        ({"lookback": 10}, _result(1.0)),
-        ({"lookback": 20}, _result(2.0)),
-        ({"lookback": 40}, _result(1.5)),
+        ({"lookback": 10}, _result({"lookback": 10}, 1.0)),
+        ({"lookback": 20}, _result({"lookback": 20}, 2.0)),
+        ({"lookback": 40}, _result({"lookback": 40}, 1.5)),
     ]
     viable = candidates
     zone = ParameterZoneServiceV084.evaluate(strategy="Breakout", candidates=candidates, viable=viable)
@@ -46,8 +46,8 @@ def test_parameter_zone_uses_only_viable_train_candidates() -> None:
 
 def test_parameter_zone_is_not_stable_without_multiple_viable_candidates() -> None:
     candidates = [
-        ({"lookback": 20}, _result(2.0)),
-        ({"lookback": 40}, _result(-1.0)),
+        ({"lookback": 20}, _result({"lookback": 20}, 2.0)),
+        ({"lookback": 40}, _result({"lookback": 40}, -1.0)),
     ]
     viable = [candidates[0]]
     zone = ParameterZoneServiceV084.evaluate(strategy="Breakout", candidates=candidates, viable=viable)
