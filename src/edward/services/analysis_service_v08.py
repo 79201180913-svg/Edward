@@ -79,6 +79,7 @@ class AnalysisServiceV08:
         logger.warning("[V084 QG RESULT] strategy=%s profile=%s passed=%s failed_checks=%s reason=%s", result.strategy, profile, diagnostics.passed, diagnostics.failed_checks, diagnostics.failure_reason or "none")
         for check in diagnostics.checks:
             logger.warning("[V084 QG CHECK] strategy=%s check=%s actual=%.6f threshold=%.6f passed=%s", result.strategy, check.key, check.actual, check.threshold, check.passed)
+        logger.warning("[QUALITY GATE] strategy=%s profile=%s result=%s", result.strategy, profile, "PASS" if diagnostics.passed else "FAIL")
         return diagnostics.passed
 
     @staticmethod
