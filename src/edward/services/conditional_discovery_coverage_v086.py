@@ -5,10 +5,8 @@ from dataclasses import dataclass
 from typing import Sequence
 
 from edward.services.analysis_service import Candle
-from edward.services.conditional_discovery_service_v086 import (
-    ConditionalDiscoveryResult,
-    ConditionalDiscoveryServiceV086,
-)
+from edward.services.conditional_discovery_service_v086 import ConditionalDiscoveryResult, ConditionalDiscoveryServiceV086
+from edward.services.event_observation_v086 import HORIZONS, VOLATILITY_BUCKETS, DIRECTIONS
 from edward.services.regime_engine_v08 import RegimeEngine
 
 
@@ -30,69 +28,47 @@ class CoverageAudit:
 
 
 class ConditionalDiscoveryCoverageV086:
-    """Auditable coverage statistics for an existing conditional result."""
+    """Coverage audit over the observations already computed by Discovery."""
 
     @classmethod
-    def from_result(
-        cls,
-        candles: Sequence[Candle],
-        result: ConditionalDiscoveryResult,
-    ) -> tuple[CoverageAudit, ...]:
-        ordered = tuple(sorted(candles, key=lambda item: item.timestamp))
+    def from_result(cls, result: ConditionalDiscoveryResult) -> tuple[CoverageAudit, ...]:
+        total_cells = len(RegimeEngine.REGIMES) * len(VOLATILITY_BUCKETS) * len(DIRECTIONS) * len(HORIZONS)
         audits: list[CoverageAudit] = []
-        total_cells = (
-            len(RegimeEngine.REGIMES)
-            * len(ConditionalDiscoveryServiceV086.VOLATILITY_BUCKETS)
-            * len(ConditionalDiscoveryServiceV086.DIRECTIONS)
-            * len(ConditionalDiscoveryServiceV086.HORIZONS)
-        )
-
         for evidence in result.evidence:
-            events: list[tuple[int, str, str, str]] = []
-            for index in ConditionalDiscoveryServiceV086._event_indices(ordered, evidence.hypothesis):
-                regime = RegimeEngine.classify(ordered[: index + 1]).regime
-                volatility = ConditionalDiscoveryServiceV086._volatility_bucket(ordered, index)
-                direction = ConditionalDiscoveryServiceV086._direction(ordered, index)
-                events.append((index, regime, volatility, direction))
-
-            by_regime = Counter(r for _, r, _, _ in events)
-            by_volatility = Counter(v for _, _, v, _ in events)
-            by_direction = Counter(d for _, _, _, d in events)
-            by_regime_volatility = Counter(f"{r}|{v}" for _, r, v, _ in events)
-            by_regime_direction = Counter(f"{r}|{d}" for _, r, _, d in events)
-            by_volatility_direction = Counter(f"{v}|{d}" for _, _, v, d in events)
-            by_full = Counter(f"{r}|{v}|{d}" for _, r, v, d in events)
-
+            events = tuple(item for item in result.observations if item.hypothesis == evidence.hypothesis)
+            by_regime = Counter(item.regime for item in events)
+            by_volatility = Counter(item.volatility_bucket for item in events)
+            by_direction = Counter(item.direction for item in events)
+            by_regime_volatility = Counter(f"{item.regime}|{item.volatility_bucket}" for item in events)
+            by_regime_direction = Counter(f"{item.regime}|{item.direction}" for item in events)
+            by_volatility_direction = Counter(f"{item.volatility_bucket}|{item.direction}" for item in events)
+            by_full = Counter(f"{item.regime}|{item.volatility_bucket}|{item.direction}" for item in events)
             sufficient = evidence.sufficient_cells
             insufficient = total_cells - sufficient
             largest = max(by_full.values(), default=0)
             share = largest / len(events) * 100.0 if events else 0.0
             sparsity = insufficient / total_cells * 100.0 if total_cells else 0.0
-
-            audits.append(
-                CoverageAudit(
-                    hypothesis=evidence.hypothesis,
-                    events=len(events),
-                    by_regime=dict(by_regime),
-                    by_volatility=dict(by_volatility),
-                    by_direction=dict(by_direction),
-                    by_regime_volatility=dict(by_regime_volatility),
-                    by_regime_direction=dict(by_regime_direction),
-                    by_volatility_direction=dict(by_volatility_direction),
-                    by_full_condition=dict(by_full),
-                    sufficient_cells=sufficient,
-                    insufficient_cells=insufficient,
-                    sparsity_pct=round(sparsity, 2),
-                    largest_condition_share_pct=round(share, 2),
-                )
-            )
+            audits.append(CoverageAudit(
+                hypothesis=evidence.hypothesis,
+                events=len(events),
+                by_regime=dict(by_regime),
+                by_volatility=dict(by_volatility),
+                by_direction=dict(by_direction),
+                by_regime_volatility=dict(by_regime_volatility),
+                by_regime_direction=dict(by_regime_direction),
+                by_volatility_direction=dict(by_volatility_direction),
+                by_full_condition=dict(by_full),
+                sufficient_cells=sufficient,
+                insufficient_cells=insufficient,
+                sparsity_pct=round(sparsity, 2),
+                largest_condition_share_pct=round(share, 2),
+            ))
         return tuple(audits)
 
     @classmethod
     def run(cls, candles: Sequence[Candle]) -> tuple[CoverageAudit, ...]:
-        """Compatibility wrapper; callers should prefer run-once + from_result."""
-        result = ConditionalDiscoveryServiceV086.run(candles)
-        return cls.from_result(candles, result)
+        """Compatibility wrapper; new callers should run Discovery once and use from_result."""
+        return cls.from_result(ConditionalDiscoveryServiceV086.run(candles))
 
 
 __all__ = ["CoverageAudit", "ConditionalDiscoveryCoverageV086"]
