@@ -3,29 +3,20 @@
 from __future__ import annotations
 
 import ctypes
+import os
 from ctypes import wintypes
 
 from edward.security.token_store import TokenStore
 
-user32 = ctypes.windll.user32
-kernel32 = ctypes.windll.kernel32
+# Keep the module importable on non-Windows systems (CI, tests, tooling).
+# Win32 handles are loaded only when the native dialog is actually used.
+user32 = None
+kernel32 = None
 
 # Explicit Win32 signatures are important on 64-bit Python. Without them,
 # ctypes may default to 32-bit integers and Windows message parameters can
 # overflow before they reach the window procedure.
 LRESULT = ctypes.c_ssize_t
-
-user32.DefWindowProcW.argtypes = [
-    wintypes.HWND,
-    wintypes.UINT,
-    wintypes.WPARAM,
-    wintypes.LPARAM,
-]
-user32.DefWindowProcW.restype = LRESULT
-user32.DestroyWindow.argtypes = [wintypes.HWND]
-user32.DestroyWindow.restype = wintypes.BOOL
-user32.PostQuitMessage.argtypes = [ctypes.c_int]
-user32.PostQuitMessage.restype = None
 
 WM_CLOSE = 0x0010
 WM_DESTROY = 0x0002
@@ -54,6 +45,28 @@ OK_ID = 1002
 CANCEL_ID = 1003
 
 
+def _load_win32() -> tuple[object, object]:
+    """Load and configure Win32 APIs only when running the native dialog."""
+    if os.name != "nt":
+        raise RuntimeError("The native token dialog is available only on Windows")
+
+    loaded_user32 = ctypes.windll.user32
+    loaded_kernel32 = ctypes.windll.kernel32
+
+    loaded_user32.DefWindowProcW.argtypes = [
+        wintypes.HWND,
+        wintypes.UINT,
+        wintypes.WPARAM,
+        wintypes.LPARAM,
+    ]
+    loaded_user32.DefWindowProcW.restype = LRESULT
+    loaded_user32.DestroyWindow.argtypes = [wintypes.HWND]
+    loaded_user32.DestroyWindow.restype = wintypes.BOOL
+    loaded_user32.PostQuitMessage.argtypes = [ctypes.c_int]
+    loaded_user32.PostQuitMessage.restype = None
+    return loaded_user32, loaded_kernel32
+
+
 class TokenDialog:
     """Native Win32 token dialog using the standard Windows EDIT control.
 
@@ -69,6 +82,8 @@ class TokenDialog:
         self._wnd_proc = None
 
     def show(self) -> str | None:
+        global user32, kernel32
+        user32, kernel32 = _load_win32()
         hinstance = kernel32.GetModuleHandleW(None)
         wnd_proc_type = ctypes.WINFUNCTYPE(
             LRESULT,
@@ -96,9 +111,6 @@ class TokenDialog:
             elif msg == WM_DESTROY:
                 user32.PostQuitMessage(0)
                 return 0
-
-            # Pass the original 64-bit message parameters to Windows without
-            # truncation. This fixes the OverflowError seen on Python 3.14.
             return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
 
         self._wnd_proc = wnd_proc
@@ -127,95 +139,35 @@ class TokenDialog:
         user32.RegisterClassW(ctypes.byref(wc))
 
         self.hwnd = user32.CreateWindowExW(
-            0,
-            class_name,
-            self.title,
+            0, class_name, self.title,
             WS_VISIBLE | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            560,
-            230,
-            None,
-            None,
-            hinstance,
-            None,
+            CW_USEDEFAULT, CW_USEDEFAULT, 560, 230,
+            None, None, hinstance, None,
         )
-
         user32.CreateWindowExW(
-            0,
-            "STATIC",
-            "Введите T-Invest API Token:",
-            WS_CHILD | WS_VISIBLE,
-            30,
-            30,
-            480,
-            25,
-            self.hwnd,
-            None,
-            hinstance,
-            None,
+            0, "STATIC", "Введите T-Invest API Token:", WS_CHILD | WS_VISIBLE,
+            30, 30, 480, 25, self.hwnd, None, hinstance, None,
         )
-
         self.edit = user32.CreateWindowExW(
-            WS_EX_CLIENTEDGE,
-            "EDIT",
-            "",
+            WS_EX_CLIENTEDGE, "EDIT", "",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL | ES_PASSWORD | ES_LEFT,
-            30,
-            65,
-            480,
-            30,
-            self.hwnd,
-            EDIT_ID,
-            hinstance,
-            None,
+            30, 65, 480, 30, self.hwnd, EDIT_ID, hinstance, None,
         )
         user32.SendMessageW(self.edit, EM_SETPASSWORDCHAR, ord("•"), 0)
-
         user32.CreateWindowExW(
-            0,
-            "STATIC",
-            "Ctrl+V — вставить токен. Токен сохранится локально.",
-            WS_CHILD | WS_VISIBLE,
-            30,
-            105,
-            480,
-            25,
-            self.hwnd,
-            None,
-            hinstance,
-            None,
+            0, "STATIC", "Ctrl+V — вставить токен. Токен сохранится локально.",
+            WS_CHILD | WS_VISIBLE, 30, 105, 480, 25, self.hwnd, None, hinstance, None,
         )
-
         user32.CreateWindowExW(
-            0,
-            "BUTTON",
-            "Сохранить и продолжить",
+            0, "BUTTON", "Сохранить и продолжить",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
-            250,
-            145,
-            170,
-            35,
-            self.hwnd,
-            OK_ID,
-            hinstance,
-            None,
+            250, 145, 170, 35, self.hwnd, OK_ID, hinstance, None,
         )
         user32.CreateWindowExW(
-            0,
-            "BUTTON",
-            "Отмена",
+            0, "BUTTON", "Отмена",
             WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-            430,
-            145,
-            80,
-            35,
-            self.hwnd,
-            CANCEL_ID,
-            hinstance,
-            None,
+            430, 145, 80, 35, self.hwnd, CANCEL_ID, hinstance, None,
         )
-
         user32.SetFocus(self.edit)
         user32.ShowWindow(self.hwnd, SW_SHOW)
         user32.UpdateWindow(self.hwnd)
@@ -224,22 +176,21 @@ class TokenDialog:
         while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
             user32.TranslateMessage(ctypes.byref(msg))
             user32.DispatchMessageW(ctypes.byref(msg))
-
         return self.token
 
     def _accept(self) -> None:
+        if user32 is None:
+            raise RuntimeError("Win32 dialog is not initialized")
         length = user32.SendMessageW(self.edit, WM_GETTEXTLENGTH, 0, 0)
         if not length:
             user32.MessageBoxW(self.hwnd, "Введите API Token.", "Edward", 0x10)
             return
-
         buffer = ctypes.create_unicode_buffer(length + 1)
         user32.SendMessageW(self.edit, WM_GETTEXT, length + 1, ctypes.byref(buffer))
         value = buffer.value.strip()
         if not value:
             user32.MessageBoxW(self.hwnd, "Введите API Token.", "Edward", 0x10)
             return
-
         self.token = value
         user32.DestroyWindow(self.hwnd)
 
