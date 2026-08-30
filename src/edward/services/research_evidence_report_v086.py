@@ -31,12 +31,14 @@ class ResearchEvidenceReportServiceV086:
         wf_evidence: Iterable[WFAwareEvidenceAuditV086] = (),
     ) -> tuple[ResearchEvidenceRowV086, ...]:
         evidence_list = list(evidence)
+        wf_list = list(wf_evidence)
         wf_by_key = {
             (item.hypothesis, item.regime, item.volatility_bucket, item.direction, item.horizon): item
-            for item in wf_evidence
+            for item in wf_list
         }
         magnitude = [item.excess_return_pct for item in evidence_list]
         consistency = [item.win_rate_pct for item in evidence_list]
+        stability = [item.wf_persistence_pct for item in wf_list]
         rows: list[ResearchEvidenceRowV086] = []
         for item in evidence_list:
             key = (item.hypothesis, item.regime, item.volatility_bucket, item.direction, item.horizon)
@@ -55,7 +57,7 @@ class ResearchEvidenceReportServiceV086:
                     wf=wf,
                     magnitude_rank=cls._rank_desc(magnitude, item.excess_return_pct),
                     consistency_rank=cls._rank_desc(consistency, item.win_rate_pct),
-                    stability_rank=(cls._rank_desc([x.wf_persistence_pct for x in wf_evidence], wf.wf_persistence_pct) if wf is not None and list(wf_evidence) else 0),
+                    stability_rank=cls._rank_desc(stability, wf.wf_persistence_pct) if wf is not None and stability else 0,
                     research_flag=flag,
                 )
             )
