@@ -18,7 +18,7 @@ from edward.services.robustness_diagnostics_v083 import RobustnessDiagnosticsSer
 
 logger = logging.getLogger(__name__)
 ANALYSIS_V08_VERSION = "0.8.7"
-LEGACY_ANALYSIS_RESULT_VERSION = "0.8.0"
+LEGACY_ANALYSIS_RESULT_VERSION = ANALYSIS_V08_VERSION
 
 @dataclass(frozen=True, slots=True)
 class AnalysisV08Diagnostics:
