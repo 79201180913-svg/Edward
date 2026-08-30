@@ -18,6 +18,7 @@ from edward.services.robustness_diagnostics_v083 import RobustnessDiagnosticsSer
 
 logger = logging.getLogger(__name__)
 ANALYSIS_V08_VERSION = "0.8.7"
+LEGACY_ANALYSIS_RESULT_VERSION = "0.8.0"
 
 @dataclass(frozen=True, slots=True)
 class AnalysisV08Diagnostics:
@@ -43,7 +44,7 @@ class AnalysisServiceV08:
     def __init__(self, *, costs: BacktestCostModel | None = None) -> None:
         self.costs = costs or BacktestCostModel()
         self.last_diagnostics: AnalysisV08Diagnostics | None = None
-        logger.warning("[V087 EXEC] INIT AnalysisServiceV08 file=%s version=%s strategies=%s profiles=%s discovery=%s conditional=%s", __file__, ANALYSIS_V08_VERSION, self.STRATEGIES, self.PROFILES, ResearchDiscoveryServiceV085.HYPOTHESES, ConditionalDiscoveryServiceV086.HYPOTHESES)
+        logger.warning("[V087 EXEC] INIT AnalysisServiceV08 file=%s version=%s legacy_result_version=%s strategies=%s profiles=%s discovery=%s conditional=%s", __file__, ANALYSIS_V08_VERSION, LEGACY_ANALYSIS_RESULT_VERSION, self.STRATEGIES, self.PROFILES, ResearchDiscoveryServiceV085.HYPOTHESES, ConditionalDiscoveryServiceV086.HYPOTHESES)
 
     @staticmethod
     def _grid(strategy: str, profile: str) -> list[dict[str, Any]]:
@@ -129,4 +130,4 @@ class AnalysisServiceV08:
         self.last_diagnostics = AnalysisV08Diagnostics(regime_confidence=regime_result.confidence, regime=regime_result.regime, robustness_by_strategy={item.strategy: item.robustness_score for item in robust_results}, quality_gate_by_strategy={item.strategy: QualityGateDiagnosticsServiceV0822.evaluate(item, profile) for item in robust_results}, research_discovery=discovery, conditional_discovery=conditional_discovery, evidence_audit=evidence_audit, wf_evidence=tuple(wf_evidence), research_evidence=research_evidence, research_summary=research_summary)
         logger.warning("[V087 STRATEGY SELECTION] ticker=%s profile=%s quality_gate_winner=%s max_score_strategy=%s quality_gate_pass_count=%d total_strategies=%d research_cells=%d", ticker, profile, winner.strategy if winner else None, score_winner.strategy if score_winner else None, len(passed), len(strategies), len(research_evidence))
         explanation = (f"Рекомендована {winner.strategy}: v0.8 robustness {winner.score:.1f}, OOS return {winner.return_pct:.2f}%, Sharpe {winner.sharpe:.2f}, режим {regime_result.regime}, regime confidence {regime_result.confidence:.0f}%." if winner else f"Ни одна стратегия не прошла v0.8 Quality Gate; режим {regime_result.regime}, regime confidence {regime_result.confidence:.0f}%. Исследовательские слои v0.8.5/v0.8.6/v0.8.7 дополнительно проверили структурные, условные и доказательные гипотезы без влияния на допуск к торговле.")
-        return AnalysisResult(instrument_uid=instrument_uid, ticker=ticker, profile=profile, risk_profile=risk_profile, horizon=horizon, market_regime=regime_result.regime, recommendation=recommendation, confidence=confidence, score=winner.score if winner else 0.0, strategies=strategies, explanation=explanation, created_at=ordered[-1].timestamp.isoformat(), analysis_version=ANALYSIS_V08_VERSION)
+        return AnalysisResult(instrument_uid=instrument_uid, ticker=ticker, profile=profile, risk_profile=risk_profile, horizon=horizon, market_regime=regime_result.regime, recommendation=recommendation, confidence=confidence, score=winner.score if winner else 0.0, strategies=strategies, explanation=explanation, created_at=ordered[-1].timestamp.isoformat(), analysis_version=LEGACY_ANALYSIS_RESULT_VERSION)
