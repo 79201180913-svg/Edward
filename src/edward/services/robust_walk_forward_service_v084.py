@@ -30,6 +30,7 @@ class RobustWalkForwardResultV084(RobustWalkForwardResult):
     parameter_zone_diagnostics: tuple[ParameterZoneV084, ...] = ()
     selected_train_trades: tuple[int, ...] = ()
     no_trade_windows: tuple[int, ...] = ()
+    evaluated_windows: int = 0
 
 
 class RobustWalkForwardServiceV084(RobustWalkForwardService):
@@ -65,7 +66,7 @@ class RobustWalkForwardServiceV084(RobustWalkForwardService):
         return selected
 
     @staticmethod
-    def _with_diagnostics(result: RobustWalkForwardResult, zones: Sequence[ParameterZoneV084], train_trades: Sequence[int], no_trade_windows: Sequence[int]) -> RobustWalkForwardResultV084:
+    def _with_diagnostics(result: RobustWalkForwardResult, zones: Sequence[ParameterZoneV084], train_trades: Sequence[int], no_trade_windows: Sequence[int], evaluated_windows: int = 0) -> RobustWalkForwardResultV084:
         return RobustWalkForwardResultV084(
             strategy=result.strategy, windows=result.windows,
             mean_test_return_pct=result.mean_test_return_pct, median_test_return_pct=result.median_test_return_pct,
@@ -77,6 +78,7 @@ class RobustWalkForwardServiceV084(RobustWalkForwardService):
             sharpe_consistency_pct=result.sharpe_consistency_pct, robustness_score=result.robustness_score,
             parameter_stability=result.parameter_stability, version=result.version,
             parameter_zone_diagnostics=tuple(zones), selected_train_trades=tuple(train_trades), no_trade_windows=tuple(no_trade_windows),
+            evaluated_windows=evaluated_windows,
         )
 
     @classmethod
@@ -164,27 +166,32 @@ class RobustWalkForwardServiceV084(RobustWalkForwardService):
                 start += test_size
             if not windows:
                 logger.warning("[V084 WF EMPTY] strategy=%s candles=%d train=%d test=%d", strategy, len(ordered), train_size, test_size)
-                return cls._with_diagnostics(cls._empty(strategy), zones, train_trades, no_trade_windows)
-            returns = [i.test_net_return_pct for i in windows]
-            drawdowns = [i.test_max_drawdown_pct for i in windows]
-            sharpes = [i.test_sharpe for i in windows]
-            count = len(windows)
+                return cls._with_diagnostics(cls._empty(strategy), zones, train_trades, no_trade_windows, 0)
+
+            evaluation_windows = [window for window in windows if window.index not in no_trade_windows]
+            returns = [i.test_net_return_pct for i in evaluation_windows]
+            drawdowns = [i.test_max_drawdown_pct for i in evaluation_windows]
+            sharpes = [i.test_sharpe for i in evaluation_windows]
+            count = len(evaluation_windows)
+            if count == 0:
+                logger.warning("[V084 WF NO EVALUABLE OOS] strategy=%s windows=%d no_trade_windows=%d", strategy, len(windows), len(no_trade_windows))
+                return cls._with_diagnostics(cls._empty(strategy), zones, train_trades, no_trade_windows, 0)
             positive = sum(v > 0 for v in returns)
             risk_ok = sum(max_drawdown_pct is None or v <= max_drawdown_pct for v in drawdowns)
             positive_sharpe = sum(v > 0 for v in sharpes)
             return_consistency = positive / count * 100
             risk_consistency = risk_ok / count * 100
             sharpe_consistency = positive_sharpe / count * 100
-            stability = cls._parameter_stability(windows)
+            stability = cls._parameter_stability(evaluation_windows)
             dispersion_penalty = pstdev(returns) / max(abs(mean(returns)), 1.0) * 10
             performance_consistency = max(0.0, min(100.0, 100.0 - dispersion_penalty))
             robustness = round(return_consistency * .35 + risk_consistency * .20 + sharpe_consistency * .15 + stability.stability_pct * .15 + performance_consistency * .15, 2)
             result = RobustWalkForwardResult(strategy=strategy, windows=tuple(windows), mean_test_return_pct=mean(returns), median_test_return_pct=median(returns), std_test_return_pct=pstdev(returns) if len(returns) > 1 else 0.0, worst_test_return_pct=min(returns), best_test_return_pct=max(returns), mean_test_drawdown_pct=mean(drawdowns), mean_test_sharpe=mean(sharpes), positive_return_windows=positive, risk_ok_windows=risk_ok, positive_sharpe_windows=positive_sharpe, return_consistency_pct=return_consistency, risk_consistency_pct=risk_consistency, sharpe_consistency_pct=sharpe_consistency, robustness_score=robustness, parameter_stability=stability)
-            result_v084 = cls._with_diagnostics(result, zones, train_trades, no_trade_windows)
-            active_windows = sum(i.test_trades > 0 for i in windows)
-            logger.warning("[V084 WF ACTIVITY RESULT] strategy=%s windows=%d active_windows=%d inactive_windows=%d active_pct=%.2f total_trades=%d mean_exposure=%.2f", strategy, count, active_windows, count - active_windows, active_windows / count * 100, sum(i.test_trades for i in windows), mean(exposures))
-            logger.warning("[V084 WF NO TRADE RESULT] strategy=%s no_trade_windows=%d no_trade_pct=%.2f", strategy, len(no_trade_windows), len(no_trade_windows) / count * 100)
-            logger.warning("[V084 WF RESULT] strategy=%s windows=%d robustness=%.2f mean_oos_return=%.4f mean_oos_dd=%.4f mean_oos_sharpe=%.4f", strategy, count, result_v084.robustness_score, result_v084.mean_test_return_pct, result_v084.mean_test_drawdown_pct, result_v084.mean_test_sharpe)
+            result_v084 = cls._with_diagnostics(result, zones, train_trades, no_trade_windows, count)
+            active_windows = sum(i.test_trades > 0 for i in evaluation_windows)
+            logger.warning("[V084 WF ACTIVITY RESULT] strategy=%s windows=%d evaluated_windows=%d active_windows=%d inactive_windows=%d active_pct=%.2f total_trades=%d mean_exposure=%.2f", strategy, len(windows), count, active_windows, count - active_windows, active_windows / count * 100, sum(i.test_trades for i in evaluation_windows), mean(exposures))
+            logger.warning("[V084 WF NO TRADE RESULT] strategy=%s no_trade_windows=%d no_trade_pct=%.2f", strategy, len(no_trade_windows), len(no_trade_windows) / len(windows) * 100)
+            logger.warning("[V084 WF RESULT] strategy=%s windows=%d evaluated_windows=%d robustness=%.2f mean_oos_return=%.4f mean_oos_dd=%.4f mean_oos_sharpe=%.4f", strategy, len(windows), count, result_v084.robustness_score, result_v084.mean_test_return_pct, result_v084.mean_test_drawdown_pct, result_v084.mean_test_sharpe)
             return result_v084
         finally:
             _ACTIVE_MAX_DRAWDOWN.reset(max_dd_token)
