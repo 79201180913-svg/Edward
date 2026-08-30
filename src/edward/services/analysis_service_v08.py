@@ -12,6 +12,7 @@ from edward.services.generalization_diagnostics_v084 import GeneralizationDiagno
 from edward.services.parameter_zone_v084 import ParameterZoneV084
 from edward.services.parameter_zone_oos_diagnostics_v084 import ParameterZoneOOSDiagnosticsV084, ParameterZoneOOSDiagnosticsServiceV084
 from edward.services.failure_attribution_v084 import FailureAttributionV084, FailureAttributionServiceV084
+from edward.services.failure_attribution_summary_v084 import FailureAttributionSummaryV084, FailureAttributionSummaryServiceV084
 from edward.services.research_backtest_service_v08 import BacktestCostModel, ResearchBacktestService
 from edward.services.robust_walk_forward_service_v08 import RobustWalkForwardResult
 from edward.services.robust_walk_forward_service_v084 import RobustWalkForwardServiceV084
@@ -38,6 +39,7 @@ class AnalysisV08Diagnostics:
     parameter_zone_oos_by_strategy: dict[str, ParameterZoneOOSDiagnosticsV084] = field(default_factory=dict)
     train_sample_by_strategy: dict[str, TrainSampleDiagnosticsV084] = field(default_factory=dict)
     failure_attribution_by_strategy: dict[str, FailureAttributionV084] = field(default_factory=dict)
+    failure_attribution_summary: FailureAttributionSummaryV084 | None = None
 
 class AnalysisServiceV08:
     STRATEGIES = ("Trend Following", "Momentum", "Breakout", "Mean Reversion")
@@ -99,8 +101,10 @@ class AnalysisServiceV08:
             zone_oos = parameter_zone_oos.get(item.strategy)
             sample = train_sample[item.strategy]
             failure_attribution[item.strategy] = FailureAttributionServiceV084.evaluate(strategy=item.strategy, quality_gate_passed=qg.passed, quality_gate_failure_reason=qg.failure_reason if not qg.passed else None, quality_gate_failed_checks=qg.failed_checks, low_sample_pct=sample.low_sample_pct, oos_mean_return_pct=robust_results[index].mean_test_return_pct, oos_positive_pct=robust_results[index].return_consistency_pct, stable_zone_pct=(zone_oos.stable_windows / zone_oos.windows * 100.0) if zone_oos and zone_oos.windows else 0.0, viable_windows=len(robust_results[index].windows))
-        self.last_diagnostics = AnalysisV08Diagnostics(regime_confidence=regime_result.confidence, regime=regime_result.regime, robustness_by_strategy={item.strategy: item.robustness_score for item in robust_results}, quality_gate_by_strategy={item.strategy: QualityGateDiagnosticsServiceV0822.evaluate(item, profile) for item in robust_results}, router_compatibility_by_strategy=compatibility, router_priority_by_strategy={item.strategy: item.priority for item in router.decisions}, router_ordered_strategies=router.ordered_strategies, regime_evidence_by_strategy=regime_evidence, generalization_by_strategy=generalization, parameter_zone_by_strategy=parameter_zones, parameter_zone_oos_by_strategy=parameter_zone_oos, train_sample_by_strategy=train_sample, failure_attribution_by_strategy=failure_attribution)
+        failure_attribution_summary = FailureAttributionSummaryServiceV084.evaluate(failure_attribution.values())
+        self.last_diagnostics = AnalysisV08Diagnostics(regime_confidence=regime_result.confidence, regime=regime_result.regime, robustness_by_strategy={item.strategy: item.robustness_score for item in robust_results}, quality_gate_by_strategy={item.strategy: QualityGateDiagnosticsServiceV0822.evaluate(item, profile) for item in robust_results}, router_compatibility_by_strategy=compatibility, router_priority_by_strategy={item.strategy: item.priority for item in router.decisions}, router_ordered_strategies=router.ordered_strategies, regime_evidence_by_strategy=regime_evidence, generalization_by_strategy=generalization, parameter_zone_by_strategy=parameter_zones, parameter_zone_oos_by_strategy=parameter_zone_oos, train_sample_by_strategy=train_sample, failure_attribution_by_strategy=failure_attribution, failure_attribution_summary=failure_attribution_summary)
         logger.warning("[V084 FAILURE ATTRIBUTION] ticker=%s diagnostics=%s", ticker, {key: {"primary": value.primary_reason, "supporting": value.supporting_reasons, "details": dict(value.details)} for key, value in failure_attribution.items()})
+        logger.warning("[V084 FAILURE ATTRIBUTION SUMMARY] ticker=%s total=%d passed=%d failed=%d counts=%s dominant=%s", ticker, failure_attribution_summary.total_strategies, failure_attribution_summary.passed_strategies, failure_attribution_summary.failed_strategies, failure_attribution_summary.primary_reason_counts, failure_attribution_summary.dominant_failure_reason)
         winner = max(passed, key=lambda item: (item.score, compatibility.get(item.strategy, 0.0))) if passed else None
         score_winner = max(strategies, key=lambda item: item.score) if strategies else None
         recommendation = winner.strategy if winner else None
