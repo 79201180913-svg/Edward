@@ -73,8 +73,7 @@ class AnalysisServiceV08:
         return result
     @staticmethod
     def _quality(result: RobustWalkForwardResult, profile: str) -> bool:
-        diagnostics = QualityGateDiagnosticsServiceV0822.evaluate(result, profile)
-        return diagnostics.passed
+        return QualityGateDiagnosticsServiceV0822.evaluate(result, profile).passed
     @staticmethod
     def _legacy_strategy_result(result: RobustWalkForwardResult, profile: str) -> StrategyResult:
         quality = AnalysisServiceV08._quality(result, profile)
@@ -101,12 +100,10 @@ class AnalysisServiceV08:
             zone_oos = parameter_zone_oos.get(item.strategy)
             sample = train_sample[item.strategy]
             failure_attribution[item.strategy] = FailureAttributionServiceV084.evaluate(strategy=item.strategy, quality_gate_passed=qg.passed, quality_gate_failure_reason=qg.failure_reason if not qg.passed else None, quality_gate_failed_checks=qg.failed_checks, low_sample_pct=sample.low_sample_pct, oos_mean_return_pct=robust_results[index].mean_test_return_pct, oos_positive_pct=robust_results[index].return_consistency_pct, stable_zone_pct=(zone_oos.stable_windows / zone_oos.windows * 100.0) if zone_oos and zone_oos.windows else 0.0, viable_windows=len(robust_results[index].windows))
-        failure_attribution_summary = FailureAttributionSummaryServiceV084.evaluate(failure_attribution.values())
-        self.last_diagnostics = AnalysisV08Diagnostics(regime_confidence=regime_result.confidence, regime=regime_result.regime, robustness_by_strategy={item.strategy: item.robustness_score for item in robust_results}, quality_gate_by_strategy={item.strategy: QualityGateDiagnosticsServiceV0822.evaluate(item, profile) for item in robust_results}, router_compatibility_by_strategy=compatibility, router_priority_by_strategy={item.strategy: item.priority for item in router.decisions}, router_ordered_strategies=router.ordered_strategies, regime_evidence_by_strategy=regime_evidence, generalization_by_strategy=generalization, parameter_zone_by_strategy=parameter_zones, parameter_zone_oos_by_strategy=parameter_zone_oos, train_sample_by_strategy=train_sample, failure_attribution_by_strategy=failure_attribution, failure_attribution_summary=failure_attribution_summary)
-        logger.warning("[V084 FAILURE ATTRIBUTION] ticker=%s diagnostics=%s", ticker, {key: {"primary": value.primary_reason, "supporting": value.supporting_reasons, "details": dict(value.details)} for key, value in failure_attribution.items()})
-        logger.warning("[V084 FAILURE ATTRIBUTION SUMMARY] ticker=%s total=%d passed=%d failed=%d counts=%s dominant=%s", ticker, failure_attribution_summary.total_strategies, failure_attribution_summary.passed_strategies, failure_attribution_summary.failed_strategies, failure_attribution_summary.primary_reason_counts, failure_attribution_summary.dominant_failure_reason)
+        failure_summary = FailureAttributionSummaryServiceV084.evaluate(failure_attribution.values())
+        self.last_diagnostics = AnalysisV08Diagnostics(regime_confidence=regime_result.confidence, regime=regime_result.regime, robustness_by_strategy={item.strategy: item.robustness_score for item in robust_results}, quality_gate_by_strategy={item.strategy: QualityGateDiagnosticsServiceV0822.evaluate(item, profile) for item in robust_results}, router_compatibility_by_strategy=compatibility, router_priority_by_strategy={item.strategy: item.priority for item in router.decisions}, router_ordered_strategies=router.ordered_strategies, regime_evidence_by_strategy=regime_evidence, generalization_by_strategy=generalization, parameter_zone_by_strategy=parameter_zones, parameter_zone_oos_by_strategy=parameter_zone_oos, train_sample_by_strategy=train_sample, failure_attribution_by_strategy=failure_attribution, failure_attribution_summary=failure_summary)
+        logger.warning("[V084 FAILURE ATTRIBUTION SUMMARY] ticker=%s total=%d passed=%d failed=%d counts=%s dominant=%s", ticker, failure_summary.total_strategies, failure_summary.passed_strategies, failure_summary.failed_strategies, failure_summary.primary_reason_counts, failure_summary.dominant_failure_reason)
         winner = max(passed, key=lambda item: (item.score, compatibility.get(item.strategy, 0.0))) if passed else None
-        score_winner = max(strategies, key=lambda item: item.score) if strategies else None
         recommendation = winner.strategy if winner else None
         confidence = "Low" if not winner else "High" if winner.stability >= 80.0 else "Medium" if winner.stability >= 65.0 else "Low"
         explanation = f"Рекомендована {winner.strategy}: v0.8.4 robustness {winner.score:.1f}, OOS return {winner.return_pct:.2f}%, Sharpe {winner.sharpe:.2f}, режим {regime_result.regime}, regime confidence {regime_result.confidence:.0f}%." if winner else f"Ни одна стратегия не прошла v0.8.4 Quality Gate; режим {regime_result.regime}, regime confidence {regime_result.confidence:.0f}%."
