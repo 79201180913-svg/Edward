@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from typing import Iterable
 
 from edward.services.evidence_audit_service_v086 import EvidenceAuditV086, WFAwareEvidenceAuditV086
-from edward.services.robust_walk_forward_service_v08 import RobustWalkForwardResult
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,11 +33,6 @@ class ResearchEvidenceReportServiceV086:
         *,
         strategy_context: str | None = None,
     ) -> tuple[ResearchEvidenceRowV086, ...]:
-        """Build rows from one already-associated WF evidence context.
-
-        Kept backward compatible for callers that already have WF evidence.
-        Use build_from_wf_results when several strategy contexts must be retained.
-        """
         evidence_list = list(evidence)
         wf_list = list(wf_evidence)
         wf_by_key = {
@@ -74,17 +68,15 @@ class ResearchEvidenceReportServiceV086:
         return tuple(rows)
 
     @classmethod
-    def build_from_wf_results(
+    def build_from_wf_contexts(
         cls,
         evidence: Iterable[EvidenceAuditV086],
-        wf_results: Iterable[RobustWalkForwardResult],
-        wf_audits: Iterable[tuple[str, Iterable[WFAwareEvidenceAuditV086]]],
+        wf_contexts: Iterable[tuple[str, Iterable[WFAwareEvidenceAuditV086]]],
     ) -> tuple[ResearchEvidenceRowV086, ...]:
         """Retain one report row per strategy/WF context; never overwrite a key."""
         evidence_list = tuple(evidence)
-        contexts = tuple(wf_audits)
         rows: list[ResearchEvidenceRowV086] = []
-        for strategy, audits in contexts:
+        for strategy, audits in wf_contexts:
             rows.extend(cls.build(evidence_list, audits, strategy_context=strategy))
         return tuple(rows)
 
