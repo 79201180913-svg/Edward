@@ -73,7 +73,12 @@ class AnalysisServiceV08:
         return result
     @staticmethod
     def _quality(result: RobustWalkForwardResult, profile: str) -> bool:
-        return QualityGateDiagnosticsServiceV0822.evaluate(result, profile).passed
+        diagnostics = QualityGateDiagnosticsServiceV0822.evaluate(result, profile)
+        logger.warning("[V084 QG RESULT] strategy=%s profile=%s passed=%s failed_checks=%s reason=%s", result.strategy, profile, diagnostics.passed, diagnostics.failed_checks, diagnostics.failure_reason or "none")
+        for check in diagnostics.checks:
+            logger.warning("[V084 QG CHECK] strategy=%s check=%s actual=%.6f threshold=%.6f passed=%s", result.strategy, check.key, check.actual, check.threshold, check.passed)
+        logger.warning("[QUALITY GATE] strategy=%s profile=%s result=%s", result.strategy, profile, "PASS" if diagnostics.passed else "FAIL")
+        return diagnostics.passed
     @staticmethod
     def _legacy_strategy_result(result: RobustWalkForwardResult, profile: str) -> StrategyResult:
         quality = AnalysisServiceV08._quality(result, profile)
