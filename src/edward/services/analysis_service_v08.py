@@ -38,8 +38,7 @@ class AnalysisServiceV08:
         self.last_diagnostics: AnalysisV08Diagnostics | None = None
         logger.warning(
             "[V084 EXEC] INIT AnalysisServiceV08 file=%s version=%s strategies=%s profiles=%s",
-            __file__, self.ANALYSIS_VERSION if hasattr(self, "ANALYSIS_VERSION") else ANALYSIS_V08_VERSION,
-            self.STRATEGIES, self.PROFILES,
+            __file__, ANALYSIS_V08_VERSION, self.STRATEGIES, self.PROFILES,
         )
 
     @staticmethod
@@ -78,10 +77,7 @@ class AnalysisServiceV08:
                 min_train_trades=cfg["min_train_trades"],
             )
         except ValueError as exc:
-            logger.warning(
-                "[V084 WF INVALID STRATEGY] strategy=%s profile=%s reason=%s",
-                strategy, profile, exc,
-            )
+            logger.warning("[V084 WF INVALID STRATEGY] strategy=%s profile=%s reason=%s", strategy, profile, exc)
             return RobustWalkForwardServiceV084._empty(strategy)
 
         diagnostics = RobustnessDiagnosticsServiceV083.evaluate(result)
