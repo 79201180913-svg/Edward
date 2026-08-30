@@ -144,11 +144,23 @@ class AnalysisPipelineServiceV08:
                 regime_confidence, None, False, confidence,
             )
 
-        backtest = ResearchBacktestService.run_simple_strategy(
-            candles=ordered, strategy=evidence_strategy_result.strategy,
-            parameters=evidence_strategy_result.parameters, costs=self.analysis_service.costs,
-        )
-        ev = ExpectedValueEngine.from_trades(backtest.trades_detail)
+        parameters = dict(evidence_strategy_result.parameters)
+        if not parameters:
+            logger.warning(
+                "[V084 EVIDENCE FALLBACK] ticker=%s strategy=%s quality_gate=%s parameters=empty action=from_price_returns reason=no_viable_train_candidate",
+                ticker, evidence_strategy_result.strategy, evidence_strategy_result.quality_gate,
+            )
+            ev = ExpectedValueEngine.from_returns(self._returns(ordered))
+        else:
+            backtest = ResearchBacktestService.run_simple_strategy(
+                candles=ordered, strategy=evidence_strategy_result.strategy,
+                parameters=parameters, costs=self.analysis_service.costs,
+            )
+            logger.warning(
+                "[V084 EVIDENCE BACKTEST] ticker=%s strategy=%s parameters=%s trades=%d return=%.6f",
+                ticker, evidence_strategy_result.strategy, parameters, len(backtest.trades_detail), backtest.net_return_pct,
+            )
+            ev = ExpectedValueEngine.from_trades(backtest.trades_detail)
         weights = dict(portfolio_weights or {})
         asset_returns = dict(portfolio_returns or {})
         portfolio_context_available = bool(weights or portfolio_returns)
