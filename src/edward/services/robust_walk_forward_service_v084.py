@@ -3,8 +3,7 @@ from __future__ import annotations
 import contextvars
 import logging
 from dataclasses import dataclass
-from statistics import mean, median, pstdev
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any, Sequence
 
 from edward.services.economic_viability_service_v084 import EconomicViabilityServiceV084
 from edward.services.parameter_zone_v084 import ParameterZoneServiceV084, ParameterZoneV084
@@ -21,7 +20,7 @@ _ACTIVE_TRAIN_TRADES: contextvars.ContextVar[list[int] | None] = contextvars.Con
 _ACTIVE_NO_TRADE_WINDOWS: contextvars.ContextVar[list[int] | None] = contextvars.ContextVar("edward_v084_no_trade_windows", default=None)
 
 
-class NoViableTrainWindowV084(Exception):
+class NoViableTrainWindowV084(ValueError):
     """Signals that the current Train window has no economically viable candidate."""
 
 
