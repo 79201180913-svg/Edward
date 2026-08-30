@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from statistics import mean
 from typing import Sequence
 
-from edward.services.robust_walk_forward_service_v08 import WalkForwardWindowResult
 from edward.services.train_activity_diagnostics_v084 import TrainActivityDiagnosticsServiceV084
 
 
@@ -21,9 +20,14 @@ class TrainSampleDiagnosticsV084:
 
 
 class TrainSampleDiagnosticsServiceV084:
+    """Aggregate selected Train trade counts without changing selection."""
+
     @staticmethod
-    def evaluate(windows: Sequence[WalkForwardWindowResult], *, adequate_min_trades: int = 5) -> TrainSampleDiagnosticsV084:
-        classified = [TrainActivityDiagnosticsServiceV084.classify(window.train_result, adequate_min_trades=adequate_min_trades) for window in windows]
+    def evaluate(trade_counts: Sequence[int], *, adequate_min_trades: int = 5) -> TrainSampleDiagnosticsV084:
+        classified = [
+            TrainActivityDiagnosticsServiceV084.classify_trade_count(trades, adequate_min_trades=adequate_min_trades)
+            for trades in trade_counts
+        ]
         trades = [item.trades for item in classified]
         no_trades = sum(item.classification == TrainActivityDiagnosticsServiceV084.NO_TRADES for item in classified)
         low_sample = sum(item.classification == TrainActivityDiagnosticsServiceV084.LOW_SAMPLE for item in classified)
