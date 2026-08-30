@@ -61,16 +61,13 @@ class ConditionalDiscoveryServiceV086:
     HORIZONS = (1, 3, 5, 10, 20)
     MIN_LOOKBACK = 20
     MIN_OBSERVATIONS = 8
-    HYPOTHESES = (
-        "BREAKOUT_EXPANSION",
-        "PULLBACK_RECLAIM",
-        "IMPULSE_CONTINUATION",
-        "SHOCK_REVERSAL",
-        "GAP_REVERSAL",
-        "RANGE_BREAK",
-    )
+    REGIMES = RegimeEngine.REGIMES
     VOLATILITY_BUCKETS = ("Low", "Normal", "High")
     DIRECTIONS = ("Positive", "Negative")
+    HYPOTHESES = (
+        "BREAKOUT_EXPANSION", "PULLBACK_RECLAIM", "IMPULSE_CONTINUATION",
+        "SHOCK_REVERSAL", "GAP_REVERSAL", "RANGE_BREAK",
+    )
 
     @staticmethod
     def _forward_return(candles: Sequence[Candle], index: int, horizon: int) -> float | None:
@@ -95,7 +92,6 @@ class ConditionalDiscoveryServiceV086:
         if len(returns) < 5:
             return "Normal"
         sigma = pstdev(returns)
-        # Relative thresholds keep the classifier simple and deterministic.
         if sigma < 0.0075:
             return "Low"
         if sigma > 0.02:
@@ -159,26 +155,28 @@ class ConditionalDiscoveryServiceV086:
         baselines = {h: [v for i in range(len(ordered)) if (v := cls._forward_return(ordered, i, h)) is not None] for h in cls.HORIZONS}
         evidence: list[ConditionalDiscoveryEvidence] = []
         for hypothesis in cls.HYPOTHESES:
-            indices = cls._event_indices(ordered, hypothesis)
+            events = []
+            for index in cls._event_indices(ordered, hypothesis):
+                regime = RegimeEngine.classify(ordered[: index + 1]).regime
+                events.append((index, regime, cls._volatility_bucket(ordered, index), cls._direction(ordered, index)))
             cells: list[ConditionalDiscoveryCell] = []
-            for regime in ("Trend", "Momentum", "Range", "Unclear", "TRANSITION"):
+            for regime in cls.REGIMES:
                 for volatility in cls.VOLATILITY_BUCKETS:
                     for direction in cls.DIRECTIONS:
-                        matching = [i for i in indices if cls._volatility_bucket(ordered, i) == volatility and cls._direction(ordered, i) == direction]
-                        regime_matching = []
-                        for i in matching:
-                            try:
-                                if RegimeEngine.classify(list(ordered[: i + 1])).regime == regime:
-                                    regime_matching.append(i)
-                            except (ValueError, IndexError):
-                                continue
+                        matching = [i for i, r, v, d in events if r == regime and v == volatility and d == direction]
                         for horizon in cls.HORIZONS:
-                            values = [v for i in regime_matching if (v := cls._forward_return(ordered, i, horizon)) is not None]
+                            values = [v for i in matching if (v := cls._forward_return(ordered, i, horizon)) is not None]
                             baseline = baselines[horizon]
                             baseline_mean = mean(baseline) * 100.0 if baseline else 0.0
                             event_mean = mean(values) * 100.0 if values else 0.0
-                            cells.append(ConditionalDiscoveryCell(hypothesis, regime, volatility, direction, horizon, len(values), event_mean, median(values) * 100.0 if values else 0.0, sum(v > 0 for v in values) / len(values) * 100.0 if values else 0.0, baseline_mean, event_mean - baseline_mean, len(values) >= cls.MIN_OBSERVATIONS))
-            item = ConditionalDiscoveryEvidence(hypothesis, len(indices), tuple(cells))
+                            cells.append(ConditionalDiscoveryCell(
+                                hypothesis, regime, volatility, direction, horizon, len(values),
+                                event_mean, median(values) * 100.0 if values else 0.0,
+                                sum(v > 0 for v in values) / len(values) * 100.0 if values else 0.0,
+                                baseline_mean, event_mean - baseline_mean,
+                                len(values) >= cls.MIN_OBSERVATIONS,
+                            ))
+            item = ConditionalDiscoveryEvidence(hypothesis, len(events), tuple(cells))
             logger.warning("[V086 CONDITIONAL HYPOTHESIS] hypothesis=%s events=%d sufficient_cells=%d positive_excess_cells=%d", hypothesis, item.events, item.sufficient_cells, item.positive_excess_cells)
             evidence.append(item)
         return ConditionalDiscoveryResult(CONDITIONAL_DISCOVERY_VERSION, len(ordered), cls.MIN_OBSERVATIONS, tuple(evidence))
