@@ -27,7 +27,7 @@ class ParameterZoneV084:
 
 
 class ParameterZoneServiceV084:
-    """Identify a stable parameter neighborhood using Train evidence only."""
+    """Describe the viable Train neighborhood around the existing robust winner."""
 
     @staticmethod
     def _score(result: ResearchBacktestResult) -> float:
@@ -40,15 +40,19 @@ class ParameterZoneServiceV084:
         strategy: str,
         candidates: Sequence[tuple[dict[str, Any], ResearchBacktestResult]],
         viable: Sequence[tuple[dict[str, Any], ResearchBacktestResult]],
+        anchor_parameters: dict[str, Any] | None = None,
     ) -> ParameterZoneV084:
-        logger.warning("[V084 PARAMETER ZONE START] strategy=%s candidates=%d viable=%d", strategy, len(candidates), len(viable))
+        logger.warning(
+            "[V084 PARAMETER ZONE START] strategy=%s candidates=%d viable=%d anchor=%s",
+            strategy, len(candidates), len(viable), anchor_parameters,
+        )
         if not viable:
             output = ParameterZoneV084(strategy, len(candidates), 0, {}, (), 0.0, 0.0, 0.0, 0.0, 0.0, False)
             logger.warning("[V084 PARAMETER ZONE RESULT] strategy=%s stable=False reason=no_viable_candidates", strategy)
             return output
 
         ranked = sorted(viable, key=lambda item: cls._score(item[1]), reverse=True)
-        representative, representative_result = ranked[0]
+        representative = dict(anchor_parameters) if anchor_parameters is not None else dict(ranked[0][0])
         scores = [cls._score(item[1]) for item in ranked]
         mean_score = sum(scores) / len(scores)
         ordered = sorted(scores)
@@ -63,7 +67,7 @@ class ParameterZoneServiceV084:
             strategy=strategy,
             candidates=len(candidates),
             viable_candidates=len(viable),
-            representative_parameters=dict(representative),
+            representative_parameters=representative,
             parameter_keys=tuple(parameter_key(params) for params, _ in ranked),
             mean_score=round(mean_score, 8),
             median_score=round(median_score, 8),
@@ -73,8 +77,16 @@ class ParameterZoneServiceV084:
             stable=stable,
         )
         for rank, (params, result) in enumerate(ranked, 1):
-            logger.warning("[V084 PARAMETER ZONE CANDIDATE] strategy=%s rank=%d representative=%s params=%s train_excess=%.6f neighborhood=%.2f", strategy, rank, params == representative, params, result.excess_return_pct, neighborhood_stability_pct(params, viable)[0])
-        logger.warning("[V084 PARAMETER ZONE RESULT] strategy=%s stable=%s representative=%s viable=%d/%d viability_pct=%.2f mean=%.6f median=%.6f dispersion=%.6f neighborhood=%.2f", strategy, stable, representative, len(viable), len(candidates), viability_pct, mean_score, median_score, dispersion, neighborhood)
+            logger.warning(
+                "[V084 PARAMETER ZONE CANDIDATE] strategy=%s rank=%d anchor=%s params=%s train_excess=%.6f neighborhood=%.2f",
+                strategy, rank, params == representative, params, result.excess_return_pct,
+                neighborhood_stability_pct(params, viable)[0],
+            )
+        logger.warning(
+            "[V084 PARAMETER ZONE RESULT] strategy=%s stable=%s representative=%s viable=%d/%d viability_pct=%.2f mean=%.6f median=%.6f dispersion=%.6f neighborhood=%.2f",
+            strategy, stable, representative, len(viable), len(candidates), viability_pct,
+            mean_score, median_score, dispersion, neighborhood,
+        )
         return output
 
 
