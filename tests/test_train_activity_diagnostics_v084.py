@@ -4,13 +4,29 @@ from edward.services.research_backtest_service_v08 import ResearchBacktestResult
 
 def _result(trades: int) -> ResearchBacktestResult:
     return ResearchBacktestResult(
+        strategy="Breakout",
+        parameters={},
+        gross_return_pct=1.0,
         net_return_pct=1.0,
         benchmark_return_pct=0.0,
         excess_return_pct=1.0,
         max_drawdown_pct=1.0,
         sharpe=1.0,
         sortino=1.0,
+        calmar=1.0,
         trades=trades,
+        win_rate_pct=50.0,
+        profit_factor=1.0,
+        payoff_ratio=1.0,
+        turnover_pct=1.0,
+        exposure_pct=50.0,
+        average_trade_pct=0.2,
+        median_trade_pct=0.2,
+        best_trade_pct=1.0,
+        worst_trade_pct=-1.0,
+        positive_days_pct=50.0,
+        equity=(1.0,),
+        trades_detail=(),
     )
 
 
