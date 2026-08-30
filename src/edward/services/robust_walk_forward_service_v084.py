@@ -19,6 +19,9 @@ _ACTIVE_MAX_DRAWDOWN: contextvars.ContextVar[float | None] = contextvars.Context
 _ACTIVE_MIN_TRADES: contextvars.ContextVar[int] = contextvars.ContextVar(
     "edward_v084_min_train_trades", default=1
 )
+_ACTIVE_STRATEGY: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "edward_v084_strategy", default="unknown"
+)
 
 
 class RobustWalkForwardServiceV084(RobustWalkForwardService):
@@ -33,6 +36,7 @@ class RobustWalkForwardServiceV084(RobustWalkForwardService):
     ) -> tuple[dict[str, Any], ResearchBacktestResult, float]:
         max_drawdown_pct = _ACTIVE_MAX_DRAWDOWN.get()
         min_trades = _ACTIVE_MIN_TRADES.get()
+        strategy = _ACTIVE_STRATEGY.get()
         viable: list[tuple[dict[str, Any], ResearchBacktestResult]] = []
 
         logger.warning(
@@ -76,13 +80,14 @@ class RobustWalkForwardServiceV084(RobustWalkForwardService):
             raise ValueError("No economically viable Train parameter candidate")
 
         zone = ParameterZoneServiceV084.evaluate(
-            strategy="unknown",
+            strategy=strategy,
             candidates=candidates,
             viable=viable,
         )
         zone_risk = "STABLE_ZONE" if zone.stable else "POINT_OPTIMUM"
         logger.warning(
-            "[V084 PARAMETER ZONE RISK] risk=%s representative=%s viable=%d/%d viability_pct=%.2f stability=%.2f",
+            "[V084 PARAMETER ZONE RISK] strategy=%s risk=%s representative=%s viable=%d/%d viability_pct=%.2f stability=%.2f",
+            strategy,
             zone_risk,
             zone.representative_parameters,
             zone.viable_candidates,
@@ -117,6 +122,7 @@ class RobustWalkForwardServiceV084(RobustWalkForwardService):
     ):
         drawdown_token = _ACTIVE_MAX_DRAWDOWN.set(max_drawdown_pct)
         trades_token = _ACTIVE_MIN_TRADES.set(min_train_trades)
+        strategy_token = _ACTIVE_STRATEGY.set(strategy)
         try:
             logger.warning(
                 "[V084 WF START] strategy=%s train=%d test=%d max_train_dd=%s min_train_trades=%d",
@@ -148,6 +154,7 @@ class RobustWalkForwardServiceV084(RobustWalkForwardService):
         finally:
             _ACTIVE_MAX_DRAWDOWN.reset(drawdown_token)
             _ACTIVE_MIN_TRADES.reset(trades_token)
+            _ACTIVE_STRATEGY.reset(strategy_token)
 
 
 __all__ = ["ROBUST_WF_V084_VERSION", "RobustWalkForwardServiceV084"]
