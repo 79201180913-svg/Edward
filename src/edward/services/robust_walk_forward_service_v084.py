@@ -5,6 +5,7 @@ import logging
 from typing import Any, Sequence
 
 from edward.services.economic_viability_service_v084 import EconomicViabilityServiceV084
+from edward.services.parameter_zone_v084 import ParameterZoneServiceV084
 from edward.services.research_backtest_service_v08 import BacktestCostModel, ResearchBacktestResult
 from edward.services.robust_walk_forward_service_v08 import RobustWalkForwardService
 
@@ -74,12 +75,29 @@ class RobustWalkForwardServiceV084(RobustWalkForwardService):
             )
             raise ValueError("No economically viable Train parameter candidate")
 
+        zone = ParameterZoneServiceV084.evaluate(
+            strategy="unknown",
+            candidates=candidates,
+            viable=viable,
+        )
+        zone_risk = "STABLE_ZONE" if zone.stable else "POINT_OPTIMUM"
+        logger.warning(
+            "[V084 PARAMETER ZONE RISK] risk=%s representative=%s viable=%d/%d viability_pct=%.2f stability=%.2f",
+            zone_risk,
+            zone.representative_parameters,
+            zone.viable_candidates,
+            zone.candidates,
+            zone.viability_pct,
+            zone.neighborhood_stability_pct,
+        )
+
         selected = super()._select_robust_parameters(viable)
         logger.warning(
-            "[V084 WF VIABLE SELECTION] selected=%s robust_train_score=%.2f viable_candidates=%d",
+            "[V084 WF VIABLE SELECTION] selected=%s robust_train_score=%.2f viable_candidates=%d zone_risk=%s",
             selected[0],
             selected[2],
             len(viable),
+            zone_risk,
         )
         return selected
 
