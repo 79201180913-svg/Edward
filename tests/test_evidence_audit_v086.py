@@ -7,17 +7,16 @@ from edward.services.conditional_discovery_service_v086 import (
     ConditionalDiscoveryEvidence,
     ConditionalDiscoveryResult,
 )
-from edward.services.evidence_audit_v086 import EvidenceAuditServiceV086
+from edward.services.evidence_audit_service_v086 import EvidenceAuditServiceV086
 
 
 def test_evidence_audit_calculates_dispersion_and_period_persistence():
+    start = datetime(2025, 1, 1, tzinfo=timezone.utc)
     observations = tuple(
         SimpleNamespace(
-            hypothesis="BREAKOUT_EXPANSION",
-            regime="TREND_UP",
-            volatility_bucket="High",
-            direction="Positive",
-            index=index,
+            hypothesis="BREAKOUT_EXPANSION", regime="TREND_UP",
+            volatility_bucket="High", direction="Positive", index=index,
+            timestamp=start + timedelta(hours=index),
             forward_return=lambda horizon, value=value: value,
         )
         for index, value in ((10, 1.0), (20, 3.0), (70, -1.0), (80, 2.0))
@@ -38,7 +37,7 @@ def test_evidence_audit_calculates_dispersion_and_period_persistence():
     audit = EvidenceAuditServiceV086.audit(result)
     assert len(audit) == 1
     assert round(audit[0].dispersion_pct, 6) == round(1.4790199458, 6)
-    assert audit[0].distinct_periods == 2
+    assert audit[0].periods == 2
     assert audit[0].positive_periods == 2
     assert audit[0].negative_periods == 0
     assert audit[0].persistence_pct == 100.0
