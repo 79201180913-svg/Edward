@@ -33,6 +33,9 @@ class ResearchEvidenceReportServiceV086:
         *,
         strategy_context: str | None = None,
     ) -> tuple[ResearchEvidenceRowV086, ...]:
+        """Build a report for exactly one WF strategy context."""
+        if strategy_context is None:
+            raise ValueError("strategy_context is required for a single-context report")
         evidence_list = list(evidence)
         wf_list = list(wf_evidence)
         wf_by_key = {
