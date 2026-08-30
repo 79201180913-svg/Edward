@@ -50,6 +50,8 @@ class WFAwareEvidenceAuditV086:
 class EvidenceAuditServiceV086:
     """Research-only evidence diagnostics; never changes discovery, WF or QG."""
 
+    PERIOD_CANDLES = 60
+
     @staticmethod
     def _cell_values(result: ConditionalDiscoveryResult, cell: ConditionalDiscoveryCell) -> list[float]:
         values: list[float] = []
@@ -66,16 +68,16 @@ class EvidenceAuditServiceV086:
         values = cls._cell_values(result, cell)
         dispersion = pstdev(values) if len(values) > 1 else 0.0
         se = dispersion / sqrt(len(values)) if values else 0.0
-        dates: dict[object, list[float]] = {}
+        periods_values: dict[int, list[float]] = {}
         for item in result.observations:
             if item.hypothesis != cell.hypothesis or item.regime != cell.regime or item.volatility_bucket != cell.volatility_bucket or item.direction != cell.direction:
                 continue
             value = item.forward_return(cell.horizon)
             if value is None:
                 continue
-            day = getattr(item.timestamp, "date", lambda: item.timestamp)()
-            dates.setdefault(day, []).append(value)
-        period_values = [mean(items) for items in dates.values()]
+            period = item.index // cls.PERIOD_CANDLES
+            periods_values.setdefault(period, []).append(value)
+        period_values = [mean(items) for items in periods_values.values()]
         positive_periods = sum(value > 0 for value in period_values)
         negative_periods = sum(value < 0 for value in period_values)
         periods = len(period_values)
