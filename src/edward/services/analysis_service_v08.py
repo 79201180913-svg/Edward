@@ -13,7 +13,7 @@ from edward.services.robustness_diagnostics_v083 import RobustnessDiagnosticsSer
 
 
 logger = logging.getLogger(__name__)
-ANALYSIS_V08_VERSION = "0.8.0"
+ANALYSIS_V08_VERSION = "0.8.4"
 
 @dataclass(frozen=True, slots=True)
 class AnalysisV08Diagnostics:
