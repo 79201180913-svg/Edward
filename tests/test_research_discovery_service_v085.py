@@ -19,12 +19,8 @@ def test_discovery_returns_all_predefined_hypotheses_and_horizons():
     assert result.version == "0.8.5"
     assert result.candles == 80
     assert {item.hypothesis for item in result.hypotheses} == {
-        "BREAKOUT_EXPANSION",
-        "PULLBACK_RECLAIM",
-        "IMPULSE_CONTINUATION",
-        "SHOCK_REVERSAL",
-        "GAP_REVERSAL",
-        "RANGE_BREAK",
+        "BREAKOUT_EXPANSION", "PULLBACK_RECLAIM", "IMPULSE_CONTINUATION",
+        "SHOCK_REVERSAL", "GAP_REVERSAL", "RANGE_BREAK",
     }
     assert all(len(item.horizons) == 5 for item in result.hypotheses)
 
@@ -48,20 +44,17 @@ def test_negative_gap_is_detected_using_open_against_previous_close():
     lows = [min(o, c) * 0.999 for o, c in zip(opens, closes)]
     result = ResearchDiscoveryServiceV085.run(_candles(closes, opens=opens, highs=highs, lows=lows))
     gap = next(item for item in result.hypotheses if item.hypothesis == "GAP_REVERSAL")
-
     assert gap.events == 1
 
 
 def test_insufficient_history_is_reported_without_exception():
     result = ResearchDiscoveryServiceV085.run(_candles([100.0] * 20))
-
     assert result.hypotheses == ()
     assert result.baseline_horizons == ()
 
 
 def test_forward_return_uses_only_prices_after_event_index():
     candles = _candles([100.0, 101.0, 102.0, 103.0, 104.0])
-
     assert ResearchDiscoveryServiceV085._forward_return(candles, 1, 2) == (103.0 / 101.0) - 1.0
     assert ResearchDiscoveryServiceV085._forward_return(candles, 1, 3) == (104.0 / 101.0) - 1.0
     assert ResearchDiscoveryServiceV085._forward_return(candles, 1, 4) is None
@@ -70,13 +63,19 @@ def test_forward_return_uses_only_prices_after_event_index():
 def test_baseline_is_unconditional_and_does_not_depend_on_event_indices():
     candles = _candles([100.0, 101.0, 99.0, 102.0, 98.0, 103.0])
     baseline = ResearchDiscoveryServiceV085._baseline(candles, 1)
-
     expected = [
-        101.0 / 100.0 - 1.0,
-        99.0 / 101.0 - 1.0,
-        102.0 / 99.0 - 1.0,
-        98.0 / 102.0 - 1.0,
+        101.0 / 100.0 - 1.0, 99.0 / 101.0 - 1.0,
+        102.0 / 99.0 - 1.0, 98.0 / 102.0 - 1.0,
         103.0 / 98.0 - 1.0,
     ]
     assert baseline == expected
     assert len(baseline) == len(candles) - 1
+
+
+def test_excess_persistence_is_descriptive_and_uses_all_horizons():
+    closes = [100.0 + i * 0.5 for i in range(80)]
+    result = ResearchDiscoveryServiceV085.run(_candles(closes))
+    for item in result.hypotheses:
+        assert 0.0 <= item.excess_persistence_pct <= 100.0
+        assert item.positive_excess_horizons == sum(h.excess_return_pct > 0 for h in item.horizons)
+        assert item.strongest_horizon in item.horizons or item.strongest_horizon is None
