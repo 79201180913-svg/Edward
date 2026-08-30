@@ -5,24 +5,16 @@ from edward.services.research_evidence_report_v086 import ResearchEvidenceReport
 
 def _evidence(*, excess, win_rate, sufficient=True):
     return SimpleNamespace(
-        hypothesis="BREAKOUT_EXPANSION",
-        regime="TREND_UP",
-        volatility_bucket="High",
-        direction="Positive",
-        horizon=5,
-        excess_return_pct=excess,
-        win_rate_pct=win_rate,
-        sufficient_sample=sufficient,
+        hypothesis="BREAKOUT_EXPANSION", regime="TREND_UP", volatility_bucket="High",
+        direction="Positive", horizon=5, excess_return_pct=excess,
+        win_rate_pct=win_rate, sufficient_sample=sufficient,
     )
 
 
-def _wf(value):
+def _wf(value, strategy="Breakout"):
     return SimpleNamespace(
-        hypothesis="BREAKOUT_EXPANSION",
-        regime="TREND_UP",
-        volatility_bucket="High",
-        direction="Positive",
-        horizon=5,
+        strategy=strategy, hypothesis="BREAKOUT_EXPANSION", regime="TREND_UP",
+        volatility_bucket="High", direction="Positive", horizon=5,
         wf_persistence_pct=value,
     )
 
@@ -45,3 +37,12 @@ def test_report_does_not_create_trading_decision_field():
     rows = ResearchEvidenceReportServiceV086.build([_evidence(excess=3.0, win_rate=70.0)])
     assert rows[0].research_flag == "INTERESTING"
     assert not hasattr(rows[0], "recommendation")
+
+
+def test_report_preserves_multiple_strategy_contexts_for_same_cell():
+    evidence = [_evidence(excess=2.0, win_rate=70.0)]
+    wf = [_wf(80.0, "Breakout"), _wf(60.0, "Momentum")]
+    rows = ResearchEvidenceReportServiceV086.build_from_wf_contexts(evidence, wf)
+    assert len(rows) == 2
+    assert {row.strategy_context for row in rows} == {"Breakout", "Momentum"}
+    assert {row.wf.wf_persistence_pct for row in rows} == {80.0, 60.0}
