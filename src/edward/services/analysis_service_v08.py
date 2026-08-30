@@ -14,7 +14,9 @@ from edward.services.robustness_diagnostics_v083 import RobustnessDiagnosticsSer
 
 
 logger = logging.getLogger(__name__)
-ANALYSIS_V08_VERSION = "0.8.4"
+# Public AnalysisResult contract remains v0.8.0; v0.8.4 is the implementation engine.
+ANALYSIS_V08_VERSION = "0.8.0"
+ANALYSIS_ENGINE_V084_VERSION = "0.8.4"
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,8 +39,8 @@ class AnalysisServiceV08:
         self.costs = costs or BacktestCostModel()
         self.last_diagnostics: AnalysisV08Diagnostics | None = None
         logger.warning(
-            "[V084 EXEC] INIT AnalysisServiceV08 file=%s version=%s strategies=%s profiles=%s",
-            __file__, ANALYSIS_V08_VERSION, self.STRATEGIES, self.PROFILES,
+            "[V084 EXEC] INIT AnalysisServiceV08 file=%s engine_version=%s contract_version=%s strategies=%s profiles=%s",
+            __file__, ANALYSIS_ENGINE_V084_VERSION, ANALYSIS_V08_VERSION, self.STRATEGIES, self.PROFILES,
         )
 
     @staticmethod
@@ -214,10 +216,10 @@ class AnalysisServiceV08:
             analysis_version=ANALYSIS_V08_VERSION,
         )
         logger.warning(
-            "[V084 EXEC] EXIT AnalysisServiceV08.analyze ticker=%s recommendation=%s passed=%d/%d score=%.4f",
-            ticker, recommendation, len(passed), len(strategies), result.score,
+            "[V084 EXEC] EXIT AnalysisServiceV08.analyze ticker=%s recommendation=%s passed=%d/%d score=%.4f contract_version=%s engine_version=%s",
+            ticker, recommendation, len(passed), len(strategies), result.score, ANALYSIS_V08_VERSION, ANALYSIS_ENGINE_V084_VERSION,
         )
         return result
 
 
-__all__ = ["ANALYSIS_V08_VERSION", "AnalysisV08Diagnostics", "AnalysisServiceV08"]
+__all__ = ["ANALYSIS_V08_VERSION", "ANALYSIS_ENGINE_V084_VERSION", "AnalysisV08Diagnostics", "AnalysisServiceV08"]
