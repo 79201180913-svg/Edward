@@ -103,82 +103,96 @@ class RobustWalkForwardServiceV084(RobustWalkForwardService):
         zones = []
         train_trades = []
         no_trade_windows = []
-        start = 0
-        while start + train_size + test_size <= len(ordered):
-            train = ordered[start:start + train_size]
-            test = ordered[start + train_size:start + train_size + test_size]
-            window_index = len(windows)
-            candidates = []
-            for params in parameter_grid:
-                train_result = ResearchBacktestService.run(candles=train, strategy=strategy, parameters=params, signal_fn=signal_factory(strategy, params), costs=costs)
-                candidates.append((dict(params), train_result))
-            try:
-                selected_params, train_result, robust_train_score = cls._select_robust_parameters(candidates)
-            except NoViableTrainWindowV084:
-                no_trade_windows.append(window_index)
-                train_trades.append(0)
-                zone = ParameterZoneServiceV084.evaluate(strategy=strategy, candidates=candidates, viable=(), anchor_parameters=None)
-                zones.append(zone)
-                window = WalkForwardWindowResult(window_index, train[0].timestamp, train[-1].timestamp, test[0].timestamp, test[-1].timestamp, {}, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0)
+        max_dd_token = _ACTIVE_MAX_DRAWDOWN.set(max_drawdown_pct)
+        min_trades_token = _ACTIVE_MIN_TRADES.set(min_train_trades)
+        strategy_token = _ACTIVE_STRATEGY.set(strategy)
+        zones_token = _ACTIVE_ZONES.set(zones)
+        train_trades_token = _ACTIVE_TRAIN_TRADES.set(train_trades)
+        no_trade_token = _ACTIVE_NO_TRADE_WINDOWS.set(no_trade_windows)
+        try:
+            start = 0
+            while start + train_size + test_size <= len(ordered):
+                train = ordered[start:start + train_size]
+                test = ordered[start + train_size:start + train_size + test_size]
+                window_index = len(windows)
+                candidates = []
+                for params in parameter_grid:
+                    train_result = ResearchBacktestService.run(candles=train, strategy=strategy, parameters=params, signal_fn=signal_factory(strategy, params), costs=costs)
+                    candidates.append((dict(params), train_result))
+                try:
+                    selected_params, train_result, robust_train_score = cls._select_robust_parameters(candidates)
+                except NoViableTrainWindowV084:
+                    no_trade_windows.append(window_index)
+                    train_trades.append(0)
+                    zone = ParameterZoneServiceV084.evaluate(strategy=strategy, candidates=candidates, viable=(), anchor_parameters=None)
+                    zones.append(zone)
+                    window = WalkForwardWindowResult(window_index, train[0].timestamp, train[-1].timestamp, test[0].timestamp, test[-1].timestamp, {}, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0)
+                    windows.append(window)
+                    exposures.append(0.0)
+                    logger.warning("[V084 WF NO TRADE WINDOW RESULT] strategy=%s window=%d train=%s..%s test=%s..%s params={} train_score=0.0000 oos_return=0.0000 trades=0", strategy, window_index, train[0].timestamp, train[-1].timestamp, test[0].timestamp, test[-1].timestamp)
+                    start += test_size
+                    continue
+                cls._log_parameter_leaderboard(strategy=strategy, window_index=window_index, candidates=candidates, selected_params=selected_params)
+                cls._log_robust_selection(strategy=strategy, window_index=window_index, candidates=candidates, selected_params=selected_params, selected_score=robust_train_score)
+                margin, neighborhood, confidence = cls._log_parameter_stability(strategy=strategy, window_index=window_index, candidates=candidates, selected_params=selected_params)
+                stability_margins.append(margin)
+                stability_neighborhoods.append(neighborhood)
+                stability_confidences.append(confidence)
+                oos_candidates = []
+                for params, _ in candidates:
+                    oos_result = ResearchBacktestService.run(candles=test, strategy=strategy, parameters=params, signal_fn=signal_factory(strategy, params), costs=costs)
+                    oos_candidates.append((dict(params), oos_result))
+                matches, gaps = cls._log_selection_criteria_diagnostics(strategy=strategy, window_index=window_index, train_candidates=candidates, oos_candidates=oos_candidates, production_selected_params=selected_params)
+                for criterion, matched in matches.items():
+                    criterion_matches[criterion] += int(matched)
+                    criterion_gaps[criterion].append(gaps[criterion])
+                transfer_match, transfer_gap = cls._log_oos_parameter_transfer(strategy=strategy, window_index=window_index, candidates=oos_candidates, selected_params=selected_params)
+                if transfer_match:
+                    transfer_matches += 1
+                transfer_gaps.append(transfer_gap)
+                _, changed, shadow_delta = cls._log_parameter_transfer_shadow(strategy=strategy, window_index=window_index, candidates=candidates, oos_candidates=oos_candidates, baseline_parameters=selected_params, history=history)
+                if changed:
+                    shadow_changed += 1
+                shadow_deltas.append(shadow_delta)
+                test_result = next(result for params, result in oos_candidates if params == selected_params)
+                exposures.append(test_result.exposure_pct)
+                window = WalkForwardWindowResult(window_index, train[0].timestamp, train[-1].timestamp, test[0].timestamp, test[-1].timestamp, dict(selected_params), robust_train_score, test_result.net_return_pct, test_result.benchmark_return_pct, test_result.excess_return_pct, test_result.max_drawdown_pct, test_result.sharpe, test_result.sortino, test_result.trades)
                 windows.append(window)
-                exposures.append(0.0)
-                logger.warning("[V084 WF NO TRADE WINDOW RESULT] strategy=%s window=%d train=%s..%s test=%s..%s params={} train_score=0.0000 oos_return=0.0000 trades=0", strategy, window_index, train[0].timestamp, train[-1].timestamp, test[0].timestamp, test[-1].timestamp)
+                cls._append_oos_candidate_history(strategy=strategy, window_index=window_index, oos_candidates=oos_candidates, selection_confidence_value=confidence, history=history)
+                logger.warning("[V084 WF WINDOW] strategy=%s window=%d train=%s..%s test=%s..%s params=%s train_excess=%.4f robust_train_score=%.2f oos_return=%.4f benchmark=%.4f excess=%.4f dd=%.4f sharpe=%.4f sortino=%.4f trades=%d", strategy, window.index, window.train_start, window.train_end, window.test_start, window.test_end, window.parameters, train_result.excess_return_pct, window.train_score, window.test_net_return_pct, window.test_benchmark_return_pct, window.test_excess_return_pct, window.test_max_drawdown_pct, window.test_sharpe, window.test_sortino, window.test_trades)
+                cls._log_window_activity(strategy=strategy, window=window, test_result=test_result)
                 start += test_size
-                continue
-            cls._log_parameter_leaderboard(strategy=strategy, window_index=window_index, candidates=candidates, selected_params=selected_params)
-            cls._log_robust_selection(strategy=strategy, window_index=window_index, candidates=candidates, selected_params=selected_params, selected_score=robust_train_score)
-            margin, neighborhood, confidence = cls._log_parameter_stability(strategy=strategy, window_index=window_index, candidates=candidates, selected_params=selected_params)
-            stability_margins.append(margin)
-            stability_neighborhoods.append(neighborhood)
-            stability_confidences.append(confidence)
-            oos_candidates = []
-            for params, _ in candidates:
-                oos_result = ResearchBacktestService.run(candles=test, strategy=strategy, parameters=params, signal_fn=signal_factory(strategy, params), costs=costs)
-                oos_candidates.append((dict(params), oos_result))
-            matches, gaps = cls._log_selection_criteria_diagnostics(strategy=strategy, window_index=window_index, train_candidates=candidates, oos_candidates=oos_candidates, production_selected_params=selected_params)
-            for criterion, matched in matches.items():
-                criterion_matches[criterion] += int(matched)
-                criterion_gaps[criterion].append(gaps[criterion])
-            transfer_match, transfer_gap = cls._log_oos_parameter_transfer(strategy=strategy, window_index=window_index, candidates=oos_candidates, selected_params=selected_params)
-            if transfer_match:
-                transfer_matches += 1
-            transfer_gaps.append(transfer_gap)
-            _, changed, shadow_delta = cls._log_parameter_transfer_shadow(strategy=strategy, window_index=window_index, candidates=candidates, oos_candidates=oos_candidates, baseline_parameters=selected_params, history=history)
-            if changed:
-                shadow_changed += 1
-            shadow_deltas.append(shadow_delta)
-            test_result = next(result for params, result in oos_candidates if params == selected_params)
-            exposures.append(test_result.exposure_pct)
-            window = WalkForwardWindowResult(window_index, train[0].timestamp, train[-1].timestamp, test[0].timestamp, test[-1].timestamp, dict(selected_params), robust_train_score, test_result.net_return_pct, test_result.benchmark_return_pct, test_result.excess_return_pct, test_result.max_drawdown_pct, test_result.sharpe, test_result.sortino, test_result.trades)
-            windows.append(window)
-            cls._append_oos_candidate_history(strategy=strategy, window_index=window_index, oos_candidates=oos_candidates, selection_confidence_value=confidence, history=history)
-            logger.warning("[V084 WF WINDOW] strategy=%s window=%d train=%s..%s test=%s..%s params=%s train_excess=%.4f robust_train_score=%.2f oos_return=%.4f benchmark=%.4f excess=%.4f dd=%.4f sharpe=%.4f sortino=%.4f trades=%d", strategy, window.index, window.train_start, window.train_end, window.test_start, window.test_end, window.parameters, train_result.excess_return_pct, window.train_score, window.test_net_return_pct, window.test_benchmark_return_pct, window.test_excess_return_pct, window.test_max_drawdown_pct, window.test_sharpe, window.test_sortino, window.test_trades)
-            cls._log_window_activity(strategy=strategy, window=window, test_result=test_result)
-            start += test_size
-        if not windows:
-            logger.warning("[V084 WF EMPTY] strategy=%s candles=%d train=%d test=%d", strategy, len(ordered), train_size, test_size)
-            return cls._with_diagnostics(cls._empty(strategy), zones, train_trades, no_trade_windows)
-        returns = [i.test_net_return_pct for i in windows]
-        drawdowns = [i.test_max_drawdown_pct for i in windows]
-        sharpes = [i.test_sharpe for i in windows]
-        count = len(windows)
-        positive = sum(v > 0 for v in returns)
-        risk_ok = sum(max_drawdown_pct is None or v <= max_drawdown_pct for v in drawdowns)
-        positive_sharpe = sum(v > 0 for v in sharpes)
-        return_consistency = positive / count * 100
-        risk_consistency = risk_ok / count * 100
-        sharpe_consistency = positive_sharpe / count * 100
-        stability = cls._parameter_stability(windows)
-        dispersion_penalty = pstdev(returns) / max(abs(mean(returns)), 1.0) * 10
-        performance_consistency = max(0.0, min(100.0, 100.0 - dispersion_penalty))
-        robustness = round(return_consistency * .35 + risk_consistency * .20 + sharpe_consistency * .15 + stability.stability_pct * .15 + performance_consistency * .15, 2)
-        result = RobustWalkForwardResult(strategy=strategy, windows=tuple(windows), mean_test_return_pct=mean(returns), median_test_return_pct=median(returns), std_test_return_pct=pstdev(returns) if len(returns) > 1 else 0.0, worst_test_return_pct=min(returns), best_test_return_pct=max(returns), mean_test_drawdown_pct=mean(drawdowns), mean_test_sharpe=mean(sharpes), positive_return_windows=positive, risk_ok_windows=risk_ok, positive_sharpe_windows=positive_sharpe, return_consistency_pct=return_consistency, risk_consistency_pct=risk_consistency, sharpe_consistency_pct=sharpe_consistency, robustness_score=robustness, parameter_stability=stability)
-        result_v084 = cls._with_diagnostics(result, zones, train_trades, no_trade_windows)
-        active_windows = sum(i.test_trades > 0 for i in windows)
-        logger.warning("[V084 WF ACTIVITY RESULT] strategy=%s windows=%d active_windows=%d inactive_windows=%d active_pct=%.2f total_trades=%d mean_exposure=%.2f", strategy, count, active_windows, count - active_windows, active_windows / count * 100, sum(i.test_trades for i in windows), mean(exposures))
-        logger.warning("[V084 WF NO TRADE RESULT] strategy=%s no_trade_windows=%d no_trade_pct=%.2f", strategy, len(no_trade_windows), len(no_trade_windows) / count * 100)
-        logger.warning("[V084 WF RESULT] strategy=%s windows=%d robustness=%.2f mean_oos_return=%.4f mean_oos_dd=%.4f mean_oos_sharpe=%.4f", strategy, count, result_v084.robustness_score, result_v084.mean_test_return_pct, result_v084.mean_test_drawdown_pct, result_v084.mean_test_sharpe)
-        return result_v084
+            if not windows:
+                logger.warning("[V084 WF EMPTY] strategy=%s candles=%d train=%d test=%d", strategy, len(ordered), train_size, test_size)
+                return cls._with_diagnostics(cls._empty(strategy), zones, train_trades, no_trade_windows)
+            returns = [i.test_net_return_pct for i in windows]
+            drawdowns = [i.test_max_drawdown_pct for i in windows]
+            sharpes = [i.test_sharpe for i in windows]
+            count = len(windows)
+            positive = sum(v > 0 for v in returns)
+            risk_ok = sum(max_drawdown_pct is None or v <= max_drawdown_pct for v in drawdowns)
+            positive_sharpe = sum(v > 0 for v in sharpes)
+            return_consistency = positive / count * 100
+            risk_consistency = risk_ok / count * 100
+            sharpe_consistency = positive_sharpe / count * 100
+            stability = cls._parameter_stability(windows)
+            dispersion_penalty = pstdev(returns) / max(abs(mean(returns)), 1.0) * 10
+            performance_consistency = max(0.0, min(100.0, 100.0 - dispersion_penalty))
+            robustness = round(return_consistency * .35 + risk_consistency * .20 + sharpe_consistency * .15 + stability.stability_pct * .15 + performance_consistency * .15, 2)
+            result = RobustWalkForwardResult(strategy=strategy, windows=tuple(windows), mean_test_return_pct=mean(returns), median_test_return_pct=median(returns), std_test_return_pct=pstdev(returns) if len(returns) > 1 else 0.0, worst_test_return_pct=min(returns), best_test_return_pct=max(returns), mean_test_drawdown_pct=mean(drawdowns), mean_test_sharpe=mean(sharpes), positive_return_windows=positive, risk_ok_windows=risk_ok, positive_sharpe_windows=positive_sharpe, return_consistency_pct=return_consistency, risk_consistency_pct=risk_consistency, sharpe_consistency_pct=sharpe_consistency, robustness_score=robustness, parameter_stability=stability)
+            result_v084 = cls._with_diagnostics(result, zones, train_trades, no_trade_windows)
+            active_windows = sum(i.test_trades > 0 for i in windows)
+            logger.warning("[V084 WF ACTIVITY RESULT] strategy=%s windows=%d active_windows=%d inactive_windows=%d active_pct=%.2f total_trades=%d mean_exposure=%.2f", strategy, count, active_windows, count - active_windows, active_windows / count * 100, sum(i.test_trades for i in windows), mean(exposures))
+            logger.warning("[V084 WF NO TRADE RESULT] strategy=%s no_trade_windows=%d no_trade_pct=%.2f", strategy, len(no_trade_windows), len(no_trade_windows) / count * 100)
+            logger.warning("[V084 WF RESULT] strategy=%s windows=%d robustness=%.2f mean_oos_return=%.4f mean_oos_dd=%.4f mean_oos_sharpe=%.4f", strategy, count, result_v084.robustness_score, result_v084.mean_test_return_pct, result_v084.mean_test_drawdown_pct, result_v084.mean_test_sharpe)
+            return result_v084
+        finally:
+            _ACTIVE_MAX_DRAWDOWN.reset(max_dd_token)
+            _ACTIVE_MIN_TRADES.reset(min_trades_token)
+            _ACTIVE_STRATEGY.reset(strategy_token)
+            _ACTIVE_ZONES.reset(zones_token)
+            _ACTIVE_TRAIN_TRADES.reset(train_trades_token)
+            _ACTIVE_NO_TRADE_WINDOWS.reset(no_trade_token)
 
     @staticmethod
     def _empty(strategy: str) -> RobustWalkForwardResult:
