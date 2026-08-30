@@ -16,6 +16,7 @@ from edward.services.robust_walk_forward_service_v08 import RobustWalkForwardRes
 from edward.services.robust_walk_forward_service_v084 import RobustWalkForwardServiceV084
 from edward.services.robustness_diagnostics_v083 import RobustnessDiagnosticsServiceV083
 from edward.services.strategy_router_v084 import StrategyRouterV084
+from edward.services.train_sample_diagnostics_v084 import TrainSampleDiagnosticsV084, TrainSampleDiagnosticsServiceV084
 
 logger = logging.getLogger(__name__)
 ANALYSIS_V08_VERSION = "0.8.0"
@@ -35,6 +36,7 @@ class AnalysisV08Diagnostics:
     generalization_by_strategy: dict[str, GeneralizationDiagnosticsV084] = field(default_factory=dict)
     parameter_zone_by_strategy: dict[str, tuple[ParameterZoneV084, ...]] = field(default_factory=dict)
     parameter_zone_oos_by_strategy: dict[str, ParameterZoneOOSDiagnosticsV084] = field(default_factory=dict)
+    train_sample_by_strategy: dict[str, TrainSampleDiagnosticsV084] = field(default_factory=dict)
 
 
 class AnalysisServiceV08:
@@ -52,14 +54,9 @@ class AnalysisServiceV08:
 
     @staticmethod
     def _grid(strategy: str, profile: str) -> list[dict[str, Any]]:
-        if strategy == "Trend Following":
-            return [{"fast": fast, "slow": slow} for fast, slow in ((10, 30), (20, 50), (30, 90))]
-        if strategy == "Momentum":
-            values = (20, 40, 80) if profile == "long_term" else (10, 20, 40)
-            return [{"lookback": value} for value in values]
-        if strategy == "Breakout":
-            values = (10, 20, 40) if profile == "speculative" else (20, 40, 80)
-            return [{"lookback": value} for value in values]
+        if strategy == "Trend Following": return [{"fast": fast, "slow": slow} for fast, slow in ((10, 30), (20, 50), (30, 90))]
+        if strategy == "Momentum": return [{"lookback": value} for value in ((20, 40, 80) if profile == "long_term" else (10, 20, 40))]
+        if strategy == "Breakout": return [{"lookback": value} for value in ((10, 20, 40) if profile == "speculative" else (20, 40, 80))]
         return [{"lookback": value, "deviation": deviation} for value in (10, 20, 40) for deviation in (1.5, 2.0, 3.0)]
 
     @staticmethod
@@ -83,8 +80,7 @@ class AnalysisServiceV08:
     def _quality(result: RobustWalkForwardResult, profile: str) -> bool:
         diagnostics = QualityGateDiagnosticsServiceV0822.evaluate(result, profile)
         logger.warning("[V084 QG RESULT] strategy=%s profile=%s passed=%s failed_checks=%s reason=%s", result.strategy, profile, diagnostics.passed, diagnostics.failed_checks, diagnostics.failure_reason or "none")
-        for check in diagnostics.checks:
-            logger.warning("[V084 QG CHECK] strategy=%s check=%s actual=%.6f threshold=%.6f passed=%s", result.strategy, check.key, check.actual, check.threshold, check.passed)
+        for check in diagnostics.checks: logger.warning("[V084 QG CHECK] strategy=%s check=%s actual=%.6f threshold=%.6f passed=%s", result.strategy, check.key, check.actual, check.threshold, check.passed)
         logger.warning("[QUALITY GATE] strategy=%s profile=%s result=%s", result.strategy, profile, "PASS" if diagnostics.passed else "FAIL")
         return diagnostics.passed
 
@@ -94,12 +90,10 @@ class AnalysisServiceV08:
         return StrategyResult(strategy=result.strategy, parameters=dict(result.windows[-1].parameters) if result.windows else {}, return_pct=round(result.mean_test_return_pct, 8), max_drawdown_pct=round(result.mean_test_drawdown_pct, 8), sharpe=round(result.mean_test_sharpe, 8), trades=sum(item.test_trades for item in result.windows), stability=round(result.robustness_score, 8), quality_gate=quality, score=round(result.robustness_score, 8), train_score=round(sum(item.train_score for item in result.windows) / len(result.windows), 8) if result.windows else 0.0, test_score=round(result.mean_test_return_pct, 8), wf_windows=len(result.windows), positive_return_windows=result.positive_return_windows, risk_ok_windows=result.risk_ok_windows, positive_sharpe_windows=result.positive_sharpe_windows, return_consistency=round(result.return_consistency_pct, 8), risk_consistency=round(result.risk_consistency_pct, 8), sharpe_consistency=round(result.sharpe_consistency_pct, 8))
 
     def analyze(self, *, instrument_uid: str, ticker: str, candles: Iterable[Candle], profile: str = "medium_term", risk_profile: str = "balanced", horizon: str = "medium") -> AnalysisResult:
-        if profile not in self.PROFILES:
-            raise ValueError(f"Unsupported profile: {profile}")
+        if profile not in self.PROFILES: raise ValueError(f"Unsupported profile: {profile}")
         ordered = sorted(list(candles), key=lambda item: item.timestamp)
         minimum = self.PROFILES[profile]["train"] + self.PROFILES[profile]["test"]
-        if len(ordered) < minimum:
-            raise ValueError(f"Для v0.8-анализа требуется не менее {minimum} исторических свечей для профиля {profile}")
+        if len(ordered) < minimum: raise ValueError(f"Для v0.8-анализа требуется не менее {minimum} исторических свечей для профиля {profile}")
         regime_result = RegimeEngine.classify(ordered)
         router = StrategyRouterV084.route(regime_result, self.STRATEGIES, ticker=ticker)
         logger.warning("[V084 ROUTER INTEGRATION] ticker=%s regime=%s confidence=%.2f ordered=%s", ticker, router.regime, router.regime_confidence, router.ordered_strategies)
@@ -111,27 +105,13 @@ class AnalysisServiceV08:
         generalization = {item.strategy: GeneralizationDiagnosticsServiceV084.evaluate(robust_results[index], regime_evidence.get(item.strategy), ticker=ticker) for index, item in enumerate(strategies)}
         parameter_zones = {item.strategy: tuple(getattr(robust_results[index], "parameter_zone_diagnostics", ())) for index, item in enumerate(strategies)}
         parameter_zone_oos = {item.strategy: ParameterZoneOOSDiagnosticsServiceV084.evaluate(strategy=item.strategy, windows=robust_results[index].windows, zones=parameter_zones[item.strategy]) for index, item in enumerate(strategies) if parameter_zones[item.strategy] and len(parameter_zones[item.strategy]) == len(robust_results[index].windows)}
+        train_sample = {item.strategy: TrainSampleDiagnosticsServiceV084.evaluate(getattr(robust_results[index], "selected_train_trades", ())) for index, item in enumerate(strategies)}
         winner = max(passed, key=lambda item: (item.score, compatibility.get(item.strategy, 0.0))) if passed else None
         score_winner = max(strategies, key=lambda item: item.score) if strategies else None
         recommendation = winner.strategy if winner else None
-        confidence = "Low"
-        if winner:
-            confidence = "High" if winner.stability >= 80.0 else "Medium" if winner.stability >= 65.0 else "Low"
-        self.last_diagnostics = AnalysisV08Diagnostics(
-            regime_confidence=regime_result.confidence,
-            regime=regime_result.regime,
-            robustness_by_strategy={item.strategy: item.robustness_score for item in robust_results},
-            quality_gate_by_strategy={item.strategy: QualityGateDiagnosticsServiceV0822.evaluate(item, profile) for item in robust_results},
-            router_compatibility_by_strategy=compatibility,
-            router_priority_by_strategy={item.strategy: item.priority for item in router.decisions},
-            router_ordered_strategies=router.ordered_strategies,
-            regime_evidence_by_strategy=regime_evidence,
-            generalization_by_strategy=generalization,
-            parameter_zone_by_strategy=parameter_zones,
-            parameter_zone_oos_by_strategy=parameter_zone_oos,
-        )
-        logger.warning("[V084 REGIME EVIDENCE INTEGRATION] ticker=%s current_regime=%s evidence_scores=%s", ticker, regime_result.regime, {key: value.evidence_score for key, value in regime_evidence.items()})
-        logger.warning("[V084 GENERALIZATION INTEGRATION] ticker=%s scores=%s", ticker, {key: value.generalization_score for key, value in generalization.items()})
+        confidence = "Low" if not winner else "High" if winner.stability >= 80.0 else "Medium" if winner.stability >= 65.0 else "Low"
+        self.last_diagnostics = AnalysisV08Diagnostics(regime_confidence=regime_result.confidence, regime=regime_result.regime, robustness_by_strategy={item.strategy: item.robustness_score for item in robust_results}, quality_gate_by_strategy={item.strategy: QualityGateDiagnosticsServiceV0822.evaluate(item, profile) for item in robust_results}, router_compatibility_by_strategy=compatibility, router_priority_by_strategy={item.strategy: item.priority for item in router.decisions}, router_ordered_strategies=router.ordered_strategies, regime_evidence_by_strategy=regime_evidence, generalization_by_strategy=generalization, parameter_zone_by_strategy=parameter_zones, parameter_zone_oos_by_strategy=parameter_zone_oos, train_sample_by_strategy=train_sample)
+        logger.warning("[V084 TRAIN SAMPLE INTEGRATION] ticker=%s diagnostics=%s", ticker, {key: {"windows": value.windows, "no_trades": value.no_trades_windows, "low_sample": value.low_sample_windows, "adequate_sample": value.adequate_sample_windows, "low_sample_pct": value.low_sample_pct, "mean_trades": value.mean_selected_train_trades} for key, value in train_sample.items()})
         logger.warning("[V084 PARAMETER ZONE INTEGRATION] ticker=%s zones=%s", ticker, {key: len(value) for key, value in parameter_zones.items()})
         logger.warning("[V084 PARAMETER ZONE OOS INTEGRATION] ticker=%s diagnostics=%s", ticker, {key: {"stable_windows": value.stable_windows, "point_optimum_windows": value.point_optimum_windows, "return_delta": value.oos_return_delta_pct, "positive_delta": value.oos_positive_delta_pct} for key, value in parameter_zone_oos.items()})
         logger.warning("[V084 STRATEGY SELECTION] ticker=%s profile=%s quality_gate_winner=%s max_score_strategy=%s quality_gate_pass_count=%d total_strategies=%d router_order=%s", ticker, profile, winner.strategy if winner else None, score_winner.strategy if score_winner else None, len(passed), len(strategies), router.ordered_strategies)
