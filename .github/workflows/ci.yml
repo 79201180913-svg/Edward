@@ -2,9 +2,9 @@ name: Edward CI
 
 on:
   push:
-    branches: ["main", "version-0.2", "version-0.3", "version-0.4", "version-0.6-impl", "version-0.7", "version-0.8-analysis", "version-0.8.1-multifactor", "version-0.8.2-fundamental-analysis", "version-0.8.5-research-discovery", "version-0.8.6-conditional-discovery"]
+    branches: ["main", "version-0.2", "version-0.3", "version-0.4", "version-0.6-impl", "version-0.7", "version-0.8-analysis", "version-0.8.1-multifactor", "version-0.8.2-fundamental-analysis", "version-0.8.5-research-discovery", "version-0.8.6-conditional-discovery", "version-0.8.7-research-report"]
   pull_request:
-    branches: ["main", "version-0.2", "version-0.3", "version-0.4", "version-0.6-impl", "version-0.7", "version-0.8-analysis", "version-0.8.1-multifactor", "version-0.8.2-fundamental-analysis", "version-0.8.5-research-discovery", "version-0.8.6-conditional-discovery"]
+    branches: ["main", "version-0.2", "version-0.3", "version-0.4", "version-0.6-impl", "version-0.7", "version-0.8-analysis", "version-0.8.1-multifactor", "version-0.8.2-fundamental-analysis", "version-0.8.5-research-discovery", "version-0.8.6-conditional-discovery", "version-0.8.7-research-report"]
   workflow_dispatch:
 
 jobs:
