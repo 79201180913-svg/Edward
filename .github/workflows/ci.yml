@@ -2,7 +2,7 @@ name: Edward CI
 
 on:
   push:
-    branches: ["main", "version-0.2", "version-0.3", "version-0.4", "version-0.6-impl", "version-0.7", "version-0.8-analysis", "version-0.8.1-multifactor", "version-0.8.2-fundamental-analysis"]
+    branches: ["main", "version-0.2", "version-0.3", "version-0.4", "version-0.6-impl", "version-0.7", "version-0.8-analysis", "version-0.8.1-multifactor", "version-0.8.2-fundamental-analysis", "version-0.8.5-research-discovery"]
   pull_request:
     branches: ["main", "version-0.2", "version-0.3", "version-0.4", "version-0.6-impl", "version-0.7", "version-0.8-analysis", "version-0.8.1-multifactor", "version-0.8.2-fundamental-analysis"]
   workflow_dispatch:
