@@ -72,6 +72,18 @@ class ConditionalDiscoveryServiceV086:
     DIRECTIONS = DIRECTIONS
     HYPOTHESES = HYPOTHESES
 
+    @staticmethod
+    def _forward_return(candles: Sequence[Candle], index: int, horizon: int) -> float | None:
+        """Return the forward close-to-close return for a canonical event."""
+        end = index + horizon
+        if index < 0 or end >= len(candles):
+            return None
+        start = float(candles[index].close)
+        finish = float(candles[end].close)
+        if start <= 0 or finish <= 0:
+            return None
+        return finish / start - 1.0
+
     @classmethod
     def run(cls, candles: Sequence[Candle]) -> ConditionalDiscoveryResult:
         ordered = tuple(sorted(candles, key=lambda item: item.timestamp))
