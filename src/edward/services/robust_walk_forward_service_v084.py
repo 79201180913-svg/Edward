@@ -12,25 +12,18 @@ from edward.services.robust_walk_forward_service_v08 import RobustWalkForwardRes
 
 ROBUST_WF_V084_VERSION = "0.8.4"
 logger = logging.getLogger(__name__)
-
 _ACTIVE_MAX_DRAWDOWN: contextvars.ContextVar[float | None] = contextvars.ContextVar("edward_v084_max_train_drawdown_pct", default=None)
 _ACTIVE_MIN_TRADES: contextvars.ContextVar[int] = contextvars.ContextVar("edward_v084_min_train_trades", default=1)
 _ACTIVE_STRATEGY: contextvars.ContextVar[str] = contextvars.ContextVar("edward_v084_strategy", default="unknown")
 _ACTIVE_ZONES: contextvars.ContextVar[list[ParameterZoneV084] | None] = contextvars.ContextVar("edward_v084_parameter_zones", default=None)
 _ACTIVE_TRAIN_TRADES: contextvars.ContextVar[list[int] | None] = contextvars.ContextVar("edward_v084_selected_train_trades", default=None)
 
-
 @dataclass(frozen=True, slots=True)
 class RobustWalkForwardResultV084(RobustWalkForwardResult):
-    """v0.8.4 result carrying Train-only parameter-zone and activity evidence."""
-
     parameter_zone_diagnostics: tuple[ParameterZoneV084, ...] = ()
     selected_train_trades: tuple[int, ...] = ()
 
-
 class RobustWalkForwardServiceV084(RobustWalkForwardService):
-    """v0.8.4 WF selector with Train-only economic viability, zone and activity diagnostics."""
-
     VERSION = ROBUST_WF_V084_VERSION
 
     @classmethod
@@ -49,15 +42,17 @@ class RobustWalkForwardServiceV084(RobustWalkForwardService):
         if not viable:
             logger.warning("[V084 WF NO VIABLE PARAMETER] no Train candidate passed economic viability; production parameter selection aborted")
             raise ValueError("No economically viable Train parameter candidate")
-
         selected = super()._select_robust_parameters(viable)
+        train_trades = _ACTIVE_TRAIN_TRADES.get()
+        if train_trades is not None:
+            train_trades.append(int(selected[1].trades))
         zone = ParameterZoneServiceV084.evaluate(strategy=strategy, candidates=candidates, viable=viable, anchor_parameters=selected[0])
         zones = _ACTIVE_ZONES.get()
         if zones is not None:
             zones.append(zone)
         zone_risk = "STABLE_ZONE" if zone.stable else "POINT_OPTIMUM"
         logger.warning("[V084 PARAMETER ZONE RISK] strategy=%s risk=%s representative=%s robust_winner=%s viable=%d/%d viability_pct=%.2f stability=%.2f", strategy, zone_risk, zone.representative_parameters, selected[0], zone.viable_candidates, zone.candidates, zone.viability_pct, zone.neighborhood_stability_pct)
-        logger.warning("[V084 WF VIABLE SELECTION] selected=%s robust_train_score=%.2f viable_candidates=%d zone_risk=%s", selected[0], selected[2], len(viable), zone_risk)
+        logger.warning("[V084 WF VIABLE SELECTION] selected=%s robust_train_score=%.2f viable_candidates=%d zone_risk=%s selected_train_trades=%d", selected[0], selected[2], len(viable), zone_risk, selected[1].trades)
         return selected
 
     @staticmethod
@@ -93,11 +88,6 @@ class RobustWalkForwardServiceV084(RobustWalkForwardService):
             logger.warning("[V084 WF RESULT] strategy=%s windows=%d robustness=%.2f mean_oos_return=%.4f mean_oos_dd=%.4f mean_oos_sharpe=%.4f", strategy, len(result_v084.windows), result_v084.robustness_score, result_v084.mean_test_return_pct, result_v084.mean_test_drawdown_pct, result_v084.mean_test_sharpe)
             return result_v084
         finally:
-            _ACTIVE_MAX_DRAWDOWN.reset(drawdown_token)
-            _ACTIVE_MIN_TRADES.reset(trades_token)
-            _ACTIVE_STRATEGY.reset(strategy_token)
-            _ACTIVE_ZONES.reset(zones_token)
-            _ACTIVE_TRAIN_TRADES.reset(train_trades_token)
-
+            _ACTIVE_MAX_DRAWDOWN.reset(drawdown_token); _ACTIVE_MIN_TRADES.reset(trades_token); _ACTIVE_STRATEGY.reset(strategy_token); _ACTIVE_ZONES.reset(zones_token); _ACTIVE_TRAIN_TRADES.reset(train_trades_token)
 
 __all__ = ["ROBUST_WF_V084_VERSION", "RobustWalkForwardResultV084", "RobustWalkForwardServiceV084"]
