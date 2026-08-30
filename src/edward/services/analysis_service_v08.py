@@ -10,6 +10,7 @@ from edward.services.regime_engine_v08 import RegimeEngine
 from edward.services.regime_conditioned_evidence_v084 import RegimeConditionedEvidence, RegimeConditionedEvidenceServiceV084
 from edward.services.generalization_diagnostics_v084 import GeneralizationDiagnosticsV084, GeneralizationDiagnosticsServiceV084
 from edward.services.parameter_zone_v084 import ParameterZoneV084
+from edward.services.parameter_zone_oos_diagnostics_v084 import ParameterZoneOOSDiagnosticsV084, ParameterZoneOOSDiagnosticsServiceV084
 from edward.services.research_backtest_service_v08 import BacktestCostModel, ResearchBacktestService
 from edward.services.robust_walk_forward_service_v08 import RobustWalkForwardResult
 from edward.services.robust_walk_forward_service_v084 import RobustWalkForwardServiceV084
@@ -33,6 +34,7 @@ class AnalysisV08Diagnostics:
     regime_evidence_by_strategy: dict[str, RegimeConditionedEvidence] = field(default_factory=dict)
     generalization_by_strategy: dict[str, GeneralizationDiagnosticsV084] = field(default_factory=dict)
     parameter_zone_by_strategy: dict[str, tuple[ParameterZoneV084, ...]] = field(default_factory=dict)
+    parameter_zone_oos_by_strategy: dict[str, ParameterZoneOOSDiagnosticsV084] = field(default_factory=dict)
 
 
 class AnalysisServiceV08:
@@ -105,18 +107,10 @@ class AnalysisServiceV08:
         strategies = [self._legacy_strategy_result(item, profile) for item in robust_results]
         passed = [item for item in strategies if item.quality_gate]
         compatibility = {item.strategy: next((d.compatibility for d in router.decisions if d.strategy == item.strategy), 0.0) for item in strategies}
-        regime_evidence = {
-            item.strategy: RegimeConditionedEvidenceServiceV084.evaluate(robust_results[index], ordered, regime_result.regime, regime_result.confidence, ticker=ticker)
-            for index, item in enumerate(strategies)
-        }
-        generalization = {
-            item.strategy: GeneralizationDiagnosticsServiceV084.evaluate(robust_results[index], regime_evidence.get(item.strategy), ticker=ticker)
-            for index, item in enumerate(strategies)
-        }
-        parameter_zones = {
-            item.strategy: tuple(getattr(robust_results[index], "parameter_zone_diagnostics", ()))
-            for index, item in enumerate(strategies)
-        }
+        regime_evidence = {item.strategy: RegimeConditionedEvidenceServiceV084.evaluate(robust_results[index], ordered, regime_result.regime, regime_result.confidence, ticker=ticker) for index, item in enumerate(strategies)}
+        generalization = {item.strategy: GeneralizationDiagnosticsServiceV084.evaluate(robust_results[index], regime_evidence.get(item.strategy), ticker=ticker) for index, item in enumerate(strategies)}
+        parameter_zones = {item.strategy: tuple(getattr(robust_results[index], "parameter_zone_diagnostics", ())) for index, item in enumerate(strategies)}
+        parameter_zone_oos = {item.strategy: ParameterZoneOOSDiagnosticsServiceV084.evaluate(strategy=item.strategy, windows=robust_results[index].windows, zones=parameter_zones[item.strategy]) for index, item in enumerate(strategies) if parameter_zones[item.strategy] and len(parameter_zones[item.strategy]) == len(robust_results[index].windows)}
         winner = max(passed, key=lambda item: (item.score, compatibility.get(item.strategy, 0.0))) if passed else None
         score_winner = max(strategies, key=lambda item: item.score) if strategies else None
         recommendation = winner.strategy if winner else None
@@ -134,10 +128,12 @@ class AnalysisServiceV08:
             regime_evidence_by_strategy=regime_evidence,
             generalization_by_strategy=generalization,
             parameter_zone_by_strategy=parameter_zones,
+            parameter_zone_oos_by_strategy=parameter_zone_oos,
         )
         logger.warning("[V084 REGIME EVIDENCE INTEGRATION] ticker=%s current_regime=%s evidence_scores=%s", ticker, regime_result.regime, {key: value.evidence_score for key, value in regime_evidence.items()})
         logger.warning("[V084 GENERALIZATION INTEGRATION] ticker=%s scores=%s", ticker, {key: value.generalization_score for key, value in generalization.items()})
         logger.warning("[V084 PARAMETER ZONE INTEGRATION] ticker=%s zones=%s", ticker, {key: len(value) for key, value in parameter_zones.items()})
+        logger.warning("[V084 PARAMETER ZONE OOS INTEGRATION] ticker=%s diagnostics=%s", ticker, {key: {"stable_windows": value.stable_windows, "point_optimum_windows": value.point_optimum_windows, "return_delta": value.oos_return_delta_pct, "positive_delta": value.oos_positive_delta_pct} for key, value in parameter_zone_oos.items()})
         logger.warning("[V084 STRATEGY SELECTION] ticker=%s profile=%s quality_gate_winner=%s max_score_strategy=%s quality_gate_pass_count=%d total_strategies=%d router_order=%s", ticker, profile, winner.strategy if winner else None, score_winner.strategy if score_winner else None, len(passed), len(strategies), router.ordered_strategies)
         explanation = f"Рекомендована {winner.strategy}: v0.8.4 robustness {winner.score:.1f}, OOS return {winner.return_pct:.2f}%, Sharpe {winner.sharpe:.2f}, режим {regime_result.regime}, regime confidence {regime_result.confidence:.0f}%." if winner else f"Ни одна стратегия не прошла v0.8.4 Quality Gate; режим {regime_result.regime}, regime confidence {regime_result.confidence:.0f}%."
         result = AnalysisResult(instrument_uid=instrument_uid, ticker=ticker, profile=profile, risk_profile=risk_profile, horizon=horizon, market_regime=regime_result.regime, recommendation=recommendation, confidence=confidence, score=winner.score if winner else 0.0, strategies=strategies, explanation=explanation, created_at=ordered[-1].timestamp.isoformat(), analysis_version=ANALYSIS_V08_VERSION)
