@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 from edward.services.analysis_service import AnalysisResult, Candle, StrategyResult
@@ -11,10 +11,10 @@ from edward.services.research_backtest_service_v08 import BacktestCostModel, Res
 from edward.services.robust_walk_forward_service_v08 import RobustWalkForwardResult
 from edward.services.robust_walk_forward_service_v084 import RobustWalkForwardServiceV084
 from edward.services.robustness_diagnostics_v083 import RobustnessDiagnosticsServiceV083
+from edward.services.strategy_router_v084 import StrategyRouterV084
 
 
 logger = logging.getLogger(__name__)
-# Public AnalysisResult contract remains v0.8.0; v0.8.4 is the implementation engine.
 ANALYSIS_V08_VERSION = "0.8.0"
 ANALYSIS_ENGINE_V084_VERSION = "0.8.4"
 
@@ -25,6 +25,9 @@ class AnalysisV08Diagnostics:
     regime: str
     robustness_by_strategy: dict[str, float]
     quality_gate_by_strategy: dict[str, QualityGateDiagnostics]
+    router_compatibility_by_strategy: dict[str, float] = field(default_factory=dict)
+    router_priority_by_strategy: dict[str, str] = field(default_factory=dict)
+    router_ordered_strategies: tuple[str, ...] = ()
 
 
 class AnalysisServiceV08:
@@ -38,10 +41,7 @@ class AnalysisServiceV08:
     def __init__(self, *, costs: BacktestCostModel | None = None) -> None:
         self.costs = costs or BacktestCostModel()
         self.last_diagnostics: AnalysisV08Diagnostics | None = None
-        logger.warning(
-            "[V084 EXEC] INIT AnalysisServiceV08 file=%s engine_version=%s contract_version=%s strategies=%s profiles=%s",
-            __file__, ANALYSIS_ENGINE_V084_VERSION, ANALYSIS_V08_VERSION, self.STRATEGIES, self.PROFILES,
-        )
+        logger.warning("[V084 EXEC] INIT AnalysisServiceV08 engine_version=%s contract_version=%s strategies=%s profiles=%s", ANALYSIS_ENGINE_V084_VERSION, ANALYSIS_V08_VERSION, self.STRATEGIES, self.PROFILES)
 
     @staticmethod
     def _grid(strategy: str, profile: str) -> list[dict[str, Any]]:
@@ -61,164 +61,55 @@ class AnalysisServiceV08:
 
     def _robust(self, candles: list[Candle], strategy: str, profile: str) -> RobustWalkForwardResult:
         cfg = self.PROFILES[profile]
-        logger.warning(
-            "[V084 EXEC] ENTER robust strategy=%s profile=%s candles=%d train=%d test=%d grid=%d max_dd=%s min_train_trades=%d",
-            strategy, profile, len(candles), cfg["train"], cfg["test"], len(self._grid(strategy, profile)),
-            cfg["max_drawdown_pct"], cfg["min_train_trades"],
-        )
+        logger.warning("[V084 EXEC] ENTER robust strategy=%s profile=%s candles=%d train=%d test=%d grid=%d max_dd=%s min_train_trades=%d", strategy, profile, len(candles), cfg["train"], cfg["test"], len(self._grid(strategy, profile)), cfg["max_drawdown_pct"], cfg["min_train_trades"])
         try:
-            result = RobustWalkForwardServiceV084.run(
-                candles=candles,
-                strategy=strategy,
-                parameter_grid=self._grid(strategy, profile),
-                signal_factory=self._signal_factory,
-                train_size=cfg["train"],
-                test_size=cfg["test"],
-                costs=self.costs,
-                max_drawdown_pct=cfg["max_drawdown_pct"],
-                min_train_trades=cfg["min_train_trades"],
-            )
+            result = RobustWalkForwardServiceV084.run(candles=candles, strategy=strategy, parameter_grid=self._grid(strategy, profile), signal_factory=self._signal_factory, train_size=cfg["train"], test_size=cfg["test"], costs=self.costs, max_drawdown_pct=cfg["max_drawdown_pct"], min_train_trades=cfg["min_train_trades"])
         except ValueError as exc:
             logger.warning("[V084 WF INVALID STRATEGY] strategy=%s profile=%s reason=%s", strategy, profile, exc)
             return RobustWalkForwardServiceV084._empty(strategy)
-
         diagnostics = RobustnessDiagnosticsServiceV083.evaluate(result)
-        logger.warning(
-            "[V084 ROBUSTNESS BREAKDOWN] strategy=%s return_score=%.2f return_contribution=%.2f risk_score=%.2f risk_contribution=%.2f sharpe_score=%.2f sharpe_contribution=%.2f stability_score=%.2f stability_contribution=%.2f performance_score=%.2f performance_contribution=%.2f total=%.2f",
-            strategy, diagnostics.return_consistency_score, diagnostics.return_contribution,
-            diagnostics.risk_consistency_score, diagnostics.risk_contribution,
-            diagnostics.sharpe_consistency_score, diagnostics.sharpe_contribution,
-            diagnostics.parameter_stability_score, diagnostics.parameter_stability_contribution,
-            diagnostics.performance_consistency_score, diagnostics.performance_consistency_contribution,
-            diagnostics.robustness_total,
-        )
-        logger.warning(
-            "[V084 ROBUSTNESS ACTIVITY] strategy=%s windows=%d active=%d inactive=%d active_pct=%.2f positive_active=%d positive_active_pct=%.2f positive_all_pct=%.2f",
-            strategy, diagnostics.total_windows, diagnostics.active_windows, diagnostics.inactive_windows,
-            diagnostics.active_pct, diagnostics.positive_active_windows,
-            diagnostics.positive_active_pct, diagnostics.positive_all_pct,
-        )
-        logger.warning(
-            "[V084 EXEC] EXIT robust strategy=%s windows=%d robustness=%.2f mean_oos_return=%.4f mean_oos_dd=%.4f mean_oos_sharpe=%.4f",
-            strategy, len(result.windows), result.robustness_score,
-            result.mean_test_return_pct, result.mean_test_drawdown_pct, result.mean_test_sharpe,
-        )
+        logger.warning("[V084 ROBUSTNESS BREAKDOWN] strategy=%s total=%.2f return_score=%.2f risk_score=%.2f sharpe_score=%.2f stability_score=%.2f performance_score=%.2f", strategy, diagnostics.robustness_total, diagnostics.return_consistency_score, diagnostics.risk_consistency_score, diagnostics.sharpe_consistency_score, diagnostics.parameter_stability_score, diagnostics.performance_consistency_score)
+        logger.warning("[V084 ROBUSTNESS ACTIVITY] strategy=%s windows=%d active=%d inactive=%d active_pct=%.2f positive_active=%d positive_active_pct=%.2f positive_all_pct=%.2f", strategy, diagnostics.total_windows, diagnostics.active_windows, diagnostics.inactive_windows, diagnostics.active_pct, diagnostics.positive_active_windows, diagnostics.positive_active_pct, diagnostics.positive_all_pct)
         return result
 
     @staticmethod
     def _quality(result: RobustWalkForwardResult, profile: str) -> bool:
         diagnostics = QualityGateDiagnosticsServiceV0822.evaluate(result, profile)
-        status = "PASS" if diagnostics.passed else "FAIL"
-        logger.warning("[QUALITY GATE] strategy=%s profile=%s result=%s", result.strategy, profile, status)
-        logger.warning(
-            "[V084 QG RESULT] strategy=%s profile=%s passed=%s failed_checks=%s reason=%s",
-            result.strategy, profile, diagnostics.passed, diagnostics.failed_checks, diagnostics.failure_reason or "none",
-        )
+        logger.warning("[V084 QG RESULT] strategy=%s profile=%s passed=%s failed_checks=%s reason=%s", result.strategy, profile, diagnostics.passed, diagnostics.failed_checks, diagnostics.failure_reason or "none")
         for check in diagnostics.checks:
-            logger.warning(
-                "[V084 QG CHECK] strategy=%s check=%s actual=%.6f threshold=%.6f passed=%s",
-                result.strategy, check.key, check.actual, check.threshold, check.passed,
-            )
+            logger.warning("[V084 QG CHECK] strategy=%s check=%s actual=%.6f threshold=%.6f passed=%s", result.strategy, check.key, check.actual, check.threshold, check.passed)
         return diagnostics.passed
 
     @staticmethod
     def _legacy_strategy_result(result: RobustWalkForwardResult, profile: str) -> StrategyResult:
         quality = AnalysisServiceV08._quality(result, profile)
-        return StrategyResult(
-            strategy=result.strategy,
-            parameters=dict(result.windows[-1].parameters) if result.windows else {},
-            return_pct=round(result.mean_test_return_pct, 8),
-            max_drawdown_pct=round(result.mean_test_drawdown_pct, 8),
-            sharpe=round(result.mean_test_sharpe, 8),
-            trades=sum(item.test_trades for item in result.windows),
-            stability=round(result.robustness_score, 8),
-            quality_gate=quality,
-            score=round(result.robustness_score, 8),
-            train_score=round(sum(item.train_score for item in result.windows) / len(result.windows), 8) if result.windows else 0.0,
-            test_score=round(result.mean_test_return_pct, 8),
-            wf_windows=len(result.windows),
-            positive_return_windows=result.positive_return_windows,
-            risk_ok_windows=result.risk_ok_windows,
-            positive_sharpe_windows=result.positive_sharpe_windows,
-            return_consistency=round(result.return_consistency_pct, 8),
-            risk_consistency=round(result.risk_consistency_pct, 8),
-            sharpe_consistency=round(result.sharpe_consistency_pct, 8),
-        )
+        return StrategyResult(strategy=result.strategy, parameters=dict(result.windows[-1].parameters) if result.windows else {}, return_pct=round(result.mean_test_return_pct, 8), max_drawdown_pct=round(result.mean_test_drawdown_pct, 8), sharpe=round(result.mean_test_sharpe, 8), trades=sum(item.test_trades for item in result.windows), stability=round(result.robustness_score, 8), quality_gate=quality, score=round(result.robustness_score, 8), train_score=round(sum(item.train_score for item in result.windows) / len(result.windows), 8) if result.windows else 0.0, test_score=round(result.mean_test_return_pct, 8), wf_windows=len(result.windows), positive_return_windows=result.positive_return_windows, risk_ok_windows=result.risk_ok_windows, positive_sharpe_windows=result.positive_sharpe_windows, return_consistency=round(result.return_consistency_pct, 8), risk_consistency=round(result.risk_consistency_pct, 8), sharpe_consistency=round(result.sharpe_consistency_pct, 8))
 
-    def analyze(
-        self,
-        *,
-        instrument_uid: str,
-        ticker: str,
-        candles: Iterable[Candle],
-        profile: str = "medium_term",
-        risk_profile: str = "balanced",
-        horizon: str = "medium",
-    ) -> AnalysisResult:
+    def analyze(self, *, instrument_uid: str, ticker: str, candles: Iterable[Candle], profile: str = "medium_term", risk_profile: str = "balanced", horizon: str = "medium") -> AnalysisResult:
         if profile not in self.PROFILES:
             raise ValueError(f"Unsupported profile: {profile}")
         ordered = sorted(list(candles), key=lambda item: item.timestamp)
         minimum = self.PROFILES[profile]["train"] + self.PROFILES[profile]["test"]
-        logger.warning(
-            "[V084 EXEC] ENTER AnalysisServiceV08.analyze file=%s ticker=%s instrument_uid=%s profile=%s candles=%d minimum=%d",
-            __file__, ticker, instrument_uid, profile, len(ordered), minimum,
-        )
         if len(ordered) < minimum:
-            logger.warning("[V084 TRACE] REJECT insufficient candles ticker=%s candles=%d minimum=%d", ticker, len(ordered), minimum)
             raise ValueError(f"Для v0.8-анализа требуется не менее {minimum} исторических свечей для профиля {profile}")
         regime_result = RegimeEngine.classify(ordered)
-        logger.warning("[V084 EXEC] REGIME ticker=%s regime=%s confidence=%.4f", ticker, regime_result.regime, regime_result.confidence)
+        router = StrategyRouterV084.route(regime_result, self.STRATEGIES, ticker=ticker)
+        logger.warning("[V084 ROUTER INTEGRATION] ticker=%s regime=%s confidence=%.2f ordered=%s", ticker, router.regime, router.regime_confidence, router.ordered_strategies)
         robust_results = [self._robust(ordered, strategy, profile) for strategy in self.STRATEGIES]
         strategies = [self._legacy_strategy_result(item, profile) for item in robust_results]
-        for item in strategies:
-            logger.warning(
-                "[V084 STRATEGY SUMMARY] ticker=%s strategy=%s qg=%s score=%.4f return=%.4f dd=%.4f sharpe=%.4f wf=%d positive=%d risk_ok=%d sharpe_positive=%d return_consistency=%.2f risk_consistency=%.2f sharpe_consistency=%.2f",
-                ticker, item.strategy, item.quality_gate, item.score, item.return_pct, item.max_drawdown_pct,
-                item.sharpe, item.wf_windows, item.positive_return_windows, item.risk_ok_windows,
-                item.positive_sharpe_windows, item.return_consistency, item.risk_consistency, item.sharpe_consistency,
-            )
         passed = [item for item in strategies if item.quality_gate]
-        winner = max(passed, key=lambda item: item.score) if passed else None
+        compatibility = {item.strategy: next((d.compatibility for d in router.decisions if d.strategy == item.strategy), 0.0) for item in strategies}
+        winner = max(passed, key=lambda item: (item.score, compatibility.get(item.strategy, 0.0))) if passed else None
         score_winner = max(strategies, key=lambda item: item.score) if strategies else None
         recommendation = winner.strategy if winner else None
         confidence = "Low"
         if winner:
             confidence = "High" if winner.stability >= 80.0 else "Medium" if winner.stability >= 65.0 else "Low"
-        self.last_diagnostics = AnalysisV08Diagnostics(
-            regime_confidence=regime_result.confidence,
-            regime=regime_result.regime,
-            robustness_by_strategy={item.strategy: item.robustness_score for item in robust_results},
-            quality_gate_by_strategy={item.strategy: QualityGateDiagnosticsServiceV0822.evaluate(item, profile) for item in robust_results},
-        )
-        logger.warning(
-            "[V084 STRATEGY SELECTION] ticker=%s profile=%s quality_gate_winner=%s max_score_strategy=%s quality_gate_pass_count=%d total_strategies=%d",
-            ticker, profile, winner.strategy if winner else None, score_winner.strategy if score_winner else None,
-            len(passed), len(strategies),
-        )
-        explanation = (
-            f"Рекомендована {winner.strategy}: v0.8.4 robustness {winner.score:.1f}, OOS return {winner.return_pct:.2f}%, Sharpe {winner.sharpe:.2f}, режим {regime_result.regime}, regime confidence {regime_result.confidence:.0f}%."
-            if winner
-            else f"Ни одна стратегия не прошла v0.8.4 Quality Gate; режим {regime_result.regime}, regime confidence {regime_result.confidence:.0f}%."
-        )
-        result = AnalysisResult(
-            instrument_uid=instrument_uid,
-            ticker=ticker,
-            profile=profile,
-            risk_profile=risk_profile,
-            horizon=horizon,
-            market_regime=regime_result.regime,
-            recommendation=recommendation,
-            confidence=confidence,
-            score=winner.score if winner else 0.0,
-            strategies=strategies,
-            explanation=explanation,
-            created_at=ordered[-1].timestamp.isoformat(),
-            analysis_version=ANALYSIS_V08_VERSION,
-        )
-        logger.warning(
-            "[V084 EXEC] EXIT AnalysisServiceV08.analyze ticker=%s recommendation=%s passed=%d/%d score=%.4f contract_version=%s engine_version=%s",
-            ticker, recommendation, len(passed), len(strategies), result.score, ANALYSIS_V08_VERSION, ANALYSIS_ENGINE_V084_VERSION,
-        )
+        self.last_diagnostics = AnalysisV08Diagnostics(regime_confidence=regime_result.confidence, regime=regime_result.regime, robustness_by_strategy={item.strategy: item.robustness_score for item in robust_results}, quality_gate_by_strategy={item.strategy: QualityGateDiagnosticsServiceV0822.evaluate(item, profile) for item in robust_results}, router_compatibility_by_strategy=compatibility, router_priority_by_strategy={item.strategy: item.priority for item in router.decisions}, router_ordered_strategies=router.ordered_strategies)
+        logger.warning("[V084 STRATEGY SELECTION] ticker=%s profile=%s quality_gate_winner=%s max_score_strategy=%s quality_gate_pass_count=%d total_strategies=%d router_order=%s", ticker, profile, winner.strategy if winner else None, score_winner.strategy if score_winner else None, len(passed), len(strategies), router.ordered_strategies)
+        explanation = f"Рекомендована {winner.strategy}: v0.8.4 robustness {winner.score:.1f}, OOS return {winner.return_pct:.2f}%, Sharpe {winner.sharpe:.2f}, режим {regime_result.regime}, regime confidence {regime_result.confidence:.0f}%." if winner else f"Ни одна стратегия не прошла v0.8.4 Quality Gate; режим {regime_result.regime}, regime confidence {regime_result.confidence:.0f}%."
+        result = AnalysisResult(instrument_uid=instrument_uid, ticker=ticker, profile=profile, risk_profile=risk_profile, horizon=horizon, market_regime=regime_result.regime, recommendation=recommendation, confidence=confidence, score=winner.score if winner else 0.0, strategies=strategies, explanation=explanation, created_at=ordered[-1].timestamp.isoformat(), analysis_version=ANALYSIS_V08_VERSION)
+        logger.warning("[V084 EXEC] EXIT AnalysisServiceV08.analyze ticker=%s recommendation=%s passed=%d/%d score=%.4f contract_version=%s engine_version=%s", ticker, recommendation, len(passed), len(strategies), result.score, ANALYSIS_V08_VERSION, ANALYSIS_ENGINE_V084_VERSION)
         return result
 
 
