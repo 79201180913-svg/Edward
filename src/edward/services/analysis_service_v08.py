@@ -7,12 +7,12 @@ from typing import Any, Iterable
 from edward.services.analysis_service import AnalysisResult, Candle, StrategyResult
 from edward.services.quality_gate_diagnostics_v0822 import QualityGateDiagnostics, QualityGateDiagnosticsServiceV0822
 from edward.services.regime_engine_v08 import RegimeEngine
+from edward.services.regime_conditioned_evidence_v084 import RegimeConditionedEvidence, RegimeConditionedEvidenceServiceV084
 from edward.services.research_backtest_service_v08 import BacktestCostModel, ResearchBacktestService
 from edward.services.robust_walk_forward_service_v08 import RobustWalkForwardResult
 from edward.services.robust_walk_forward_service_v084 import RobustWalkForwardServiceV084
 from edward.services.robustness_diagnostics_v083 import RobustnessDiagnosticsServiceV083
 from edward.services.strategy_router_v084 import StrategyRouterV084
-
 
 logger = logging.getLogger(__name__)
 ANALYSIS_V08_VERSION = "0.8.0"
@@ -28,6 +28,7 @@ class AnalysisV08Diagnostics:
     router_compatibility_by_strategy: dict[str, float] = field(default_factory=dict)
     router_priority_by_strategy: dict[str, str] = field(default_factory=dict)
     router_ordered_strategies: tuple[str, ...] = ()
+    regime_evidence_by_strategy: dict[str, RegimeConditionedEvidence] = field(default_factory=dict)
 
 
 class AnalysisServiceV08:
@@ -99,13 +100,29 @@ class AnalysisServiceV08:
         strategies = [self._legacy_strategy_result(item, profile) for item in robust_results]
         passed = [item for item in strategies if item.quality_gate]
         compatibility = {item.strategy: next((d.compatibility for d in router.decisions if d.strategy == item.strategy), 0.0) for item in strategies}
+        regime_evidence = {
+            item.strategy: RegimeConditionedEvidenceServiceV084.evaluate(
+                robust_results[index], ordered, regime_result.regime, regime_result.confidence, ticker=ticker
+            )
+            for index, item in enumerate(strategies)
+        }
         winner = max(passed, key=lambda item: (item.score, compatibility.get(item.strategy, 0.0))) if passed else None
         score_winner = max(strategies, key=lambda item: item.score) if strategies else None
         recommendation = winner.strategy if winner else None
         confidence = "Low"
         if winner:
             confidence = "High" if winner.stability >= 80.0 else "Medium" if winner.stability >= 65.0 else "Low"
-        self.last_diagnostics = AnalysisV08Diagnostics(regime_confidence=regime_result.confidence, regime=regime_result.regime, robustness_by_strategy={item.strategy: item.robustness_score for item in robust_results}, quality_gate_by_strategy={item.strategy: QualityGateDiagnosticsServiceV0822.evaluate(item, profile) for item in robust_results}, router_compatibility_by_strategy=compatibility, router_priority_by_strategy={item.strategy: item.priority for item in router.decisions}, router_ordered_strategies=router.ordered_strategies)
+        self.last_diagnostics = AnalysisV08Diagnostics(
+            regime_confidence=regime_result.confidence,
+            regime=regime_result.regime,
+            robustness_by_strategy={item.strategy: item.robustness_score for item in robust_results},
+            quality_gate_by_strategy={item.strategy: QualityGateDiagnosticsServiceV0822.evaluate(item, profile) for item in robust_results},
+            router_compatibility_by_strategy=compatibility,
+            router_priority_by_strategy={item.strategy: item.priority for item in router.decisions},
+            router_ordered_strategies=router.ordered_strategies,
+            regime_evidence_by_strategy=regime_evidence,
+        )
+        logger.warning("[V084 REGIME EVIDENCE INTEGRATION] ticker=%s current_regime=%s evidence_scores=%s", ticker, regime_result.regime, {key: value.evidence_score for key, value in regime_evidence.items()})
         logger.warning("[V084 STRATEGY SELECTION] ticker=%s profile=%s quality_gate_winner=%s max_score_strategy=%s quality_gate_pass_count=%d total_strategies=%d router_order=%s", ticker, profile, winner.strategy if winner else None, score_winner.strategy if score_winner else None, len(passed), len(strategies), router.ordered_strategies)
         explanation = f"Рекомендована {winner.strategy}: v0.8.4 robustness {winner.score:.1f}, OOS return {winner.return_pct:.2f}%, Sharpe {winner.sharpe:.2f}, режим {regime_result.regime}, regime confidence {regime_result.confidence:.0f}%." if winner else f"Ни одна стратегия не прошла v0.8.4 Quality Gate; режим {regime_result.regime}, regime confidence {regime_result.confidence:.0f}%."
         result = AnalysisResult(instrument_uid=instrument_uid, ticker=ticker, profile=profile, risk_profile=risk_profile, horizon=horizon, market_regime=regime_result.regime, recommendation=recommendation, confidence=confidence, score=winner.score if winner else 0.0, strategies=strategies, explanation=explanation, created_at=ordered[-1].timestamp.isoformat(), analysis_version=ANALYSIS_V08_VERSION)
