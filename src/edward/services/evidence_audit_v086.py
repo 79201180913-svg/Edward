@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from statistics import mean, median
+from statistics import mean
+from typing import Sequence
 
+from edward.services.analysis_service import Candle
 from edward.services.conditional_discovery_service_v086 import ConditionalDiscoveryCell, ConditionalDiscoveryResult
+from edward.services.robust_walk_forward_service_v08 import RobustWalkForwardResult
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,8 +34,22 @@ class EvidenceAudit:
         return self.positive_periods / total * 100.0 if total else 0.0
 
 
+@dataclass(frozen=True, slots=True)
+class WFAwareEvidenceAudit:
+    hypothesis: str
+    regime: str
+    volatility_bucket: str
+    direction: str
+    horizon: int
+    wf_windows: int
+    positive_wf_windows: int
+    negative_wf_windows: int
+    wf_persistence_pct: float
+    observations: int
+
+
 class EvidenceAuditServiceV086:
-    """Adds evidence-strength diagnostics without changing discovery or QG."""
+    """Research-only evidence diagnostics; never changes discovery, WF or QG."""
 
     @staticmethod
     def _cell_values(result: ConditionalDiscoveryResult, cell: ConditionalDiscoveryCell):
@@ -90,5 +107,66 @@ class EvidenceAuditServiceV086:
                 ))
         return tuple(audits)
 
+    @staticmethod
+    def _timestamp_index(candles: Sequence[Candle]) -> dict[object, int]:
+        return {candle.timestamp: index for index, candle in enumerate(candles)}
 
-__all__ = ["EvidenceAudit", "EvidenceAuditServiceV086"]
+    @classmethod
+    def audit_wf(
+        cls,
+        result: ConditionalDiscoveryResult,
+        wf_result: RobustWalkForwardResult,
+        candles: Sequence[Candle],
+    ) -> tuple[WFAwareEvidenceAudit, ...]:
+        """Measure conditional evidence recurrence across actual WF test windows.
+
+        An event counts only when it occurs inside a WF test interval and its
+        forward-return horizon remains fully inside that same test interval. This
+        prevents an event from borrowing observations from a later WF window.
+        """
+        ordered = tuple(sorted(candles, key=lambda item: item.timestamp))
+        timestamp_to_index = cls._timestamp_index(ordered)
+        output: list[WFAwareEvidenceAudit] = []
+        for evidence in result.evidence:
+            for cell in evidence.cells:
+                positive = negative = observations = 0
+                for window in wf_result.windows:
+                    start = timestamp_to_index.get(window.test_start)
+                    end = timestamp_to_index.get(window.test_end)
+                    if start is None or end is None:
+                        continue
+                    values = []
+                    for item in result.observations:
+                        if item.hypothesis != cell.hypothesis or item.regime != cell.regime or item.volatility_bucket != cell.volatility_bucket or item.direction != cell.direction or not (start <= item.index <= end):
+                            continue
+                        horizon_end = item.index + cell.horizon
+                        if horizon_end > end or horizon_end >= len(ordered):
+                            continue
+                        value = item.forward_return(cell.horizon)
+                        if value is not None:
+                            values.append(value)
+                    if not values:
+                        continue
+                    observations += len(values)
+                    window_mean = mean(values)
+                    if window_mean > 0:
+                        positive += 1
+                    else:
+                        negative += 1
+                total = positive + negative
+                output.append(WFAwareEvidenceAudit(
+                    hypothesis=cell.hypothesis,
+                    regime=cell.regime,
+                    volatility_bucket=cell.volatility_bucket,
+                    direction=cell.direction,
+                    horizon=cell.horizon,
+                    wf_windows=total,
+                    positive_wf_windows=positive,
+                    negative_wf_windows=negative,
+                    wf_persistence_pct=positive / total * 100.0 if total else 0.0,
+                    observations=observations,
+                ))
+        return tuple(output)
+
+
+__all__ = ["EvidenceAudit", "WFAwareEvidenceAudit", "EvidenceAuditServiceV086"]
