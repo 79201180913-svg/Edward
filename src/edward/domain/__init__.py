@@ -19,6 +19,12 @@ from .models import (
     OrderType,
     Position,
 )
+from .trading_path import (
+    TradingPathCandidate,
+    TradingPathEvidence,
+    TradingPathRule,
+    TradingPathStatus,
+)
 
 __all__ = [
     "ExecutionDecision",
@@ -38,4 +44,8 @@ __all__ = [
     "OrderStatus",
     "OrderType",
     "Position",
+    "TradingPathCandidate",
+    "TradingPathEvidence",
+    "TradingPathRule",
+    "TradingPathStatus",
 ]

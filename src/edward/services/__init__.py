@@ -7,27 +7,16 @@ from .execution_confirmation_service import ControlledExecutionService, PreTrade
 from .execution_center_controller_v06 import ExecutionCenterController, ExecutionCenterState
 from .execution_intake_service_v06 import ExecutionIntakeResult, ExecutionIntakeService
 from .execution_bridge_service_v06 import ExecutionBridgeService, ExecutionQueueItem
+from .event_overlap_audit_v088 import EventOverlapAuditV088, EventOverlapAuditResultV088, EventOverlapPairV088
 
 __all__ = [
-    "AccountService",
-    "BalanceService",
-    "InstrumentService",
-    "MarketService",
-    "PortfolioService",
-    "ControlledExecutionService",
-    "PreTradeValidationResult",
-    "PreTradeValidator",
-    "ExecutionCenterController",
-    "ExecutionCenterState",
-    "ExecutionIntakeResult",
-    "ExecutionIntakeService",
-    "ExecutionBridgeService",
-    "ExecutionQueueItem",
+    "AccountService", "BalanceService", "InstrumentService", "MarketService", "PortfolioService",
+    "ControlledExecutionService", "PreTradeValidationResult", "PreTradeValidator",
+    "ExecutionCenterController", "ExecutionCenterState", "ExecutionIntakeResult", "ExecutionIntakeService",
+    "ExecutionBridgeService", "ExecutionQueueItem", "EventOverlapAuditV088", "EventOverlapAuditResultV088",
+    "EventOverlapPairV088",
 ]
 
-# Keep the existing AnalysisService API intact while reusing persisted WF results
-# whenever callers provide the application's SQLiteStore. Unit-test instances
-# without a store keep the original in-memory behavior.
 from .analysis_service import AnalysisService as _AnalysisService
 from .cached_analysis_service import CachedAnalysisService as _CachedAnalysisService
 
@@ -57,6 +46,4 @@ def _cached_save(self, result):
 _AnalysisService.analyze = _cached_analyze
 _AnalysisService.save = _cached_save
 
-# v0.8.1 uses an isolated margin-based instrument-risk calibration.
-# Importing this module installs the policy on MultiFactorAnalysisServiceV081.
 from . import multifactor_risk_calibration_v081 as _multifactor_risk_calibration_v081  # noqa: F401,E402

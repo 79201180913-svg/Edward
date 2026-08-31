@@ -6,6 +6,7 @@ from typing import Iterable, Mapping, Sequence
 
 from edward.services.analysis_service import AnalysisResult, Candle
 from edward.services.analysis_service_v08 import AnalysisServiceV08
+from edward.services.analysis_trading_path_adapter_v088 import AnalysisTradingPathAdapterV088, AnalysisTradingPathResearchV088
 from edward.services.confidence_calibration_v08 import calculate_confidence
 from edward.services.confidence_service_v08 import ConfidenceResult
 from edward.services.expected_value_engine_v08 import ExpectedValueEngine, ExpectedValueResult
@@ -20,7 +21,6 @@ from edward.services.research_backtest_service_v08 import ResearchBacktestServic
 ANALYSIS_PIPELINE_V08_VERSION = "0.8.0"
 logger = logging.getLogger(__name__)
 
-
 @dataclass(frozen=True, slots=True)
 class AnalysisPipelineV08Result:
     analysis: AnalysisResult
@@ -32,29 +32,20 @@ class AnalysisPipelineV08Result:
     evidence_strategy: str | None = None
     portfolio_context_available: bool = False
     confidence: ConfidenceResult | None = None
+    trading_path_research: AnalysisTradingPathResearchV088 | None = None
     version: str = ANALYSIS_PIPELINE_V08_VERSION
-
 
 class AnalysisPipelineServiceV08:
     """Compose v0.8 analytics while preserving the legacy downstream result contract."""
-
     def __init__(self, *, analysis_service: AnalysisServiceV08 | None = None) -> None:
         self.analysis_service = analysis_service or AnalysisServiceV08()
         self.forecast_quality = ForecastQualityAdapterV08()
-        logger.warning(
-            "[V083 EXEC] INIT AnalysisPipelineServiceV08 file=%s analysis_service=%s version=%s",
-            __file__,
-            type(self.analysis_service).__name__,
-            ANALYSIS_PIPELINE_V08_VERSION,
-        )
+        self.trading_path_adapter = AnalysisTradingPathAdapterV088(self.analysis_service)
+        logger.warning("[V083 EXEC] INIT AnalysisPipelineServiceV08 file=%s analysis_service=%s version=%s", __file__, type(self.analysis_service).__name__, ANALYSIS_PIPELINE_V08_VERSION)
 
     @staticmethod
     def _returns(candles: Sequence[Candle]) -> list[float]:
-        return [
-            float(current.close) / float(previous.close) - 1.0
-            for previous, current in zip(candles, candles[1:])
-            if float(previous.close) > 0 and float(current.close) > 0
-        ]
+        return [float(current.close) / float(previous.close) - 1.0 for previous, current in zip(candles, candles[1:]) if float(previous.close) > 0 and float(current.close) > 0]
 
     @staticmethod
     def _empty_portfolio() -> PortfolioImpactResult:
@@ -64,62 +55,25 @@ class AnalysisPipelineServiceV08:
     def _portfolio_confidence(impact: PortfolioImpactResult, available: bool) -> float:
         if not available:
             return 0.0
-        return max(
-            0.0,
-            min(
-                100.0,
-                70.0
-                + impact.diversification_benefit_pct * 5.0
-                - max(0.0, impact.marginal_risk_pct) * 5.0,
-            ),
-        )
+        return max(0.0, min(100.0, 70.0 + impact.diversification_benefit_pct * 5.0 - max(0.0, impact.marginal_risk_pct) * 5.0))
 
-    def analyze(
-        self,
-        *,
-        instrument_uid: str,
-        ticker: str,
-        candles: Iterable[Candle],
-        profile: str = "medium_term",
-        risk_profile: str = "balanced",
-        horizon: str = "medium",
-        portfolio_weights: Mapping[str, float] | None = None,
-        portfolio_returns: Mapping[str, Sequence[float]] | None = None,
-        candidate_weight: float = 0.0,
-        concentration_penalty_pct: float = 0.0,
-    ) -> AnalysisPipelineV08Result:
+    def analyze(self, *, instrument_uid: str, ticker: str, candles: Iterable[Candle], profile: str = "medium_term", risk_profile: str = "balanced", horizon: str = "medium", portfolio_weights: Mapping[str, float] | None = None, portfolio_returns: Mapping[str, Sequence[float]] | None = None, candidate_weight: float = 0.0, concentration_penalty_pct: float = 0.0) -> AnalysisPipelineV08Result:
         ordered = sorted(list(candles), key=lambda item: item.timestamp)
-        logger.warning(
-            "[V083 EXEC] ENTER AnalysisPipelineServiceV08.analyze file=%s ticker=%s instrument_uid=%s profile=%s candles=%d risk_profile=%s horizon=%s",
-            __file__, ticker, instrument_uid, profile, len(ordered), risk_profile, horizon,
-        )
-        logger.warning(
-            "[V083 EXEC] AnalysisPipelineServiceV08 analysis_service=%s module=%s version=%s",
-            type(self.analysis_service).__name__,
-            type(self.analysis_service).__module__,
-            getattr(self.analysis_service, "ANALYSIS_V08_VERSION", "unknown"),
-        )
-        analysis = self.analysis_service.analyze(
-            instrument_uid=instrument_uid,
-            ticker=ticker,
-            candles=ordered,
-            profile=profile,
-            risk_profile=risk_profile,
-            horizon=horizon,
-        )
+        logger.warning("[V083 EXEC] ENTER AnalysisPipelineServiceV08.analyze file=%s ticker=%s instrument_uid=%s profile=%s candles=%d risk_profile=%s horizon=%s", __file__, ticker, instrument_uid, profile, len(ordered), risk_profile, horizon)
+        logger.warning("[V083 EXEC] AnalysisPipelineServiceV08 analysis_service=%s module=%s version=%s", type(self.analysis_service).__name__, type(self.analysis_service).__module__, getattr(self.analysis_service, "ANALYSIS_V08_VERSION", "unknown"))
+        analysis = self.analysis_service.analyze(instrument_uid=instrument_uid, ticker=ticker, candles=ordered, profile=profile, risk_profile=risk_profile, horizon=horizon)
         analysis = replace(analysis, analysis_version=ANALYSIS_PIPELINE_V08_VERSION)
-        logger.warning(
-            "[V083 EXEC] EXIT AnalysisServiceV08 ticker=%s strategies=%d recommendation=%s score=%.4f",
-            ticker, len(analysis.strategies), analysis.recommendation, analysis.score,
-        )
+        logger.warning("[V083 EXEC] EXIT AnalysisServiceV08 ticker=%s strategies=%d recommendation=%s score=%.4f", ticker, len(analysis.strategies), analysis.recommendation, analysis.score)
+
+        trading_path_research = None
+        try:
+            trading_path_research = self.trading_path_adapter.research_from_analysis(analysis=analysis, instrument_uid=instrument_uid, ticker=ticker, candles=ordered)
+        except Exception:
+            logger.exception("[V088 TRADING PATH ADAPTER] ticker=%s research_failed", ticker)
+
         evidence_strategy_result = max(analysis.strategies, key=lambda item: item.score) if analysis.strategies else None
         evidence_strategy = evidence_strategy_result.strategy if evidence_strategy_result else None
-        logger.warning(
-            "[V083 EXEC] evidence_strategy ticker=%s strategy=%s quality_gate=%s stability=%s",
-            ticker, evidence_strategy,
-            evidence_strategy_result.quality_gate if evidence_strategy_result else None,
-            evidence_strategy_result.stability if evidence_strategy_result else None,
-        )
+        logger.warning("[V083 EXEC] evidence_strategy ticker=%s strategy=%s quality_gate=%s stability=%s", ticker, evidence_strategy, evidence_strategy_result.quality_gate if evidence_strategy_result else None, evidence_strategy_result.stability if evidence_strategy_result else None)
         raw_regime = RegimeEngine.classify(ordered)
         regime_confidence = cap_regime_confidence(raw_regime.confidence)
         forecast_quality_score = None
@@ -131,24 +85,12 @@ class AnalysisPipelineServiceV08:
         if evidence_strategy_result is None:
             ev = ExpectedValueEngine.from_returns(())
             impact = self._empty_portfolio()
-            confidence = calculate_confidence(
-                strategy_quality=0.0, forecast_quality=forecast_quality_score or 0.0,
-                regime_confidence=regime_confidence, portfolio_confidence=0.0, observations=0,
-            )
-            opportunity = OpportunityEngineV08.evaluate(
-                analysis=analysis, candles=ordered, strategy_result=None, expected_value=ev,
-                portfolio_impact=impact, confidence_score=confidence.overall_confidence,
-            )
+            confidence = calculate_confidence(strategy_quality=0.0, forecast_quality=forecast_quality_score or 0.0, regime_confidence=regime_confidence, portfolio_confidence=0.0, observations=0)
+            opportunity = OpportunityEngineV08.evaluate(analysis=analysis, candles=ordered, strategy_result=None, expected_value=ev, portfolio_impact=impact, confidence_score=confidence.overall_confidence)
             logger.warning("[V083 EXEC] EXIT AnalysisPipelineServiceV08 ticker=%s no_evidence_strategy", ticker)
-            return AnalysisPipelineV08Result(
-                analysis, opportunity, ev, impact, forecast_quality_score,
-                regime_confidence, None, False, confidence,
-            )
+            return AnalysisPipelineV08Result(analysis, opportunity, ev, impact, forecast_quality_score, regime_confidence, None, False, confidence, trading_path_research)
 
-        backtest = ResearchBacktestService.run_simple_strategy(
-            candles=ordered, strategy=evidence_strategy_result.strategy,
-            parameters=evidence_strategy_result.parameters, costs=self.analysis_service.costs,
-        )
+        backtest = ResearchBacktestService.run_simple_strategy(candles=ordered, strategy=evidence_strategy_result.strategy, parameters=evidence_strategy_result.parameters, costs=self.analysis_service.costs)
         ev = ExpectedValueEngine.from_trades(backtest.trades_detail)
         weights = dict(portfolio_weights or {})
         asset_returns = dict(portfolio_returns or {})
@@ -156,39 +98,13 @@ class AnalysisPipelineServiceV08:
         candidate_id = instrument_uid
         if candidate_id not in asset_returns:
             asset_returns[candidate_id] = self._returns(ordered)
-        impact = (
-            PortfolioImpactService.calculate(
-                weights=weights, asset_returns=asset_returns, candidate_id=candidate_id,
-                candidate_weight=candidate_weight, candidate_expected_return_pct=ev.expected_value_pct,
-                concentration_penalty_pct=concentration_penalty_pct,
-            )
-            if portfolio_context_available and (candidate_weight > 0 or weights)
-            else self._empty_portfolio()
-        )
+        impact = PortfolioImpactService.calculate(weights=weights, asset_returns=asset_returns, candidate_id=candidate_id, candidate_weight=candidate_weight, candidate_expected_return_pct=ev.expected_value_pct, concentration_penalty_pct=concentration_penalty_pct) if portfolio_context_available and (candidate_weight > 0 or weights) else self._empty_portfolio()
         portfolio_confidence = self._portfolio_confidence(impact, portfolio_context_available)
         edge_reliability = ev.edge_reliability_pct if ev.available and ev.edge_reliability_pct is not None else 0.0
         strategy_confidence_component = min(evidence_strategy_result.stability, edge_reliability)
-        confidence = calculate_confidence(
-            strategy_quality=strategy_confidence_component, forecast_quality=forecast_quality_score or 0.0,
-            regime_confidence=regime_confidence, portfolio_confidence=portfolio_confidence,
-            observations=ev.observations if ev.available else 0,
-            uncertainty_width_pct=ev.uncertainty_width_pct if ev.available else None,
-        )
-        opportunity = OpportunityEngineV08.evaluate(
-            analysis=analysis, candles=ordered, strategy_result=evidence_strategy_result,
-            expected_value=ev, portfolio_impact=impact,
-            robustness_score=evidence_strategy_result.stability,
-            forecast_quality_score=forecast_quality_score,
-            confidence_score=confidence.overall_confidence,
-        )
-        logger.warning(
-            "[V083 EXEC] EXIT AnalysisPipelineServiceV08 ticker=%s evidence_strategy=%s opportunity=%.4f confidence=%.4f",
-            ticker, evidence_strategy, float(opportunity.score), confidence.overall_confidence,
-        )
-        return AnalysisPipelineV08Result(
-            analysis, opportunity, ev, impact, forecast_quality_score,
-            regime_confidence, evidence_strategy, portfolio_context_available, confidence,
-        )
-
+        confidence = calculate_confidence(strategy_quality=strategy_confidence_component, forecast_quality=forecast_quality_score or 0.0, regime_confidence=regime_confidence, portfolio_confidence=portfolio_confidence, observations=ev.observations if ev.available else 0, uncertainty_width_pct=ev.uncertainty_width_pct if ev.available else None)
+        opportunity = OpportunityEngineV08.evaluate(analysis=analysis, candles=ordered, strategy_result=evidence_strategy_result, expected_value=ev, portfolio_impact=impact, robustness_score=evidence_strategy_result.stability, forecast_quality_score=forecast_quality_score, confidence_score=confidence.overall_confidence)
+        logger.warning("[V083 EXEC] EXIT AnalysisPipelineServiceV08 ticker=%s evidence_strategy=%s opportunity=%.4f confidence=%.4f", ticker, evidence_strategy, float(opportunity.score), confidence.overall_confidence)
+        return AnalysisPipelineV08Result(analysis, opportunity, ev, impact, forecast_quality_score, regime_confidence, evidence_strategy, portfolio_context_available, confidence, trading_path_research)
 
 __all__ = ["ANALYSIS_PIPELINE_V08_VERSION", "AnalysisPipelineV08Result", "AnalysisPipelineServiceV08"]
