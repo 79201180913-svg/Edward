@@ -23,6 +23,7 @@ class MarketContextRuntimeServiceV011:
         *,
         fetcher,
         indicatives_fetcher=None,
+        find_instrument_fetcher=None,
         benchmark_resolver: type[MarketBenchmarkResolverV011] = MarketBenchmarkResolverV011,
         benchmark_instrument_resolver: BenchmarkInstrumentResolverV011 | None = None,
         context_builder: MarketRegimeContextBuilderV011 | None = None,
@@ -31,12 +32,17 @@ class MarketContextRuntimeServiceV011:
     ) -> None:
         self.loader = MarketDataLoaderV011(fetcher)
         self.benchmark_resolver = benchmark_resolver
+        client = getattr(fetcher, "__self__", None)
         if indicatives_fetcher is None:
-            client = getattr(fetcher, "__self__", None)
             indicatives_fetcher = getattr(client, "get_indicatives", None)
         if indicatives_fetcher is None:
             raise ValueError("Market context requires an Indicatives fetcher")
-        self.benchmark_instrument_resolver = benchmark_instrument_resolver or BenchmarkInstrumentResolverV011(indicatives_fetcher)
+        if find_instrument_fetcher is None:
+            find_instrument_fetcher = getattr(client, "find_instrument", None)
+        self.benchmark_instrument_resolver = benchmark_instrument_resolver or BenchmarkInstrumentResolverV011(
+            indicatives_fetcher,
+            find_instrument_fetcher,
+        )
         self.context_builder = context_builder or MarketRegimeContextBuilderV011()
         self.relative_strength_analyzer = relative_strength_analyzer or RelativeStrengthAnalyzerV011()
         self.volatility_analyzer = volatility_analyzer or MarketVolatilityContextAnalyzerV011()
