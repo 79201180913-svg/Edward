@@ -83,7 +83,8 @@ class LiveOpportunitySearchService(OpportunitySearchService):
 
     @classmethod
     def _from_canonical_result(cls, instrument: Any, analysis_result: Any, quantity: float = 0.0) -> OpportunitySearchResult:
-        consumed = OpportunityAnalysisConsumerV010.from_result(analysis_result)
+        canonical_result = getattr(analysis_result, "pipeline_result", analysis_result)
+        consumed = OpportunityAnalysisConsumerV010.from_result(canonical_result)
         analysis = consumed.analysis
         strategy_name = consumed.evidence_strategy
         strategy_score = 0.0
