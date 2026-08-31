@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from edward.services.opportunity_search_service import OpportunitySearchResult
 from edward.services.opportunity_search_service_live_v04 import LiveOpportunitySearchService
 
@@ -20,9 +22,22 @@ def _result(ticker: str, decision: str) -> OpportunitySearchResult:
     )
 
 
+def _prepare_scan_service(service: LiveOpportunitySearchService) -> None:
+    service.analysis = None
+    service.analysis_pipeline = SimpleNamespace(analyze=lambda **_kwargs: object())
+
+    class FakeClient:
+        def get_candles(self, *_args, **_kwargs):
+            return {"candles": [{"open": "1", "high": "1", "low": "1", "close": "1", "volume": 1} for _ in range(150)]}
+
+    service.client = FakeClient()
+    service._forecast_quality_gate = lambda *_args, **_kwargs: (True, "PASS")
+
+
 def test_scan_emits_each_result_immediately_before_completion():
     service = LiveOpportunitySearchService.__new__(LiveOpportunitySearchService)
     service._active_account = lambda: None
+    _prepare_scan_service(service)
 
     class FakeCatalog:
         def list(self, *_args, **_kwargs):
@@ -50,6 +65,7 @@ def test_scan_emits_each_result_immediately_before_completion():
 def test_result_callback_failure_does_not_break_scan():
     service = LiveOpportunitySearchService.__new__(LiveOpportunitySearchService)
     service._active_account = lambda: None
+    _prepare_scan_service(service)
 
     class FakeCatalog:
         def list(self, *_args, **_kwargs):
