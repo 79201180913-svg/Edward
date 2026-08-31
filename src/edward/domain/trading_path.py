@@ -13,12 +13,10 @@ class TradingPathStatus(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class TradingPathRule:
-    """Explicit, testable rule contract produced from research evidence.
+    """Explicit, testable rule contract produced from research evidence."""
 
-    This contract is deliberately descriptive in P0.1. It does not execute orders,
-    choose parameters, bypass Walk Forward, or change Quality Gate thresholds.
-    """
-
+    instrument_uid: str
+    ticker: str
     hypothesis: str
     regime: str
     volatility_bucket: str
