@@ -8,14 +8,27 @@ from typing import Iterable
 class TradingCostModelV088:
     commission_pct_per_side: float = 0.0
     slippage_pct_per_side: float = 0.0
+    spread_pct: float = 0.0
 
     def __post_init__(self) -> None:
-        if self.commission_pct_per_side < 0 or self.slippage_pct_per_side < 0:
+        if self.commission_pct_per_side < 0 or self.slippage_pct_per_side < 0 or self.spread_pct < 0:
             raise ValueError("Trading costs cannot be negative")
 
     @property
+    def one_side_pct(self) -> float:
+        return self.commission_pct_per_side + self.spread_pct / 2.0 + self.slippage_pct_per_side
+
+    @property
     def round_trip_cost_pct(self) -> float:
-        return 2.0 * (self.commission_pct_per_side + self.slippage_pct_per_side)
+        return self.one_side_pct * 2.0
+
+    @classmethod
+    def from_legacy(cls, cost_model: object) -> "TradingCostModelV088":
+        return cls(
+            commission_pct_per_side=float(getattr(cost_model, "commission_pct", 0.0)),
+            slippage_pct_per_side=float(getattr(cost_model, "slippage_pct", 0.0)),
+            spread_pct=float(getattr(cost_model, "spread_pct", 0.0)),
+        )
 
 
 @dataclass(frozen=True, slots=True)
