@@ -32,7 +32,8 @@ class AnalysisTradingPathAdapterV088:
         discovery = diagnostics.conditional_discovery
         candidates = TradingPathCandidateServiceV088.promote(discovery, instrument_uid=instrument_uid, ticker=ticker)
         ranked = TradingPathRankingServiceV088.rank_and_deduplicate(candidates)
-        cost_model = getattr(self.analysis_service, "costs", None) or TradingCostModelV088()
+        legacy_cost_model = getattr(self.analysis_service, "costs", None)
+        cost_model = TradingCostModelV088.from_legacy(legacy_cost_model) if legacy_cost_model is not None else TradingCostModelV088()
         validation_results = tuple(
             TradingPathValidationPipelineV088.run(item.candidate, candles, discovery.observations, cost_model)
             for item in ranked
