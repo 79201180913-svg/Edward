@@ -13,4 +13,6 @@ env/
 runtime/*.log
 runtime/*.pid
 data/trading_history.xlsx
+data/edward.db
+logs/
 src/edward.egg-info/
