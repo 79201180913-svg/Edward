@@ -18,6 +18,7 @@ class TradingPathPromotionPolicyV088:
     require_temporal_stability: bool = True
     max_event_overlap_ratio: float = 0.0
     max_holding_overlap_ratio: float = 0.0
+    require_multiple_testing: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,7 +31,7 @@ class TradingPathPromotionGateV088:
     """Conservative gate from validated research evidence to promotion."""
 
     @staticmethod
-    def evaluate(result, policy: TradingPathPromotionPolicyV088 | None = None, overlap=None) -> TradingPathPromotionResultV088:
+    def evaluate(result, policy: TradingPathPromotionPolicyV088 | None = None, overlap=None, multiple_testing=None) -> TradingPathPromotionResultV088:
         policy = policy or TradingPathPromotionPolicyV088()
         reasons: list[str] = []
         evidence = result.statistical_evidence
@@ -54,13 +55,17 @@ class TradingPathPromotionGateV088:
             if overlap.max_holding_overlap_ratio > policy.max_holding_overlap_ratio:
                 reasons.append("HOLDING_OVERLAP_TOO_HIGH")
 
-        # Multiple-testing control remains an explicit hard requirement until
-        # its evidence object is supplied by the dedicated audit layer.
-        reasons.append("MULTIPLE_TESTING_AUDIT_REQUIRED")
+        if policy.require_multiple_testing:
+            if multiple_testing is None:
+                reasons.append("MULTIPLE_TESTING_AUDIT_REQUIRED")
+            elif not multiple_testing.passes:
+                reasons.append("MULTIPLE_TESTING_FAILED")
 
         status = TradingPathPromotionStatusV088.RESEARCH_ONLY
         if "LOW_SAMPLE" in reasons or "NON_POSITIVE_NET_RETURN" in reasons or "CI95_NOT_ABOVE_ZERO" in reasons:
             status = TradingPathPromotionStatusV088.REJECTED
+        elif not reasons:
+            status = TradingPathPromotionStatusV088.PROMOTED
         return TradingPathPromotionResultV088(status=status, reasons=tuple(dict.fromkeys(reasons)))
 
 
