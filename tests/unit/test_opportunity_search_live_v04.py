@@ -25,10 +25,23 @@ def _result(ticker: str, decision: str) -> OpportunitySearchResult:
 def _prepare_scan_service(service: LiveOpportunitySearchService) -> None:
     service.analysis = None
     service.analysis_pipeline = SimpleNamespace(analyze=lambda **_kwargs: object())
+    service._provided_candles = {}
 
     class FakeClient:
         def get_candles(self, *_args, **_kwargs):
-            return {"candles": [{"open": "1", "high": "1", "low": "1", "close": "1", "volume": 1} for _ in range(150)]}
+            return {
+                "candles": [
+                    {
+                        "time": f"2025-01-{(index % 28) + 1:02d}T00:00:00Z",
+                        "open": "1",
+                        "high": "1",
+                        "low": "1",
+                        "close": "1",
+                        "volume": 1,
+                    }
+                    for index in range(150)
+                ]
+            }
 
     service.client = FakeClient()
     service._forecast_quality_gate = lambda *_args, **_kwargs: (True, "PASS")
