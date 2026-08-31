@@ -16,6 +16,8 @@ class TradingPathPromotionPolicyV088:
     min_mean_return_pct: float = 0.0
     require_ci95_above_zero: bool = True
     require_temporal_stability: bool = True
+    max_event_overlap_ratio: float = 0.0
+    max_holding_overlap_ratio: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,7 +30,7 @@ class TradingPathPromotionGateV088:
     """Conservative gate from validated research evidence to promotion."""
 
     @staticmethod
-    def evaluate(result, policy: TradingPathPromotionPolicyV088 | None = None) -> TradingPathPromotionResultV088:
+    def evaluate(result, policy: TradingPathPromotionPolicyV088 | None = None, overlap=None) -> TradingPathPromotionResultV088:
         policy = policy or TradingPathPromotionPolicyV088()
         reasons: list[str] = []
         evidence = result.statistical_evidence
@@ -44,9 +46,17 @@ class TradingPathPromotionGateV088:
         if policy.require_temporal_stability and not temporal_stable:
             reasons.append("TEMPORAL_EVIDENCE_REQUIRED")
 
-        # Overlap and multiple-testing controls are intentionally still hard
-        # requirements; they are not inferred from the current sample.
-        reasons.extend(("OVERLAP_AUDIT_REQUIRED", "MULTIPLE_TESTING_AUDIT_REQUIRED"))
+        if overlap is None:
+            reasons.append("OVERLAP_AUDIT_REQUIRED")
+        else:
+            if overlap.max_event_overlap_ratio > policy.max_event_overlap_ratio:
+                reasons.append("EVENT_OVERLAP_TOO_HIGH")
+            if overlap.max_holding_overlap_ratio > policy.max_holding_overlap_ratio:
+                reasons.append("HOLDING_OVERLAP_TOO_HIGH")
+
+        # Multiple-testing control remains an explicit hard requirement until
+        # its evidence object is supplied by the dedicated audit layer.
+        reasons.append("MULTIPLE_TESTING_AUDIT_REQUIRED")
 
         status = TradingPathPromotionStatusV088.RESEARCH_ONLY
         if "LOW_SAMPLE" in reasons or "NON_POSITIVE_NET_RETURN" in reasons or "CI95_NOT_ABOVE_ZERO" in reasons:
