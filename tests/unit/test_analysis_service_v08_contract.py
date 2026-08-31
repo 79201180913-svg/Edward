@@ -27,7 +27,7 @@ def test_v08_returns_existing_analysis_result_type_and_fields():
     )
 
     assert isinstance(result, AnalysisResult)
-    assert result.analysis_version == "0.8.0"
+    assert result.analysis_version == "0.8.7"
     assert isinstance(result.strategies, list)
     assert len(result.strategies) == 4
     assert all(isinstance(item, StrategyResult) for item in result.strategies)
