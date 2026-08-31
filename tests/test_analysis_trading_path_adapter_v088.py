@@ -48,10 +48,15 @@ def test_adapter_exposes_candidates_without_changing_existing_recommendation():
     assert result.analysis.recommendation is None
     assert len(result.ranked_candidates) == 1
     assert result.ranked_candidates[0].candidate.status.value == "research"
+    assert len(result.overlap_evidence) == 1
+    assert result.overlap_evidence[0].compared_candidates == 0
+    assert result.overlap_evidence[0].max_event_overlap_ratio == 0.0
+    assert result.overlap_evidence[0].max_holding_overlap_ratio == 0.0
 
 
 def test_adapter_handles_missing_conditional_discovery_without_breaking_analysis():
     service = FakeAnalysisService(_analysis(), AnalysisV08Diagnostics(0.9, "TREND_UP", {}, {}))
     result = AnalysisTradingPathAdapterV088(service).analyze(instrument_uid="uid", ticker="SBER", candles=_candles())
     assert result.ranked_candidates == ()
+    assert result.overlap_evidence == ()
     assert result.analysis.recommendation is None
