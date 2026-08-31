@@ -58,15 +58,23 @@ def test_cached_analysis_populates_quality_gate_diagnostics(monkeypatch):
         for index in range(300)
     ]
 
-    result = CachedAnalysisServiceV08(store=None).analyze(
+    service = CachedAnalysisServiceV08(store=None)
+    result = service.analyze(
         instrument_uid="uid",
         ticker="TEST",
         candles=candles,
         profile="medium_term",
     )
 
-    diagnostics = result.strategies
-    assert len(diagnostics) == 4
+    assert len(result.strategies) == 4
+    assert service.last_diagnostics is not None
+    assert set(service.last_diagnostics.quality_gate_by_strategy) == {
+        "Trend Following",
+        "Momentum",
+        "Breakout",
+        "Mean Reversion",
+    }
+    assert all(item.passed for item in service.last_diagnostics.quality_gate_by_strategy.values())
 
 
 def test_cached_analysis_diagnostics_expose_same_quality_gate_contract():
