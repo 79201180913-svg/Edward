@@ -10,6 +10,7 @@ def _benchmark():
     return BenchmarkDefinition(
         benchmark_id="IMOEX",
         benchmark_kind="EQUITY_MARKET",
+        market="MOEX",
         supported=True,
         reason="",
     )
