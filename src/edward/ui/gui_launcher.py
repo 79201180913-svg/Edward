@@ -52,6 +52,7 @@ from edward.services.execution_runtime_bootstrap_v06 import install_execution_ru
 from edward.ui.tk_thread_safety_v06 import install_thread_safe_tk_after
 from edward.ui.tick_runtime_guard_v06 import install_tick_runtime_guard
 from edward.ui.autonomous_ui_v07 import install_autonomous_ui
+from edward.ui.analysis_ui_v088_frontend import install as install_analysis_ui_v088_frontend
 from edward.config.settings import Environment
 
 
@@ -107,15 +108,9 @@ install_analysis_ui(EdwardApp, TInvestAdapterClient)
 install_analysis_ui_v08(EdwardApp, TInvestAdapterClient)
 install_ev_reliability_ui_v08()
 
-# The v0.8.1 UI wrapper still owns the presentation layer, but its
-# PipelineBridge must use the canonical v0.8.2 service used by Opportunity.
 analysis_ui_v081_runtime_module.AnalysisPipelineServiceV081 = AnalysisPipelineServiceV082
 install_analysis_ui_v081(EdwardApp, TInvestAdapterClient)
 
-# Do not install the legacy v0.4 UI consistency monkeypatch here.
-# It introduces a fallback recommendation after Quality Gate failure and
-# globally mutates AnalysisService.analyze(), which contaminates later tests
-# and conflicts with the canonical v0.8.2 analysis semantics.
 install_decision_context_ui(EdwardApp)
 install_opportunity_search_ui(EdwardApp)
 install_execution_center_ui(EdwardApp)
@@ -124,6 +119,7 @@ install_execution_runtime_bootstrap(EdwardApp)
 install_thread_safe_tk_after(EdwardApp)
 install_tick_runtime_guard(EdwardApp)
 install_autonomous_ui(EdwardApp)
+install_analysis_ui_v088_frontend(EdwardApp, TInvestAdapterClient)
 
 
 if __name__ == "__main__":
