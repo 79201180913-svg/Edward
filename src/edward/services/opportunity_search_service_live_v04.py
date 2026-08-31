@@ -23,6 +23,16 @@ from edward.storage.sqlite_store import SQLiteStore
 ResultCallback = Callable[[OpportunitySearchResult, int, int], None]
 
 
+class _ProvidedAnalysisService:
+    """Return a previously calculated analysis result without recalculating it."""
+
+    def __init__(self, result: Any):
+        self.result = result
+
+    def analyze(self, **_kwargs: Any) -> Any:
+        return self.result
+
+
 class LiveOpportunitySearchService(OpportunitySearchService):
     """Opportunity search that streams results through the canonical v0.8.2 analysis."""
 
@@ -36,6 +46,7 @@ class LiveOpportunitySearchService(OpportunitySearchService):
             force_recompute=force_recompute,
         )
         super().__init__(client, analysis_service=self.analysis_pipeline)
+        self._provided_candles: dict[str, list[Any]] = {}
         # Keep the existing OpportunitySearchService call graph intact while
         # making its OpportunityEngine consume the canonical v0.8.2 result.
         # The bridge falls back to the legacy engine for non-v0.8.2 callers.
@@ -44,6 +55,12 @@ class LiveOpportunitySearchService(OpportunitySearchService):
     @property
     def cache_info(self) -> dict[str, int]:
         return self.analysis_pipeline.cache_info()
+
+    def _get_candles(self, instrument_uid: str) -> list[Any]:
+        cached = self._provided_candles.get(str(instrument_uid))
+        if cached is not None:
+            return cached
+        return super()._get_candles(instrument_uid)
 
     @staticmethod
     def _enforce_execution_readiness(
@@ -153,17 +170,35 @@ class LiveOpportunitySearchService(OpportunitySearchService):
             progress_span = 80.0 / max(1, total)
             ticker = str(self._field(instrument, "ticker", ""))
             self._notify(progress_callback, f"Market Data: {ticker}", progress_base, valid_index, total)
-            result = self._evaluate_instrument(
-                instrument=instrument,
+
+            # Calculate the canonical analysis exactly once, then hand that
+            # result to the existing OpportunitySearch decision flow.
+            candles = super()._get_candles(uid)
+            self._provided_candles[uid] = candles
+            self._notify(progress_callback, f"Анализ стратегий: {ticker}", progress_base + progress_span * 0.28, valid_index, total)
+            analysis_result = self.analysis_pipeline.analyze(
+                instrument_uid=uid,
+                ticker=ticker,
+                candles=candles,
                 profile=profile,
-                positions=positions,
-                portfolio=portfolio,
-                progress_callback=progress_callback,
-                progress_base=progress_base,
-                progress_span=progress_span,
-                current=valid_index,
-                total=total,
+                instrument=instrument,
             )
+            previous_analysis = self.analysis
+            self.analysis = _ProvidedAnalysisService(analysis_result)
+            try:
+                result = self._evaluate_instrument(
+                    instrument=instrument,
+                    profile=profile,
+                    positions=positions,
+                    portfolio=portfolio,
+                    progress_callback=progress_callback,
+                    progress_base=progress_base,
+                    progress_span=progress_span,
+                    current=valid_index,
+                    total=total,
+                )
+            finally:
+                self.analysis = previous_analysis
 
             forecast_quality_pass = False
             forecast_quality_label = "НЕ ПРИМЕНИМ"
@@ -199,6 +234,7 @@ class LiveOpportunitySearchService(OpportunitySearchService):
             ),
         )
         self._notify(progress_callback, "Сканирование завершено", 100.0, valid_index, total)
+        self._provided_candles.clear()
         return results
 
     @staticmethod
