@@ -93,7 +93,7 @@ class AnalysisServiceV08:
             raise ValueError(f"Unsupported profile: {profile}")
         ordered = sorted(list(candles), key=lambda item: item.timestamp)
         minimum = self.PROFILES[profile]["train"] + self.PROFILES[profile]["test"]
-        logger.warning("[V087 EXEC] ENTER AnalysisServiceV08 file=%s ticker=%s instrument_uid=%s profile=%s candles=%d minimum=%d", ticker, instrument_uid, profile, len(ordered), minimum)
+        logger.warning("[V087 EXEC] ENTER AnalysisServiceV08 file=%s ticker=%s instrument_uid=%s profile=%s candles=%d minimum=%d", __file__, ticker, instrument_uid, profile, len(ordered), minimum)
         if len(ordered) < minimum:
             logger.warning("[V085 TRACE] REJECT insufficient candles ticker=%s candles=%d minimum=%d", ticker, len(ordered), minimum)
             raise ValueError(f"Для v0.8-анализа требуется не менее {minimum} исторических свечей для профиля {profile}")
