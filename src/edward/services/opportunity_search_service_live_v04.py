@@ -171,34 +171,52 @@ class LiveOpportunitySearchService(OpportunitySearchService):
             ticker = str(self._field(instrument, "ticker", ""))
             self._notify(progress_callback, f"Market Data: {ticker}", progress_base, valid_index, total)
 
-            # Calculate the canonical analysis exactly once, then hand that
-            # result to the existing OpportunitySearch decision flow.
             candles = super()._get_candles(uid)
-            self._provided_candles[uid] = candles
-            self._notify(progress_callback, f"Анализ стратегий: {ticker}", progress_base + progress_span * 0.28, valid_index, total)
-            analysis_result = self.analysis_pipeline.analyze(
-                instrument_uid=uid,
-                ticker=ticker,
-                candles=candles,
-                profile=profile,
-                instrument=instrument,
-            )
-            previous_analysis = self.analysis
-            self.analysis = _ProvidedAnalysisService(analysis_result)
-            try:
-                result = self._evaluate_instrument(
-                    instrument=instrument,
-                    profile=profile,
-                    positions=positions,
-                    portfolio=portfolio,
-                    progress_callback=progress_callback,
-                    progress_base=progress_base,
-                    progress_span=progress_span,
-                    current=valid_index,
-                    total=total,
+            if len(candles) < 150:
+                result = self._unavailable(
+                    instrument,
+                    self._field(instrument, "last_price", None),
+                    0.0,
+                    f"Недостаточно исторических данных: получено {len(candles)} свечей, требуется не менее 150.",
                 )
-            finally:
-                self.analysis = previous_analysis
+            else:
+                self._provided_candles[uid] = candles
+                self._notify(progress_callback, f"Анализ стратегий: {ticker}", progress_base + progress_span * 0.28, valid_index, total)
+                try:
+                    # Calculate the canonical analysis exactly once, then hand
+                    # that result to the existing OpportunitySearch decision flow.
+                    analysis_result = self.analysis_pipeline.analyze(
+                        instrument_uid=uid,
+                        ticker=ticker,
+                        candles=candles,
+                        profile=profile,
+                        instrument=instrument,
+                    )
+                    previous_analysis = self.analysis
+                    self.analysis = _ProvidedAnalysisService(analysis_result)
+                    try:
+                        result = self._evaluate_instrument(
+                            instrument=instrument,
+                            profile=profile,
+                            positions=positions,
+                            portfolio=portfolio,
+                            progress_callback=progress_callback,
+                            progress_base=progress_base,
+                            progress_span=progress_span,
+                            current=valid_index,
+                            total=total,
+                        )
+                    finally:
+                        self.analysis = previous_analysis
+                except Exception as exc:
+                    logger = opportunity_search_module.logger
+                    logger.exception("[OPPORTUNITY ANALYSIS ERROR] uid=%s ticker=%s", uid, ticker)
+                    result = self._unavailable(
+                        instrument,
+                        self._field(instrument, "last_price", None),
+                        0.0,
+                        f"Ошибка анализа: {exc}",
+                    )
 
             forecast_quality_pass = False
             forecast_quality_label = "НЕ ПРИМЕНИМ"
