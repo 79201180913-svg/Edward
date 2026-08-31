@@ -6,9 +6,7 @@ from typing import Any, Callable
 import edward.services.opportunity_search_service as opportunity_search_module
 from edward.config.application_settings import ApplicationSettingsStore
 from edward.services.execution_readiness_service import ExecutionReadinessInput, ExecutionReadinessService
-from edward.services.forecast_quality_gate_service import ForecastQualityGateService
-from edward.services.forecast_walk_forward_service import ForecastWalkForwardService
-from edward.services.opportunity_analysis_pipeline_v0821 import OpportunityAnalysisPipelineV0821, UnifiedOpportunityEngineV0821
+from edward.services.opportunity_analysis_pipeline_v0821 import OpportunityAnalysisPipelineV0821
 from edward.services.opportunity_search_analysis_consumer_v010 import OpportunityAnalysisConsumerV010
 from edward.services.opportunity_search_service import MARKET_SCOPE, ProgressCallback, OpportunitySearchResult, OpportunitySearchService
 from edward.storage.sqlite_store import SQLiteStore
@@ -35,7 +33,6 @@ class LiveOpportunitySearchService(OpportunitySearchService):
         self.analysis_pipeline = OpportunityAnalysisPipelineV0821(client, cache_store=store, force_recompute=force_recompute)
         super().__init__(client, analysis_service=self.analysis_pipeline)
         self._provided_candles: dict[str, list[Any]] = {}
-        opportunity_search_module.OpportunityEngine = UnifiedOpportunityEngineV0821
 
     @property
     def cache_info(self) -> dict[str, int]:
@@ -78,16 +75,6 @@ class LiveOpportunitySearchService(OpportunitySearchService):
                 return result
             return result
 
-    @classmethod
-    def _forecast_quality_gate(cls, service: OpportunitySearchService, instrument_uid: str, profile: str) -> tuple[bool, str]:
-        decision_horizon = service._forecast_horizon(profile)
-        candles = service._get_candles(instrument_uid)
-        if len(candles) < 150:
-            return False, "НЕ ПРОВЕРЕН: недостаточно истории"
-        wf = ForecastWalkForwardService.validate(candles=candles, horizon=decision_horizon)
-        gate = ForecastQualityGateService.evaluate(wf)
-        return gate.passed, ("PASS" if gate.passed else "FAIL")
-
     @staticmethod
     def _analysis_value(value: Any, default: Any = None) -> Any:
         if value is None:
@@ -95,9 +82,8 @@ class LiveOpportunitySearchService(OpportunitySearchService):
         return getattr(value, "value", value)
 
     @classmethod
-    def _from_canonical_result(cls, instrument: Any, analysis_view: Any, quantity: float = 0.0) -> OpportunitySearchResult:
-        pipeline_result = getattr(analysis_view, "pipeline_result", analysis_view)
-        consumed = OpportunityAnalysisConsumerV010.from_result(pipeline_result)
+    def _from_canonical_result(cls, instrument: Any, analysis_result: Any, quantity: float = 0.0) -> OpportunitySearchResult:
+        consumed = OpportunityAnalysisConsumerV010.from_result(analysis_result)
         analysis = consumed.analysis
         strategy_name = consumed.evidence_strategy
         strategy_score = 0.0
