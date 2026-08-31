@@ -31,7 +31,12 @@ class OpportunityAnalysisViewV0821:
 
     @property
     def confidence(self):
-        return self.pipeline_result.confidence.overall_confidence if self.pipeline_result.confidence is not None else None
+        direct = getattr(self.pipeline_result, "confidence", None)
+        if direct is not None:
+            return direct.overall_confidence
+        base = getattr(self.pipeline_result, "base", None)
+        base_confidence = getattr(base, "confidence", None)
+        return base_confidence.overall_confidence if base_confidence is not None else None
 
     @property
     def opportunity(self):
