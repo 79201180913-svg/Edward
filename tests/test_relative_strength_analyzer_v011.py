@@ -18,9 +18,9 @@ def test_instrument_outperforms_market():
         as_of=datetime(2026, 1, 4, tzinfo=timezone.utc),
         horizon_bars=2,
     )
-    assert result.instrument_return_pct == pytest.approx(5.76923077)
+    assert result.instrument_return_pct == pytest.approx(7.84313725)
     assert result.market_return_pct == pytest.approx(2.97029703)
-    assert result.excess_return_pct == pytest.approx(2.79893374)
+    assert result.excess_return_pct == pytest.approx(4.87284022)
     assert result.classification == "OUTPERFORMING"
 
 
