@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from edward.services.analysis_pipeline_service_v08 import AnalysisPipelineV08Result
 from edward.services.opportunity_search_service import OpportunitySearchResult
 from edward.services.opportunity_search_service_live_v04 import LiveOpportunitySearchService
 
@@ -38,14 +39,35 @@ def _candles() -> list[dict[str, object]]:
     ]
 
 
-def test_scan_calculates_analysis_once_and_hands_same_result_to_opportunity():
+def _canonical_result() -> AnalysisPipelineV08Result:
+    return AnalysisPipelineV08Result(
+        analysis=SimpleNamespace(
+            recommendation="WAIT",
+            score=70.0,
+            market_regime="Trend",
+            strategies=(),
+        ),
+        opportunity=SimpleNamespace(score=80.0),
+        expected_value=SimpleNamespace(expected_value_pct=3.0),
+        portfolio_impact=SimpleNamespace(marginal_risk_pct=0.4),
+        forecast_quality_score=82.0,
+        regime_confidence=61.0,
+        evidence_strategy="Momentum",
+        portfolio_context_available=True,
+        confidence=SimpleNamespace(overall_confidence=73.0),
+        trading_path_research=SimpleNamespace(status="READY"),
+        version="0.8.0",
+    )
+
+
+def test_scan_calculates_analysis_once_and_consumes_the_same_canonical_result():
     service = LiveOpportunitySearchService.__new__(LiveOpportunitySearchService)
     service._active_account = lambda: None
     service.analysis = None
     service._provided_candles = {}
 
     calls: list[dict[str, object]] = []
-    canonical_result = SimpleNamespace(trading_path_research={"status": "READY"})
+    canonical_result = _canonical_result()
 
     class FakePipeline:
         def analyze(self, **kwargs):
@@ -75,32 +97,27 @@ def test_scan_calculates_analysis_once_and_hands_same_result_to_opportunity():
         ]
     )
     service._forecast_quality_gate = lambda *_args, **_kwargs: (False, "НЕ ПРИМЕНИМ")
-
-    observed: list[object] = []
-
-    def fake_evaluate(**kwargs):
-        observed.append(service.analysis.result)
-        return _result("A")
-
-    service._evaluate_instrument = fake_evaluate
+    service._evaluate_instrument = lambda **_kwargs: (_ for _ in ()).throw(
+        AssertionError("legacy opportunity evaluation must not run")
+    )
 
     results = service.scan(profile="medium_term", instrument_kind="SHARE", scope="MARKET")
 
     assert len(calls) == 1
     assert calls[0]["instrument_uid"] == "1"
-    assert len(observed) == 1
-    assert observed[0] is canonical_result
-    assert canonical_result.trading_path_research == {"status": "READY"}
     assert len(results) == 1
+    assert results[0].ticker == "A"
+    assert results[0].opportunity_score == canonical_result.opportunity.score
+    assert results[0].decision == canonical_result.analysis.recommendation
 
 
-def test_scan_restores_original_analysis_service_after_provided_result_handoff():
+def test_scan_does_not_mutate_legacy_analysis_service_when_consuming_canonical_result():
     service = LiveOpportunitySearchService.__new__(LiveOpportunitySearchService)
     service._active_account = lambda: None
     original_analysis = object()
     service.analysis = original_analysis
     service._provided_candles = {}
-    canonical_result = SimpleNamespace(trading_path_research={"status": "READY"})
+    canonical_result = _canonical_result()
 
     class FakePipeline:
         def analyze(self, **_kwargs):
@@ -129,8 +146,9 @@ def test_scan_restores_original_analysis_service_after_provided_result_handoff()
         ]
     )
     service._forecast_quality_gate = lambda *_args, **_kwargs: (False, "НЕ ПРИМЕНИМ")
-
-    service._evaluate_instrument = lambda **_kwargs: _result("A")
+    service._evaluate_instrument = lambda **_kwargs: (_ for _ in ()).throw(
+        AssertionError("legacy opportunity evaluation must not run")
+    )
 
     results = service.scan(profile="medium_term", instrument_kind="SHARE", scope="MARKET")
 
