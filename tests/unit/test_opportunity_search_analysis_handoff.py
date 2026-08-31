@@ -41,6 +41,7 @@ def _candles() -> list[dict[str, object]]:
 def test_scan_calculates_analysis_once_and_hands_same_result_to_opportunity():
     service = LiveOpportunitySearchService.__new__(LiveOpportunitySearchService)
     service._active_account = lambda: None
+    service.analysis = None
     service._provided_candles = {}
 
     calls: list[dict[str, object]] = []
