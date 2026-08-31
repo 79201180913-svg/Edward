@@ -1,255 +1,138 @@
-# Edward v0.8.4 — фактически зафиксированный алгоритм системного анализа
+# Edward v0.8.9 — фактически зафиксированный системный анализ
 
-## 1. Назначение
+## Назначение
 
-Документ фиксирует состояние системного анализа Edward, которое считаем базовой версией v0.8.4. Документ описывает фактический decision flow: определение режима рынка, Robust Walk-Forward, экономическую жизнеспособность TRAIN-кандидатов, OOS-проверку, диагностику устойчивости и Quality Gate.
+Документ фиксирует состояние системного анализа Edward на выпуске v0.8.9. Алгоритм анализа v0.8.8 не изменяется в рамках этой версии. v0.8.9 исправляет интеграцию сервиса поиска возможностей с результатами анализа.
 
-В этой фиксации алгоритм не расширяется. Дальнейшая разработка и изменение порогов Quality Gate остановлены до отдельного решения.
-
-## 2. Общий pipeline
+## Архитектурная граница v0.8.9
 
 ```text
-Instrument
-  -> market candles
+Market candles
   -> AnalysisPipelineServiceV08
   -> AnalysisServiceV08
-  -> market regime
-  -> per-strategy Robust Walk-Forward
-  -> TRAIN parameter candidates
-  -> TRAIN viability filter
-  -> robust parameter selection
-  -> OOS evaluation
-  -> WF activity / NO_TRADE diagnostics
+  -> Robust Walk-Forward
+  -> TRAIN viability
+  -> parameter selection
+  -> OOS validation
   -> robustness diagnostics
   -> Quality Gate
-  -> admissible strategy OR NO TRADE
+  -> canonical AnalysisPipelineV08Result
+  -> Opportunity Search
+  -> existing Opportunity / Decision logic
 ```
 
-Ключевой принцип: OOS не используется для выбора production-параметров. OOS является независимой проверкой результата выбора.
+Ключевой принцип версии: Opportunity Search принимает уже рассчитанный результат анализа и не запускает анализ повторно в canonical production flow.
 
-## 3. Входные данные
+## Что НЕ менялось
 
-Анализ получает исторические свечи, профиль горизонта (`long_term`, `medium_term`, `speculative`), risk profile, horizon, набор стратегий и parameter grid каждой стратегии.
+В v0.8.9 не изменялись:
 
-Для `medium_term`: TRAIN = 240 свечей, TEST/OOS = 60 свечей, max drawdown = 25%, minimum TRAIN trades = 1, minimum stability = 60%.
+1. алгоритм Analysis v0.8.8;
+2. Robust Walk-Forward;
+3. TRAIN viability;
+4. OOS/production separation;
+5. Transfer Selection;
+6. Robustness calculation;
+7. Quality Gate thresholds;
+8. смысл существующих Opportunity/Decision алгоритмов.
 
-Для `long_term`: TRAIN 360 / TEST 90 / max DD 30% / stability 60%.
+## Что исправлено
 
-Для `speculative`: TRAIN 120 / TEST 30 / max DD 35% / stability 55%.
+Исправлена передача результата нового анализа в сервис возможностей.
 
-## 4. Market Regime
+Результат анализа теперь проходит через compatibility boundary в существующий `OpportunityAnalysisViewV0821` с сохранением canonical `pipeline_result`.
 
-Перед стратегическим анализом определяется текущий рыночный режим и confidence.
-
-В зафиксированном SBER-прогоне:
+Для `LiveOpportunitySearchService`:
 
 ```text
-regime = TRANSITION
-confidence = 57.76
-trend_score = -0.7669
-volatility_pct = 1.0986
-volatility_percentile = 32.21
+analysis calculated once
+        -> canonical result
+        -> provided analysis service
+        -> OpportunitySearchService
 ```
 
-В режиме `TRANSITION` стратегии остаются допустимыми для анализа, но получают консервативный evidence multiplier. Для SBER он составлял 0.425.
+Использованные для анализа candles также переиспользуются downstream, чтобы handoff не приводил к повторному запросу market data.
 
-Режим является routing/prioritization evidence, а не заменой статистической проверки стратегии.
+## Compatibility fixes
 
-## 5. Набор стратегий
+В процессе интеграции был обнаружен и исправлен compatibility defect: `confidence` нового `AnalysisPipelineV082Result` находится внутри `base`, тогда как legacy Opportunity adapter ожидал поле на верхнем уровне.
 
-Текущий набор: Trend Following, Momentum, Breakout, Mean Reversion.
+Compatibility layer теперь корректно принимает nested confidence, не изменяя источник расчёта.
 
-Для каждой стратегии выполняется отдельный Robust Walk-Forward.
+## Regression protection
 
-## 6. Walk-Forward
+Зафиксированы тесты на:
 
-Для каждого WF-окна:
+- передачу canonical analysis result;
+- сохранение `trading_path_research`;
+- отсутствие повторного `analyze()`;
+- lifecycle временного provided analysis service;
+- переиспользование подготовленных candles;
+- обработку ошибок одного инструмента без падения всего scan;
+- совместимость callback flow.
 
-1. Формируется TRAIN-отрезок.
-2. На TRAIN тестируются все кандидаты parameter grid.
-3. Рассчитываются return, benchmark/excess return, Sharpe, Sortino, drawdown, trades, exposure и другие диагностические показатели.
-4. Кандидаты проходят TRAIN viability filter.
-5. Среди viable-кандидатов выбирается устойчивый production parameter set.
-6. Выбранные параметры переносятся на следующий OOS TEST-отрезок.
-7. OOS-результат сохраняется для последующей агрегации.
-
-Для SBER в `medium_term` ожидается 25 WF-окон.
-
-## 7. TRAIN economic viability
-
-До robust ranking применяется обязательный viability filter.
+Последний подтвержденный полный прогон:
 
 ```text
-TRAIN excess return >= 0
-AND TRAIN drawdown <= profile max_drawdown
-AND TRAIN trades >= minimum_train_trades
+835 passed, 5 skipped
 ```
 
-При отсутствии viable-кандидатов окно получает `NO_VIABLE_TRAIN` и не получает production parameter set.
+После добавления regression coverage количество тестов увеличилось; подтвержденный локальный прогон после исправления фикстур был зелёным.
 
-Такое окно не является отрицательным OOS результатом: стратегия просто не получила разрешение на OOS-тест в этом окне.
+## Runtime verification
 
-## 8. NO_TRADE windows и denominator
+Контрольный runtime-прогон подтвердил, что новый Analysis Pipeline реально доходит до результата pipeline и формирует `opportunity` и `confidence`.
 
-`NO_TRADE` / `NO_VIABLE_TRAIN` окна не считаются отрицательными OOS-окнами и не включаются в denominator OOS-метрик.
-
-Отдельно сохраняются:
-
-- `windows` — все WF-окна;
-- `evaluated_windows` — окна с валидным OOS evaluation;
-- `active_windows` — окна с фактической торговой активностью;
-- `inactive_windows` — evaluated окна без активности;
-- `no_trade_windows` — окна без viable TRAIN candidate.
-
-NO_TRADE coverage является самостоятельной диагностикой и не должна теряться.
-
-## 9. Robust parameter selection
-
-После viability filter viable-кандидаты ранжируются по composite robust score.
-
-Составляющие:
-
-- excess return — 40%;
-- Sharpe — 20%;
-- Sortino — 15%;
-- return/drawdown — 10%;
-- neighborhood stability — 15%.
-
-Neighborhood stability оценивает согласованность близких параметров.
-
-Устойчивость используется для выбора среди экономически допустимых кандидатов, а не для оправдания отрицательного TRAIN excess return.
-
-## 10. OOS validation
-
-Выбранные на TRAIN production parameters переносятся на TEST/OOS.
-
-OOS используется только для проверки качества выбора. Для evaluated окна фиксируются OOS return, OOS excess return, OOS drawdown, OOS Sharpe, trades, TRAIN-selected parameters и диагностические признаки.
-
-OOS winner не становится автоматически production parameter set.
-
-## 11. Activity и NO_TRADE coverage — SBER
-
-### Breakout
+### SBER
 
 ```text
-WF windows       = 25
-evaluated        = 12
-active           = 9
-inactive         = 3
-active_pct       = 75.00%
-NO_TRADE windows = 13
-NO_TRADE pct     = 52.00%
-robustness       = 71.71
-mean OOS return  = +1.9376%
-mean OOS DD      = 1.0578%
-mean OOS Sharpe  = +0.9900
+recommendation = Momentum
+evidence_strategy = Breakout
+quality_gate = False
+stability = 67.03
+opportunity = 52.1400
+confidence = 51.0450
 ```
 
-### Momentum
+### VSMO
 
 ```text
-WF windows       = 25
-evaluated        = 14
-active           = 13
-inactive         = 1
-active_pct       = 92.86%
-NO_TRADE windows = 11
-NO_TRADE pct     = 44.00%
-robustness       = 53.21
-mean OOS return  = +0.7474%
-mean OOS DD      = 5.8888%
-mean OOS Sharpe  = +0.1404
+recommendation = None
+score = 0.0000
+evidence_strategy = Breakout
+quality_gate = False
+stability = 62.85
+opportunity = 53.9400
+confidence = 46.0733
 ```
 
-### Mean Reversion
+Эти значения подтверждают, что после исправления результата analysis pipeline сервис больше не падает на отсутствии `confidence` и получает сформированный canonical result.
 
-```text
-WF windows       = 25
-evaluated        = 7
-active           = 2
-inactive         = 5
-active_pct       = 28.57%
-NO_TRADE windows = 18
-NO_TRADE pct     = 72.00%
-robustness       = 38.05
-mean OOS return  = -0.3376%
-mean OOS DD      = 0.4151%
-mean OOS Sharpe  = -0.3761
-```
+## Runtime findings, не входящие в scope исправления
 
-## 12. Robustness diagnostics
+Контрольный прогон также показал отдельную системную особенность: `Quality Gate=False` может сосуществовать с рассчитанными диагностическими `opportunity` и `confidence`.
 
-Robustness агрегирует return consistency, risk consistency, Sharpe consistency, parameter stability и performance consistency.
+Например, для SBER Breakout имеет `quality_gate=False`, но pipeline формирует `opportunity=52.1400` и `confidence=51.0450`. Для VSMO аналогично формируется opportunity при отсутствии торговой recommendation.
 
-Для Breakout diagnostic breakdown:
+Это не изменяется в v0.8.9, поскольку текущая задача — исправление передачи результатов анализа в сервис возможностей. Семантическое изменение Opportunity/Decision после QG является отдельной задачей и отдельной версией.
 
-```text
-return_score       = 58.33
-risk_score         = 100.00
-sharpe_score       = 58.33
-stability_score    = 66.67
-performance_score  = 75.97
-```
+## Итоговый статус v0.8.9
 
-Итоговый WF result показывает robustness 71.71. Это агрегированный WF result; diagnostic breakdown является детализацией компонентов и не должен смешиваться с ним.
+Дефект интеграции нового анализа с сервисом поиска возможностей исправлен.
 
-Для Momentum robustness = 53.21. Для Mean Reversion robustness = 38.05.
+Подтверждено:
 
-## 13. Quality Gate
+1. canonical результат анализа доступен Opportunity Search;
+2. повторный расчет анализа в canonical flow устранён;
+3. candles переиспользуются;
+4. compatibility с legacy Opportunity view сохранена;
+5. nested confidence корректно принимается;
+6. `trading_path_research` не теряется;
+7. runtime формирует `opportunity` и `confidence`;
+8. полный набор автотестов после исправлений проходит зелёным.
 
-Quality Gate — финальный допуск стратегии к торговой рекомендации.
+**v0.8.9 фиксируется как release с целью исправления сервиса поиска возможностей и интеграции результатов Analysis v0.8.8. Сам алгоритм Analysis v0.8.8 в этой версии не изменён.**
 
-Для `medium_term` ключевые пороги:
+## Граница следующей работы
 
-- mean test return >= 0;
-- mean test Sharpe >= 0;
-- return consistency >= 60%;
-- robustness score >= 60%;
-- mean test drawdown <= 25%.
-
-Quality Gate не выбирает параметры и не исправляет плохой TRAIN/OOS результат. Он определяет, достаточно ли доказательств для admissibility.
-
-## 14. Зафиксированный SBER result
-
-| Стратегия | Evaluated OOS | NO_TRADE | Mean OOS Return | Mean OOS Sharpe | Robustness | Основной QG blocker |
-|---|---:|---:|---:|---:|---:|---|
-| Trend Following | 25 | — | отрицательная | отрицательный | ~36 | OOS return / Sharpe / consistency / robustness |
-| Momentum | 14 | 11 | +0.7474% | +0.1404 | 53.21 | consistency + robustness |
-| Breakout | 12 | 13 | +1.9376% | +0.9900 | 71.71 | return consistency 58.33% < 60% |
-| Mean Reversion | 7 | 18 | -0.3376% | -0.3761 | 38.05 | OOS return / Sharpe / consistency / robustness |
-
-Failure attribution для SBER:
-
-```text
-OOS_NEGATIVE            = 2
-LOW_PARAMETER_STABILITY = 2
-total failed             = 4
-dominant                 = OOS_NEGATIVE
-```
-
-## 15. Важный вывод по текущему состоянию
-
-Quality Gate не является единственной причиной слабого результата всех стратегий.
-
-Breakout — главный диагностический кандидат: 12 evaluated OOS windows, +1.9376% mean OOS return, +0.9900 mean OOS Sharpe, robustness 71.71, но return consistency 58.33% при требовании 60%. Поэтому Breakout формально остаётся `FAIL`.
-
-Momentum имеет положительные OOS return и Sharpe, но недостаточную aggregate robustness.
-
-Mean Reversion показывает слабое OOS качество.
-
-## 16. Зафиксированные правила v0.8.4
-
-1. TRAIN выбирает параметры.
-2. TRAIN viability является обязательным предварительным фильтром.
-3. OOS не участвует в выборе production parameters.
-4. NO_TRADE окна не смешиваются с evaluated OOS denominator.
-5. NO_TRADE coverage сохраняется отдельно.
-6. Robustness оценивает устойчивость результата.
-7. Quality Gate определяет торговую admissibility.
-8. Если ни одна стратегия не проходит Quality Gate — итоговое решение `NO TRADE`.
-9. Лучшая стратегия среди FAIL не становится торговой рекомендацией.
-10. Quality Gate не ослабляется только ради прохождения конкретной стратегии.
-
-## 17. Граница версии
-
-v0.8.4 считается зафиксированной точкой для дальнейшего анализа. Дальнейшие изменения должны выполняться отдельной версией и не должны молча менять состав WF окон, правило исключения NO_TRADE из OOS denominator, TRAIN viability, OOS/production separation, Quality Gate thresholds или смысл robustness без отдельного решения и новой версии.
+После выпуска v0.8.9 изменения Quality Gate semantics, Opportunity scoring, Decision semantics или самого Analysis Pipeline не входят в текущий release и должны рассматриваться отдельно.
