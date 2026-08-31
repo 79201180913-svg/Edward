@@ -78,7 +78,7 @@ def test_scan_calculates_analysis_once_and_hands_same_result_to_opportunity():
 
     observed: list[object] = []
 
-    def fake_evaluate(**_kwargs):
+    def fake_evaluate(**kwargs):
         observed.append(service.analysis.result)
         return _result("A")
 
@@ -92,3 +92,47 @@ def test_scan_calculates_analysis_once_and_hands_same_result_to_opportunity():
     assert observed[0] is canonical_result
     assert canonical_result.trading_path_research == {"status": "READY"}
     assert len(results) == 1
+
+
+def test_scan_restores_original_analysis_service_after_provided_result_handoff():
+    service = LiveOpportunitySearchService.__new__(LiveOpportunitySearchService)
+    service._active_account = lambda: None
+    original_analysis = object()
+    service.analysis = original_analysis
+    service._provided_candles = {}
+    canonical_result = SimpleNamespace(trading_path_research={"status": "READY"})
+
+    class FakePipeline:
+        def analyze(self, **_kwargs):
+            return canonical_result
+
+        def force_recompute(self):
+            return None
+
+    service.analysis_pipeline = FakePipeline()
+
+    class FakeClient:
+        def get_candles(self, *_args, **_kwargs):
+            return {"candles": _candles()}
+
+    service.client = FakeClient()
+    service.catalog = SimpleNamespace(
+        list=lambda *_args, **_kwargs: [
+            {
+                "uid": "1",
+                "ticker": "A",
+                "name": "A",
+                "last_price": "1",
+                "buy_available": True,
+                "trading_available": True,
+            }
+        ]
+    )
+    service._forecast_quality_gate = lambda *_args, **_kwargs: (False, "НЕ ПРИМЕНИМ")
+
+    service._evaluate_instrument = lambda **_kwargs: _result("A")
+
+    results = service.scan(profile="medium_term", instrument_kind="SHARE", scope="MARKET")
+
+    assert len(results) == 1
+    assert service.analysis is original_analysis
