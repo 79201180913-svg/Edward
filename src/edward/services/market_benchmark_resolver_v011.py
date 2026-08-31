@@ -28,6 +28,7 @@ class MarketBenchmarkResolverV011:
 
     EQUITY_TYPES = frozenset({"STOCK", "EQUITY", "SHARE"})
     RUSSIAN_MARKETS = frozenset({"RU", "RUSSIA", "RUSSIAN", "MOEX", "MOEX_STOCK"})
+    MOEX_RUSSIAN_EQUITY_CLASS_CODES = frozenset({"TQBR"})
 
     @staticmethod
     def _value(instrument: Any, *names: str) -> Any:
@@ -42,9 +43,11 @@ class MarketBenchmarkResolverV011:
     def resolve(cls, instrument: Any) -> BenchmarkDefinition:
         instrument_type = cls._value(instrument, "instrument_type", "type", "kind")
         market = cls._value(instrument, "market", "market_id", "exchange", "exchange_id")
+        class_code = cls._value(instrument, "class_code", "classCode")
 
         normalized_type = str(instrument_type or "").strip().upper()
         normalized_market = str(market or "").strip().upper() or None
+        normalized_class_code = str(class_code or "").strip().upper() or None
 
         if not normalized_type:
             return BenchmarkDefinition(
@@ -55,11 +58,16 @@ class MarketBenchmarkResolverV011:
                 reason="Instrument type is missing",
             )
 
-        if normalized_type in cls.EQUITY_TYPES and normalized_market in cls.RUSSIAN_MARKETS:
+        is_russian_equity = (
+            normalized_market in cls.RUSSIAN_MARKETS
+            or normalized_class_code in cls.MOEX_RUSSIAN_EQUITY_CLASS_CODES
+        )
+        if normalized_type in cls.EQUITY_TYPES and is_russian_equity:
+            resolved_market = normalized_market or "MOEX"
             return BenchmarkDefinition(
                 benchmark_id="IMOEX",
                 benchmark_kind="EQUITY_MARKET",
-                market=normalized_market,
+                market=resolved_market,
                 supported=True,
                 reason="Russian equity instrument",
             )
