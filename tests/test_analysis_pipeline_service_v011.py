@@ -7,7 +7,7 @@ from edward.services.analysis_pipeline_service_v082 import AnalysisPipelineServi
 from edward.services.analysis_service import Candle
 
 
-def _candles(count: int = 70, start_price: float = 100.0):
+def _candles(count: int = 320, start_price: float = 100.0):
     start = datetime(2025, 1, 1, tzinfo=timezone.utc)
     return [
         Candle(
