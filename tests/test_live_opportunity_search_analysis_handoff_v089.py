@@ -36,15 +36,16 @@ def test_live_scan_calculates_analysis_once_and_hands_result_to_opportunity_flow
     class FakePipeline:
         def __init__(self):
             self.calls = []
-
-        def analyze(self, **kwargs):
-            self.calls.append(kwargs)
-            return SimpleNamespace(
+            self.result = SimpleNamespace(
                 pipeline_result=object(),
                 strategies=(),
                 market_regime="Trend",
                 confidence="High",
             )
+
+        def analyze(self, **kwargs):
+            self.calls.append(kwargs)
+            return self.result
 
         def force_recompute(self):
             raise AssertionError("force_recompute must not run in this test")
@@ -70,7 +71,7 @@ def test_live_scan_calculates_analysis_once_and_hands_result_to_opportunity_flow
     def fake_evaluate(self, **_kwargs):
         seen.append(self.analysis)
         assert isinstance(self.analysis, _ProvidedAnalysisService)
-        assert self.analysis.result is pipeline.calls[0]["analysis_result"]
+        assert self.analysis.result is pipeline.result
         return OpportunitySearchResult(
             "uid-1",
             "TEST",
