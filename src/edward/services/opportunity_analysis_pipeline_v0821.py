@@ -153,7 +153,7 @@ class OpportunityAnalysisPipelineV0821:
         portfolio_returns: Mapping[str, list[float]] | None = None,
         candidate_weight: float = 0.0,
         concentration_penalty_pct: float = 0.0,
-    ) -> OpportunityAnalysisViewV0821:
+    ) -> AnalysisPipelineV08Result:
         data = self.collector.collect(str(instrument_uid))
         reports = list(data.reports)
         event = reports[0] if reports else None
@@ -192,7 +192,7 @@ class OpportunityAnalysisPipelineV0821:
             base=replace(result.base, base=adjusted_base),
         )
 
-        return self.view_from_result(result)
+        return result
 
 
 __all__ = [
