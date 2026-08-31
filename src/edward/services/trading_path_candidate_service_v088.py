@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Iterable
 
 from edward.domain import TradingPathCandidate, TradingPathEvidence, TradingPathRule
 from edward.services.conditional_discovery_service_v086 import ConditionalDiscoveryCell, ConditionalDiscoveryResult
@@ -11,17 +10,14 @@ TRADING_PATH_CANDIDATE_SERVICE_VERSION = "0.8.8"
 
 
 class TradingPathCandidateServiceV088:
-    """Build research-only TradingPathCandidate objects from v0.8.6 evidence.
-
-    Promotion here is deliberately limited to translating already-computed evidence.
-    No thresholds are relaxed, no parameters are optimized, and no production decision
-    is made. Statistical validation and independent backtesting remain later stages.
-    """
+    """Build research-only TradingPathCandidate objects from v0.8.6 evidence."""
 
     @staticmethod
-    def _candidate(cell: ConditionalDiscoveryCell) -> TradingPathCandidate:
+    def _candidate(cell: ConditionalDiscoveryCell, *, instrument_uid: str, ticker: str) -> TradingPathCandidate:
         return TradingPathCandidate(
             rule=TradingPathRule(
+                instrument_uid=instrument_uid,
+                ticker=ticker,
                 hypothesis=cell.hypothesis,
                 regime=cell.regime,
                 volatility_bucket=cell.volatility_bucket,
@@ -40,28 +36,36 @@ class TradingPathCandidateServiceV088:
         )
 
     @classmethod
-    def promote(cls, result: ConditionalDiscoveryResult) -> tuple[TradingPathCandidate, ...]:
-        """Translate sufficient conditional cells into research candidates.
+    def promote(
+        cls,
+        result: ConditionalDiscoveryResult,
+        *,
+        instrument_uid: str,
+        ticker: str,
+    ) -> tuple[TradingPathCandidate, ...]:
+        """Promote only sufficient cells with positive excess into research candidates.
 
-        The existing v0.8.6 contract says insufficient cells remain visible for audit
-        but are not treated as evidence of an edge, so they are intentionally excluded
-        from candidate promotion while remaining present in ``result``.
+        Insufficient cells remain visible in the original discovery result. Negative or
+        zero excess is not a candidate because it does not describe a positive conditional
+        opportunity. Candidates remain RESEARCH-only until later validation stages.
         """
         candidates = tuple(
-            cls._candidate(cell)
+            cls._candidate(cell, instrument_uid=instrument_uid, ticker=ticker)
             for evidence in result.evidence
             for cell in evidence.cells
-            if cell.sufficient_sample
+            if cell.sufficient_sample and cell.excess_return_pct > 0.0
         )
         logger.warning(
-            "[V088 TRADING PATH CANDIDATES] source_version=%s hypotheses=%d candidates=%d",
+            "[V088 TRADING PATH CANDIDATES] source_version=%s ticker=%s hypotheses=%d candidates=%d",
             result.version,
+            ticker,
             len(result.evidence),
             len(candidates),
         )
         for candidate in candidates:
             logger.warning(
-                "[V088 TRADING PATH CANDIDATE] hypothesis=%s regime=%s volatility=%s direction=%s horizon=%d N=%d excess=%.6f sufficient=%s status=%s",
+                "[V088 TRADING PATH CANDIDATE] ticker=%s hypothesis=%s regime=%s volatility=%s direction=%s horizon=%d N=%d excess=%.6f status=%s",
+                ticker,
                 candidate.rule.hypothesis,
                 candidate.rule.regime,
                 candidate.rule.volatility_bucket,
@@ -69,7 +73,6 @@ class TradingPathCandidateServiceV088:
                 candidate.rule.horizon,
                 candidate.evidence.observations,
                 candidate.evidence.excess_return_pct,
-                candidate.evidence.sufficient_sample,
                 candidate.status,
             )
         return candidates
