@@ -22,7 +22,7 @@ class MarketContextRuntimeServiceV011:
         self,
         *,
         fetcher,
-        indicatives_fetcher,
+        indicatives_fetcher=None,
         benchmark_resolver: type[MarketBenchmarkResolverV011] = MarketBenchmarkResolverV011,
         benchmark_instrument_resolver: BenchmarkInstrumentResolverV011 | None = None,
         context_builder: MarketRegimeContextBuilderV011 | None = None,
@@ -31,6 +31,11 @@ class MarketContextRuntimeServiceV011:
     ) -> None:
         self.loader = MarketDataLoaderV011(fetcher)
         self.benchmark_resolver = benchmark_resolver
+        if indicatives_fetcher is None:
+            client = getattr(fetcher, "__self__", None)
+            indicatives_fetcher = getattr(client, "get_indicatives", None)
+        if indicatives_fetcher is None:
+            raise ValueError("Market context requires an Indicatives fetcher")
         self.benchmark_instrument_resolver = benchmark_instrument_resolver or BenchmarkInstrumentResolverV011(indicatives_fetcher)
         self.context_builder = context_builder or MarketRegimeContextBuilderV011()
         self.relative_strength_analyzer = relative_strength_analyzer or RelativeStrengthAnalyzerV011()
@@ -57,34 +62,13 @@ class MarketContextRuntimeServiceV011:
         if effective_start >= effective_as_of:
             effective_start = effective_as_of - timedelta(days=1)
 
-        market_candles = self.loader.load(
-            MarketDataRequest(
-                instrument_id=resolved.instrument_uid,
-                start=effective_start,
-                end=effective_as_of,
-                limit=limit,
-            )
-        )
+        market_candles = self.loader.load(MarketDataRequest(instrument_id=resolved.instrument_uid, start=effective_start, end=effective_as_of, limit=limit))
         if not market_candles:
             raise ValueError(f"No benchmark candles received for {resolved.instrument_uid}")
 
-        market_regime = self.context_builder.build(
-            instrument_id=resolved.instrument_uid,
-            as_of=effective_as_of,
-            candles=market_candles,
-        )
-        relative_strength = self.relative_strength_analyzer.analyze(
-            instrument_candles=asset_candles,
-            market_candles=market_candles,
-            as_of=effective_as_of,
-            horizon_bars=horizon_bars,
-        )
-        volatility = self.volatility_analyzer.analyze(
-            instrument_candles=asset_candles,
-            market_candles=market_candles,
-            as_of=effective_as_of,
-            horizon_bars=horizon_bars,
-        )
+        market_regime = self.context_builder.build(instrument_id=resolved.instrument_uid, as_of=effective_as_of, candles=market_candles)
+        relative_strength = self.relative_strength_analyzer.analyze(instrument_candles=asset_candles, market_candles=market_candles, as_of=effective_as_of, horizon_bars=horizon_bars)
+        volatility = self.volatility_analyzer.analyze(instrument_candles=asset_candles, market_candles=market_candles, as_of=effective_as_of, horizon_bars=horizon_bars)
         instrument_id = ""
         if isinstance(instrument_metadata, Mapping):
             instrument_id = str(instrument_metadata.get("instrument_uid", instrument_metadata.get("uid", "")))
@@ -98,19 +82,11 @@ class MarketContextRuntimeServiceV011:
             market_regime=market_regime,
             relative_strength=relative_strength,
             volatility=volatility,
-            context_status=resolve_context_status(
-                benchmark_supported=benchmark.supported,
-                market_regime=market_regime,
-                relative_strength=relative_strength,
-                volatility=volatility,
-            ),
+            context_status=resolve_context_status(benchmark_supported=benchmark.supported, market_regime=market_regime, relative_strength=relative_strength, volatility=volatility),
         )
         if not snapshot.validate_point_in_time():
             raise ValueError("Market context failed point-in-time validation")
         return benchmark, snapshot
 
 
-__all__ = [
-    "MARKET_CONTEXT_RUNTIME_SERVICE_V011_VERSION",
-    "MarketContextRuntimeServiceV011",
-]
+__all__ = ["MARKET_CONTEXT_RUNTIME_SERVICE_V011_VERSION", "MarketContextRuntimeServiceV011"]
