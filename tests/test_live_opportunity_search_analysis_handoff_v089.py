@@ -1,6 +1,6 @@
 from types import MethodType, SimpleNamespace
 
-from edward.services.opportunity_search_service import OpportunitySearchResult
+from edward.services.opportunity_search_service import OpportunitySearchResult, OpportunitySearchService
 from edward.services.opportunity_search_service_live_v04 import _ProvidedAnalysisService, LiveOpportunitySearchService
 
 
@@ -27,7 +27,7 @@ def test_live_handoff_provider_is_not_the_canonical_analysis_pipeline():
     assert provider.__class__.__name__ == "_ProvidedAnalysisService"
 
 
-def test_live_scan_calculates_analysis_once_and_hands_result_to_opportunity_flow():
+def test_live_scan_calculates_analysis_once_and_hands_result_to_opportunity_flow(monkeypatch):
     service = object.__new__(LiveOpportunitySearchService)
     original_analysis = object()
     service.analysis = original_analysis
@@ -59,9 +59,10 @@ def test_live_scan_calculates_analysis_once_and_hands_result_to_opportunity_flow
         ],
         service,
     )
-    service._get_candles = MethodType(
+    monkeypatch.setattr(
+        OpportunitySearchService,
+        "_get_candles",
         lambda self, instrument_uid: [object()] * 150,
-        service,
     )
 
     seen = []
@@ -69,7 +70,7 @@ def test_live_scan_calculates_analysis_once_and_hands_result_to_opportunity_flow
     def fake_evaluate(self, **_kwargs):
         seen.append(self.analysis)
         assert isinstance(self.analysis, _ProvidedAnalysisService)
-        assert self.analysis.result is pipeline.calls[0]["result"] if "result" in pipeline.calls[0] else True
+        assert self.analysis.result is pipeline.calls[0]["analysis_result"]
         return OpportunitySearchResult(
             "uid-1",
             "TEST",
@@ -86,8 +87,6 @@ def test_live_scan_calculates_analysis_once_and_hands_result_to_opportunity_flow
             0,
         )
 
-    # Keep the assertion independent of the result's internal shape: the
-    # provider identity is the contract under test.
     service._evaluate_instrument = MethodType(fake_evaluate, service)
     service._forecast_quality_gate = MethodType(lambda self, *_args: (False, "НЕ ПРИМЕНИМ"), service)
 
