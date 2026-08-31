@@ -38,7 +38,7 @@ class OpportunityAnalysisConsumerV010:
     @staticmethod
     def from_result(result: CanonicalAnalysisResult) -> OpportunityAnalysisViewV010:
         if not isinstance(result, (AnalysisPipelineV08Result, AnalysisPipelineV082Result)):
-            raise TypeError("Opportunity Search requires a canonical AnalysisPipeline result")
+            raise TypeError("Opportunity Search requires AnalysisPipelineV08Result or AnalysisPipelineV082Result")
 
         base = getattr(result, "base", None)
         confidence = getattr(result, "confidence", None)
