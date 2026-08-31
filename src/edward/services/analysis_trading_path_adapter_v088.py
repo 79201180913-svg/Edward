@@ -13,113 +13,46 @@ from edward.services.economic_validation_v088 import TradingCostModelV088
 
 logger = logging.getLogger(__name__)
 
-
 @dataclass(frozen=True, slots=True)
 class AnalysisTradingPathResearchV088:
     analysis: AnalysisResult
     ranked_candidates: tuple[RankedTradingPathV088, ...]
     validation_results: tuple[TradingPathPipelineResultV088, ...] = ()
 
-
 class AnalysisTradingPathAdapterV088:
-    """Add v0.8.8 research validation to the existing v0.8.7 analysis.
-
-    The wrapped AnalysisServiceV08 remains authoritative for recommendation,
-    Quality Gate, Walk-Forward and execution. The adapter reuses the canonical
-    observations already produced by ConditionalDiscoveryServiceV086 and runs
-    the v0.8.8 validation pipeline strictly as research diagnostics.
-    """
-
+    """Add v0.8.8 research validation without changing legacy decisions."""
     def __init__(self, analysis_service: AnalysisServiceV08 | None = None) -> None:
         self.analysis_service = analysis_service or AnalysisServiceV08()
 
-    def analyze(
-        self,
-        *,
-        instrument_uid: str,
-        ticker: str,
-        candles: Iterable[Candle],
-        profile: str = "medium_term",
-        risk_profile: str = "balanced",
-        horizon: str = "medium",
-    ) -> AnalysisTradingPathResearchV088:
-        ordered = tuple(candles)
-        analysis = self.analysis_service.analyze(
-            instrument_uid=instrument_uid,
-            ticker=ticker,
-            candles=ordered,
-            profile=profile,
-            risk_profile=risk_profile,
-            horizon=horizon,
-        )
+    def _research_from_analysis(self, *, analysis: AnalysisResult, instrument_uid: str, ticker: str, candles: tuple[Candle, ...]) -> AnalysisTradingPathResearchV088:
         diagnostics = self.analysis_service.last_diagnostics
         if diagnostics is None or diagnostics.conditional_discovery is None:
             logger.warning("[V088 TRADING PATH ADAPTER] ticker=%s candidates=0 validation=0 reason=no_conditional_discovery", ticker)
             return AnalysisTradingPathResearchV088(analysis=analysis, ranked_candidates=())
-
         discovery = diagnostics.conditional_discovery
-        candidates = TradingPathCandidateServiceV088.promote(
-            discovery,
-            instrument_uid=instrument_uid,
-            ticker=ticker,
-        )
+        candidates = TradingPathCandidateServiceV088.promote(discovery, instrument_uid=instrument_uid, ticker=ticker)
         ranked = TradingPathRankingServiceV088.rank_and_deduplicate(candidates)
-        observations = discovery.observations
-        validation_results: list[TradingPathPipelineResultV088] = []
         cost_model = getattr(self.analysis_service, "costs", None) or TradingCostModelV088()
-        for item in ranked:
-            result = TradingPathValidationPipelineV088.run(
-                item.candidate,
-                ordered,
-                observations,
-                cost_model,
-            )
-            validation_results.append(result)
-        logger.warning(
-            "[V088 TRADING PATH RANKING] ticker=%s candidates=%d ranked=%d validated=%d recommendation_unchanged=%s",
-            ticker,
-            len(candidates),
-            len(ranked),
-            len(validation_results),
-            analysis.recommendation,
+        validation_results = tuple(
+            TradingPathValidationPipelineV088.run(item.candidate, candles, discovery.observations, cost_model)
+            for item in ranked
         )
+        logger.warning("[V088 TRADING PATH RANKING] ticker=%s candidates=%d ranked=%d validated=%d recommendation_unchanged=%s", ticker, len(candidates), len(ranked), len(validation_results), analysis.recommendation)
         for rank, item in enumerate(ranked, 1):
             rule = item.candidate.rule
-            logger.warning(
-                "[V088 TRADING PATH RANKED] ticker=%s rank=%d hypothesis=%s regime=%s volatility=%s direction=%s horizon=%d score=%.6f status=%s",
-                ticker,
-                rank,
-                rule.hypothesis,
-                rule.regime,
-                rule.volatility_bucket,
-                rule.direction,
-                rule.horizon,
-                item.score,
-                item.candidate.status,
-            )
+            logger.warning("[V088 TRADING PATH RANKED] ticker=%s rank=%d hypothesis=%s regime=%s volatility=%s direction=%s horizon=%d score=%.6f status=%s", ticker, rank, rule.hypothesis, rule.regime, rule.volatility_bucket, rule.direction, rule.horizon, item.score, item.candidate.status)
         for result in validation_results:
             evidence = result.statistical_evidence
-            logger.warning(
-                "[V088 TRADING PATH VALIDATED] ticker=%s hypothesis=%s regime=%s volatility=%s direction=%s horizon=%d trades=%d gross=%.6f net=%.6f mean=%.6f ci95=[%.6f,%.6f] positive_blocks=%d",
-                ticker,
-                result.candidate.rule.hypothesis,
-                result.candidate.rule.regime,
-                result.candidate.rule.volatility_bucket,
-                result.candidate.rule.direction,
-                result.candidate.rule.horizon,
-                result.trades,
-                result.gross_return_pct,
-                result.net_return_pct,
-                evidence.mean_return_pct,
-                evidence.ci95_low_pct,
-                evidence.ci95_high_pct,
-                evidence.positive_temporal_blocks,
-            )
-        return AnalysisTradingPathResearchV088(
-            analysis=analysis,
-            ranked_candidates=ranked,
-            validation_results=tuple(validation_results),
-        )
+            logger.warning("[V088 TRADING PATH VALIDATED] ticker=%s hypothesis=%s regime=%s volatility=%s direction=%s horizon=%d trades=%d gross=%.6f net=%.6f mean=%.6f ci95=[%.6f,%.6f] positive_blocks=%d", ticker, result.candidate.rule.hypothesis, result.candidate.rule.regime, result.candidate.rule.volatility_bucket, result.candidate.rule.direction, result.candidate.rule.horizon, result.trades, result.gross_return_pct, result.net_return_pct, evidence.mean_return_pct, evidence.ci95_low_pct, evidence.ci95_high_pct, evidence.positive_temporal_blocks)
+        return AnalysisTradingPathResearchV088(analysis=analysis, ranked_candidates=ranked, validation_results=validation_results)
 
+    def analyze(self, *, instrument_uid: str, ticker: str, candles: Iterable[Candle], profile: str = "medium_term", risk_profile: str = "balanced", horizon: str = "medium") -> AnalysisTradingPathResearchV088:
+        ordered = tuple(candles)
+        analysis = self.analysis_service.analyze(instrument_uid=instrument_uid, ticker=ticker, candles=ordered, profile=profile, risk_profile=risk_profile, horizon=horizon)
+        return self.research_from_analysis(analysis=analysis, instrument_uid=instrument_uid, ticker=ticker, candles=ordered)
+
+    def research_from_analysis(self, *, analysis: AnalysisResult, instrument_uid: str, ticker: str, candles: Iterable[Candle]) -> AnalysisTradingPathResearchV088:
+        """Run v0.8.8 research from an already-computed legacy analysis."""
+        return self._research_from_analysis(analysis=analysis, instrument_uid=instrument_uid, ticker=ticker, candles=tuple(candles))
 
 __all__ = ["AnalysisTradingPathResearchV088", "AnalysisTradingPathAdapterV088"]
