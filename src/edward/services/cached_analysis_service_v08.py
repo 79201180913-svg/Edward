@@ -5,6 +5,7 @@ from typing import Iterable
 
 from edward.services.analysis_service import AnalysisResult, Candle
 from edward.services.analysis_service_v08 import AnalysisServiceV08, AnalysisV08Diagnostics
+from edward.services.quality_gate_diagnostics_v0822 import QualityGateCheck, QualityGateDiagnostics
 from edward.services.regime_engine_v08 import RegimeEngine
 from edward.services.strategy_optimization_cache import StrategyOptimizationCache
 
@@ -92,10 +93,16 @@ class CachedAnalysisServiceV08(AnalysisServiceV08):
         confidence = "Low"
         if winner:
             confidence = "High" if winner.stability >= 80.0 else "Medium" if winner.stability >= 65.0 else "Low"
+
+        quality_gate_by_strategy = {
+            item.strategy: self._diagnostics_from_strategy_result(item, profile)
+            for item in strategies
+        }
         self.last_diagnostics = AnalysisV08Diagnostics(
             regime_confidence=regime_result.confidence,
             regime=regime_result.regime,
             robustness_by_strategy={item.strategy: item.stability for item in strategies},
+            quality_gate_by_strategy=quality_gate_by_strategy,
         )
 
         explanation = (
@@ -120,6 +127,26 @@ class CachedAnalysisServiceV08(AnalysisServiceV08):
             explanation=explanation,
             created_at=ordered[-1].timestamp.isoformat() if ordered else datetime.now(timezone.utc).isoformat(),
             analysis_version="0.8.0",
+        )
+
+    @staticmethod
+    def _diagnostics_from_strategy_result(strategy_result, profile: str) -> QualityGateDiagnostics:
+        cfg = AnalysisServiceV08.PROFILES[profile]
+        checks = (
+            QualityGateCheck("wf_windows", "WF окон", float(strategy_result.wf_windows), 5.0, strategy_result.wf_windows >= 5),
+            QualityGateCheck("mean_test_return", "Средняя OOS доходность", strategy_result.return_pct, 0.0, strategy_result.return_pct > 0.0),
+            QualityGateCheck("mean_test_drawdown", "Средняя OOS просадка", strategy_result.max_drawdown_pct, cfg["max_drawdown_pct"], strategy_result.max_drawdown_pct <= cfg["max_drawdown_pct"]),
+            QualityGateCheck("mean_test_sharpe", "Средний OOS Sharpe", strategy_result.sharpe, 0.0, strategy_result.sharpe > 0.0),
+            QualityGateCheck("return_consistency", "Положительные OOS окна", strategy_result.return_consistency, 60.0, strategy_result.return_consistency >= 60.0),
+            QualityGateCheck("robustness_score", "Robustness Score", strategy_result.stability, cfg["min_stability_pct"], strategy_result.stability >= cfg["min_stability_pct"]),
+        )
+        failed = tuple(check.label for check in checks if not check.passed)
+        return QualityGateDiagnostics(
+            profile=profile,
+            robustness_threshold=cfg["min_stability_pct"],
+            checks=checks,
+            failed_checks=failed,
+            passed=not failed,
         )
 
     def cache_info(self) -> dict[str, int]:
