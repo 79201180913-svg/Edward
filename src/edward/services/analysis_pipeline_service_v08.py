@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Iterable, Mapping, Sequence
 
 from edward.services.analysis_service import AnalysisResult, Candle
@@ -107,6 +107,7 @@ class AnalysisPipelineServiceV08:
             risk_profile=risk_profile,
             horizon=horizon,
         )
+        analysis = replace(analysis, analysis_version=ANALYSIS_PIPELINE_V08_VERSION)
         logger.warning(
             "[V083 EXEC] EXIT AnalysisServiceV08 ticker=%s strategies=%d recommendation=%s score=%.4f",
             ticker, len(analysis.strategies), analysis.recommendation, analysis.score,
