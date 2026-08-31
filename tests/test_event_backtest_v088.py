@@ -14,14 +14,14 @@ def _candidate(direction: str = "Positive", horizon: int = 2) -> TradingPathCand
     )
 
 
-def _obs(index: int = 1) -> EventObservationV086:
+def _obs(index: int = 1, direction: str = "Positive") -> EventObservationV086:
     return EventObservationV086(
         hypothesis="BREAKOUT_EXPANSION",
         index=index,
         timestamp=datetime(2025, 1, index + 1, tzinfo=timezone.utc),
         regime="TREND_UP",
         volatility_bucket="High",
-        direction="Positive",
+        direction=direction,
         forward_returns_pct=((1, 1.0), (2, 2.0)),
     )
 
@@ -43,7 +43,7 @@ def test_event_backtest_enters_next_open_not_event_close():
 
 def test_event_backtest_applies_short_direction():
     rule = TradingRuleBuilderV088.build(_candidate(direction="Negative", horizon=2))
-    result = EventBacktestV088.run(_candles(), (_obs(1),), rule)
+    result = EventBacktestV088.run(_candles(), (_obs(1, direction="Negative"),), rule)
     assert result.trades[0].return_pct < 0
 
 
