@@ -32,7 +32,7 @@ def test_analysis_result_legacy_fields_are_unchanged():
         "explanation", "created_at", "analysis_version",
     }
     assert required.issubset(result.__dataclass_fields__)
-    assert result.analysis_version == "0.8.0"
+    assert result.analysis_version == "0.8.7"
     assert all({
         "strategy", "parameters", "return_pct", "max_drawdown_pct", "sharpe",
         "trades", "stability", "quality_gate", "score", "train_score", "test_score",
@@ -48,7 +48,7 @@ def test_opportunity_result_legacy_fields_are_unchanged():
     )
     analysis = AnalysisResult(
         "uid", "TEST", "medium_term", "balanced", "medium", "TREND_UP",
-        "Momentum", "High", 75.0, [strategy], "test", candles[-1].timestamp.isoformat(), "0.8.0",
+        "Momentum", "High", 75.0, [strategy], "test", candles[-1].timestamp.isoformat(), "0.8.7",
     )
     ev = ExpectedValueEngine.from_returns([4.0, 5.0, 6.0, -1.0] * 20)
     impact = PortfolioImpactService.calculate(
