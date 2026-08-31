@@ -11,6 +11,9 @@ from edward.services.trading_path_ranking_v088 import RankedTradingPathV088, Tra
 from edward.services.trading_path_validation_pipeline_v088 import TradingPathPipelineResultV088, TradingPathValidationPipelineV088
 from edward.services.economic_validation_v088 import TradingCostModelV088
 from edward.services.trading_path_overlap_audit_v088 import TradingPathOverlapAuditV088, TradingPathOverlapEvidenceV088
+from edward.services.trading_path_multiple_testing_v088 import TradingPathMultipleTestingEvidenceV088, TradingPathMultipleTestingServiceV088
+from edward.services.trading_path_promotion_evidence_v088 import TradingPathPromotionEvidenceServiceV088
+from edward.services.trading_path_promotion_gate_v088 import TradingPathPromotionGateV088, TradingPathPromotionResultV088
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +23,8 @@ class AnalysisTradingPathResearchV088:
     ranked_candidates: tuple[RankedTradingPathV088, ...]
     validation_results: tuple[TradingPathPipelineResultV088, ...] = ()
     overlap_evidence: tuple[TradingPathOverlapEvidenceV088, ...] = ()
+    multiple_testing_evidence: tuple[TradingPathMultipleTestingEvidenceV088, ...] = ()
+    promotion_results: tuple[TradingPathPromotionResultV088, ...] = ()
 
 class AnalysisTradingPathAdapterV088:
     """Add v0.8.8 research validation without changing legacy decisions."""
@@ -38,14 +43,30 @@ class AnalysisTradingPathAdapterV088:
         cost_model = TradingCostModelV088.from_legacy(legacy_cost_model) if legacy_cost_model is not None else TradingCostModelV088()
         validation_results = tuple(TradingPathValidationPipelineV088.run(item.candidate, candles, discovery.observations, cost_model) for item in ranked)
         overlap_evidence = tuple(TradingPathOverlapAuditV088.audit(item.candidate, candidates, discovery.observations) for item in ranked)
-        logger.warning("[V088 TRADING PATH RANKING] ticker=%s candidates=%d ranked=%d validated=%d overlap_audited=%d recommendation_unchanged=%s", ticker, len(candidates), len(ranked), len(validation_results), len(overlap_evidence), analysis.recommendation)
+        multiple_testing_evidence = tuple(
+            TradingPathMultipleTestingServiceV088.evaluate(
+                mean_return_pct=result.statistical_evidence.mean_return_pct,
+                standard_error_pct=result.statistical_evidence.standard_error_pct,
+                tests_count=len(ranked),
+            )
+            for result in validation_results
+        )
+        promotion_results = tuple(
+            TradingPathPromotionGateV088.evaluate(
+                result,
+                overlap=overlap,
+                multiple_testing=multiple_testing,
+            )
+            for result, overlap, multiple_testing in zip(validation_results, overlap_evidence, multiple_testing_evidence)
+        )
+        logger.warning("[V088 TRADING PATH RANKING] ticker=%s candidates=%d ranked=%d validated=%d overlap_audited=%d promotion_evaluated=%d recommendation_unchanged=%s", ticker, len(candidates), len(ranked), len(validation_results), len(overlap_evidence), len(promotion_results), analysis.recommendation)
         for rank, item in enumerate(ranked, 1):
             rule = item.candidate.rule
             logger.warning("[V088 TRADING PATH RANKED] ticker=%s rank=%d hypothesis=%s regime=%s volatility=%s direction=%s horizon=%d score=%.6f status=%s", ticker, rank, rule.hypothesis, rule.regime, rule.volatility_bucket, rule.direction, rule.horizon, item.score, item.candidate.status)
-        for result, overlap in zip(validation_results, overlap_evidence):
+        for result, overlap, multiple_testing, promotion in zip(validation_results, overlap_evidence, multiple_testing_evidence, promotion_results):
             evidence = result.statistical_evidence
-            logger.warning("[V088 TRADING PATH VALIDATED] ticker=%s hypothesis=%s regime=%s volatility=%s direction=%s horizon=%d trades=%d gross=%.6f net=%.6f mean=%.6f ci95=[%.6f,%.6f] positive_blocks=%d event_overlap=%.6f holding_overlap=%.6f", ticker, result.candidate.rule.hypothesis, result.candidate.rule.regime, result.candidate.rule.volatility_bucket, result.candidate.rule.direction, result.candidate.rule.horizon, result.trades, result.gross_return_pct, result.net_return_pct, evidence.mean_return_pct, evidence.ci95_low_pct, evidence.ci95_high_pct, evidence.positive_temporal_blocks, overlap.max_event_overlap_ratio, overlap.max_holding_overlap_ratio)
-        return AnalysisTradingPathResearchV088(analysis=analysis, ranked_candidates=ranked, validation_results=validation_results, overlap_evidence=overlap_evidence)
+            logger.warning("[V088 TRADING PATH VALIDATED] ticker=%s hypothesis=%s regime=%s volatility=%s direction=%s horizon=%d trades=%d gross=%.6f net=%.6f mean=%.6f ci95=[%.6f,%.6f] adjusted_ci=[%.6f,%.6f] positive_blocks=%d event_overlap=%.6f holding_overlap=%.6f multiple_tests=%d promotion=%s reasons=%s", ticker, result.candidate.rule.hypothesis, result.candidate.rule.regime, result.candidate.rule.volatility_bucket, result.candidate.rule.direction, result.candidate.rule.horizon, result.trades, result.gross_return_pct, result.net_return_pct, evidence.mean_return_pct, evidence.ci95_low_pct, evidence.ci95_high_pct, multiple_testing.adjusted_ci95_low_pct, multiple_testing.adjusted_ci95_high_pct, evidence.positive_temporal_blocks, overlap.max_event_overlap_ratio, overlap.max_holding_overlap_ratio, multiple_testing.tests_count, promotion.status.value, ",".join(promotion.reasons) or "NONE")
+        return AnalysisTradingPathResearchV088(analysis=analysis, ranked_candidates=ranked, validation_results=validation_results, overlap_evidence=overlap_evidence, multiple_testing_evidence=multiple_testing_evidence, promotion_results=promotion_results)
 
     def analyze(self, *, instrument_uid: str, ticker: str, candles: Iterable[Candle], profile: str = "medium_term", risk_profile: str = "balanced", horizon: str = "medium") -> AnalysisTradingPathResearchV088:
         ordered = tuple(candles)
