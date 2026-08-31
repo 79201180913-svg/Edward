@@ -48,6 +48,15 @@ class EventBacktestV088:
             return -1
         raise ValueError(f"Unsupported trading path direction: {direction}")
 
+    @staticmethod
+    def _matches(rule: TradingRuleV088, observation: EventObservationV086) -> bool:
+        return (
+            observation.hypothesis == rule.hypothesis
+            and observation.regime == rule.regime
+            and observation.volatility_bucket == rule.volatility_bucket
+            and observation.direction == rule.direction
+        )
+
     @classmethod
     def run(
         cls,
@@ -58,7 +67,7 @@ class EventBacktestV088:
         trades: list[EventTradeV088] = []
         sign = cls._direction_sign(rule.direction)
         for observation in observations:
-            if observation.hypothesis != rule.hypothesis:
+            if not cls._matches(rule, observation):
                 continue
             event_index = observation.index
             entry_index = event_index + 1
