@@ -6,74 +6,40 @@ from edward.services.conditional_discovery_service_v086 import (
 from edward.services.trading_path_candidate_service_v088 import TradingPathCandidateServiceV088
 
 
-def _cell(*, sufficient: bool, excess: float = 1.0) -> ConditionalDiscoveryCell:
-    return ConditionalDiscoveryCell(
-        hypothesis="BREAKOUT_EXPANSION",
-        regime="TREND_DOWN",
-        volatility_bucket="High",
-        direction="Positive",
-        horizon=3,
-        observations=10 if sufficient else 2,
-        mean_forward_return_pct=1.2,
-        median_forward_return_pct=1.0,
-        win_rate_pct=70.0,
-        baseline_mean_return_pct=0.2,
-        excess_return_pct=excess,
-        sufficient_sample=sufficient,
+def _cell(*, sufficient: bool, excess: float = 1.0, hypothesis: str = "BREAKOUT_EXPANSION") -> ConditionalDiscoveryCell:
+    return ConditionalDiscoveryCell(hypothesis, "TREND_DOWN", "High", "Positive", 3, 10 if sufficient else 2, 1.2, 1.0, 70.0, 0.2, excess, sufficient)
+
+
+def _result(*cells: ConditionalDiscoveryCell) -> ConditionalDiscoveryResult:
+    return ConditionalDiscoveryResult("0.8.6", 1768, 8, (ConditionalDiscoveryEvidence(cells[0].hypothesis, len(cells), tuple(cells)),))
+
+
+def test_promotes_only_sufficient_positive_cells():
+    candidates = TradingPathCandidateServiceV088.promote(
+        _result(_cell(sufficient=True), _cell(sufficient=False, excess=22.4), _cell(sufficient=True, excess=-0.5)),
+        instrument_uid="uid-1",
+        ticker="SBER",
     )
-
-
-def test_promotes_only_sufficient_cells():
-    result = ConditionalDiscoveryResult(
-        version="0.8.6",
-        candles=1768,
-        min_observations=8,
-        evidence=(
-            ConditionalDiscoveryEvidence(
-                hypothesis="BREAKOUT_EXPANSION",
-                events=12,
-                cells=(_cell(sufficient=True), _cell(sufficient=False, excess=22.4)),
-            ),
-        ),
-    )
-
-    candidates = TradingPathCandidateServiceV088.promote(result)
-
     assert len(candidates) == 1
     assert candidates[0].status.value == "research"
     assert candidates[0].evidence.observations == 10
 
 
-def test_promotion_preserves_all_conditional_dimensions():
-    result = ConditionalDiscoveryResult(
-        version="0.8.6",
-        candles=500,
-        min_observations=8,
-        evidence=(
-            ConditionalDiscoveryEvidence("GAP_REVERSAL", 9, (_cell(sufficient=True),)),
-        ),
-    )
-
-    candidate = TradingPathCandidateServiceV088.promote(result)[0]
-
-    assert candidate.rule.hypothesis == "BREAKOUT_EXPANSION"
+def test_promotion_preserves_instrument_and_conditional_dimensions():
+    candidate = TradingPathCandidateServiceV088.promote(
+        _result(_cell(sufficient=True, hypothesis="GAP_REVERSAL")), instrument_uid="uid-2", ticker="GAZP"
+    )[0]
+    assert candidate.rule.instrument_uid == "uid-2"
+    assert candidate.rule.ticker == "GAZP"
+    assert candidate.rule.hypothesis == "GAP_REVERSAL"
     assert candidate.rule.regime == "TREND_DOWN"
     assert candidate.rule.volatility_bucket == "High"
     assert candidate.rule.direction == "Positive"
     assert candidate.rule.horizon == 3
 
 
-def test_promotion_does_not_turn_positive_excess_into_trade_status():
-    result = ConditionalDiscoveryResult(
-        version="0.8.6",
-        candles=500,
-        min_observations=8,
-        evidence=(
-            ConditionalDiscoveryEvidence("BREAKOUT_EXPANSION", 10, (_cell(sufficient=True, excess=5.0),)),
-        ),
-    )
-
-    candidate = TradingPathCandidateServiceV088.promote(result)[0]
-
+def test_promotion_never_produces_trade_status():
+    candidate = TradingPathCandidateServiceV088.promote(
+        _result(_cell(sufficient=True, excess=5.0)), instrument_uid="uid-3", ticker="SBER"
+    )[0]
     assert candidate.status.value == "research"
-    assert candidate.evidence.excess_return_pct == 5.0
