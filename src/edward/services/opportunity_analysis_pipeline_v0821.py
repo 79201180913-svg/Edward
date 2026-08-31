@@ -4,7 +4,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Mapping
 
 from edward.api.tinvest_multifactor_client_patch_v081 import install as install_client_patch
-from edward.services.analysis_pipeline_service_v08 import AnalysisPipelineServiceV08
+from edward.services.analysis_pipeline_service_v08 import AnalysisPipelineServiceV08, AnalysisPipelineV08Result
 from edward.services.analysis_pipeline_service_v081 import AnalysisPipelineServiceV081
 from edward.services.analysis_pipeline_service_v082 import AnalysisPipelineServiceV082
 from edward.services.cached_analysis_service_v08 import CachedAnalysisServiceV08
@@ -120,6 +120,22 @@ class OpportunityAnalysisPipelineV0821:
             snapshot["__instrument_context"] = context
         return snapshot
 
+    @staticmethod
+    def view_from_result(result: AnalysisPipelineV08Result) -> OpportunityAnalysisViewV0821:
+        """Adapt an already computed canonical result without running analysis."""
+        evidence_strategy = None
+        for strategy in getattr(result.analysis, "strategies", ()):
+            if strategy.strategy == result.evidence_strategy:
+                evidence_strategy = strategy
+                break
+        if evidence_strategy is None and getattr(result.analysis, "strategies", ()):
+            evidence_strategy = max(result.analysis.strategies, key=lambda item: item.score)
+        strategies = (evidence_strategy,) if evidence_strategy is not None else ()
+        return OpportunityAnalysisViewV0821(
+            pipeline_result=result,
+            strategies=strategies,
+        )
+
     def analyze(
         self,
         *,
@@ -171,18 +187,7 @@ class OpportunityAnalysisPipelineV0821:
             base=replace(result.base, base=adjusted_base),
         )
 
-        evidence_strategy = None
-        for strategy in getattr(result.analysis, "strategies", ()):
-            if strategy.strategy == result.evidence_strategy:
-                evidence_strategy = strategy
-                break
-        if evidence_strategy is None and getattr(result.analysis, "strategies", ()):
-            evidence_strategy = max(result.analysis.strategies, key=lambda item: item.score)
-        strategies = (evidence_strategy,) if evidence_strategy is not None else ()
-        return OpportunityAnalysisViewV0821(
-            pipeline_result=result,
-            strategies=strategies,
-        )
+        return self.view_from_result(result)
 
 
 __all__ = [
