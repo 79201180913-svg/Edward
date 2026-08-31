@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeAlias
 
 from edward.services.analysis_pipeline_service_v08 import AnalysisPipelineV08Result
+from edward.services.analysis_pipeline_service_v082 import AnalysisPipelineV082Result
+
+CanonicalAnalysisResult: TypeAlias = AnalysisPipelineV08Result | AnalysisPipelineV082Result
 
 
 @dataclass(frozen=True, slots=True)
@@ -12,10 +15,10 @@ class OpportunityAnalysisViewV010:
 
     This adapter deliberately performs no analysis, forecasting, opportunity scoring,
     decision-making, trade planning, or position sizing. It only exposes values that
-    have already been calculated by AnalysisPipelineServiceV08.
+    have already been calculated by the Analysis Pipeline.
     """
 
-    analysis_result: AnalysisPipelineV08Result
+    analysis_result: CanonicalAnalysisResult
     analysis: Any
     opportunity: Any
     expected_value: Any
@@ -33,9 +36,17 @@ class OpportunityAnalysisConsumerV010:
     """Consume, without recalculating, a canonical v0.8 analysis result."""
 
     @staticmethod
-    def from_result(result: AnalysisPipelineV08Result) -> OpportunityAnalysisViewV010:
-        if not isinstance(result, AnalysisPipelineV08Result):
-            raise TypeError("Opportunity Search requires AnalysisPipelineV08Result")
+    def from_result(result: CanonicalAnalysisResult) -> OpportunityAnalysisViewV010:
+        if not isinstance(result, (AnalysisPipelineV08Result, AnalysisPipelineV082Result)):
+            raise TypeError("Opportunity Search requires a canonical AnalysisPipeline result")
+
+        base = getattr(result, "base", None)
+        confidence = getattr(result, "confidence", None)
+        if confidence is None and base is not None:
+            confidence = getattr(base, "confidence", None)
+
+        trading_path_research = getattr(result, "trading_path_research", None)
+        version = getattr(result, "version", "")
 
         return OpportunityAnalysisViewV010(
             analysis_result=result,
@@ -43,14 +54,14 @@ class OpportunityAnalysisConsumerV010:
             opportunity=result.opportunity,
             expected_value=result.expected_value,
             portfolio_impact=result.portfolio_impact,
-            forecast_quality_score=result.forecast_quality_score,
-            regime_confidence=result.regime_confidence,
-            evidence_strategy=result.evidence_strategy,
-            portfolio_context_available=result.portfolio_context_available,
-            confidence=result.confidence,
-            trading_path_research=result.trading_path_research,
-            version=result.version,
+            forecast_quality_score=getattr(result, "forecast_quality_score", None),
+            regime_confidence=getattr(result, "regime_confidence", None),
+            evidence_strategy=getattr(result, "evidence_strategy", None),
+            portfolio_context_available=bool(getattr(result, "portfolio_context_available", False)),
+            confidence=confidence,
+            trading_path_research=trading_path_research,
+            version=version,
         )
 
 
-__all__ = ["OpportunityAnalysisViewV010", "OpportunityAnalysisConsumerV010"]
+__all__ = ["CanonicalAnalysisResult", "OpportunityAnalysisViewV010", "OpportunityAnalysisConsumerV010"]
