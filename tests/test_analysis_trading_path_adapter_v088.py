@@ -31,9 +31,9 @@ def _diagnostics():
         win_rate_pct=70.0, baseline_mean_return_pct=0.5, excess_return_pct=1.5, sufficient_sample=True,
     )
     evidence = ConditionalDiscoveryEvidence(
-        hypothesis="BREAKOUT_EXPANSION", cells=(cell,)
+        hypothesis="BREAKOUT_EXPANSION", events=10, cells=(cell,)
     )
-    discovery = ConditionalDiscoveryResult(version="0.8.6", evidence=(evidence,))
+    discovery = ConditionalDiscoveryResult(version="0.8.6", candles=300, min_observations=8, evidence=(evidence,))
     return AnalysisV08Diagnostics(0.9, "TREND_UP", {}, {}, conditional_discovery=discovery)
 
 
