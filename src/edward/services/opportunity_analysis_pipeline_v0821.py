@@ -11,9 +11,7 @@ from edward.services.cached_analysis_service_v08 import CachedAnalysisServiceV08
 from edward.services.news_intelligence_service_v081 import NewsIntelligenceServiceV081
 from edward.services.news_overlay_service_v081 import NewsOverlayServiceV081
 from edward.services.opportunity_engine import OpportunityEngine as LegacyOpportunityEngine
-from edward.services.semantic_robust_contract_analysis_data_service_v081 import (
-    SemanticRobustContractAnalysisDataServiceV081,
-)
+from edward.services.semantic_robust_contract_analysis_data_service_v081 import SemanticRobustContractAnalysisDataServiceV081
 
 OPPORTUNITY_ANALYSIS_V0821_VERSION = "0.8.2.1"
 
@@ -55,13 +53,7 @@ class UnifiedOpportunityEngineV0821:
 
 
 class OpportunityAnalysisPipelineV0821:
-    """Provide opportunity search with the canonical v0.8.2 analysis pipeline.
-
-    The adapter deliberately reuses the same contract-data collection and
-    news overlay path as the v0.8.2 single-instrument analysis UI. Portfolio
-    and position context remains outside this adapter and is applied by the
-    opportunity/decision layer.
-    """
+    """Provide opportunity search with the canonical v0.8.2 analysis pipeline."""
 
     def __init__(
         self,
@@ -100,7 +92,6 @@ class OpportunityAnalysisPipelineV0821:
 
     @staticmethod
     def _fundamental_input(fundamentals: Any, instrument: Mapping[str, Any] | None) -> Any:
-        """Attach the same instrument semantic context used by the analysis UI."""
         if not isinstance(fundamentals, Mapping):
             return fundamentals
         snapshot = dict(fundamentals)
@@ -127,7 +118,6 @@ class OpportunityAnalysisPipelineV0821:
 
     @staticmethod
     def view_from_result(result: AnalysisPipelineV08Result) -> OpportunityAnalysisViewV0821:
-        """Adapt an already computed canonical result without running analysis."""
         evidence_strategy = None
         for strategy in getattr(result.analysis, "strategies", ()):
             if strategy.strategy == result.evidence_strategy:
@@ -136,10 +126,7 @@ class OpportunityAnalysisPipelineV0821:
         if evidence_strategy is None and getattr(result.analysis, "strategies", ()):
             evidence_strategy = max(result.analysis.strategies, key=lambda item: item.score)
         strategies = (evidence_strategy,) if evidence_strategy is not None else ()
-        return OpportunityAnalysisViewV0821(
-            pipeline_result=result,
-            strategies=strategies,
-        )
+        return OpportunityAnalysisViewV0821(pipeline_result=result, strategies=strategies)
 
     def analyze(
         self,
@@ -159,7 +146,6 @@ class OpportunityAnalysisPipelineV0821:
         event = reports[0] if reports else None
         current_signal = data.signals[0] if data.signals else None
         fundamental_input = self._fundamental_input(data.fundamentals, instrument)
-
         result = self.pipeline.analyze(
             instrument_uid=instrument_uid,
             ticker=ticker,
@@ -181,17 +167,9 @@ class OpportunityAnalysisPipelineV0821:
             instrument_risk_metadata=data.instrument_risk_metadata,
             session_name=data.session_name,
         )
-
-        news_result = NewsIntelligenceServiceV081.analyze(
-            data.news,
-            instrument_uid=str(instrument_uid),
-        )
+        news_result = NewsIntelligenceServiceV081.analyze(data.news, instrument_uid=str(instrument_uid))
         adjusted_base, _news_overlay = NewsOverlayServiceV081.apply(result.base.base, news_result)
-        result = replace(
-            result,
-            base=replace(result.base, base=adjusted_base),
-        )
-
+        result = replace(result, base=replace(result.base, base=adjusted_base))
         return self.view_from_result(result)
 
 
