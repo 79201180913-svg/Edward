@@ -88,25 +88,17 @@ class LiveOpportunitySearchService(OpportunitySearchService):
         analysis = consumed.analysis
         strategy_name = consumed.evidence_strategy
         strategy_score = 0.0
-        selected = None
         for item in getattr(analysis, "strategies", ()) or ():
             if getattr(item, "strategy", None) == strategy_name:
-                selected = item
+                strategy_score = float(getattr(item, "score", 0.0) or 0.0)
                 break
-        if selected is None and strategy_name is None:
-            for item in getattr(analysis, "strategies", ()) or ():
-                if getattr(item, "quality_gate", False):
-                    selected = item
-                    strategy_name = getattr(item, "strategy", None)
-                    break
-        if selected is not None:
-            strategy_score = float(getattr(selected, "score", 0.0) or 0.0)
+        if strategy_name is None:
+            strategy_score = float(getattr(analysis, "score", 0.0) or 0.0)
         recommendation = cls._analysis_value(getattr(analysis, "recommendation", None))
         score = float(getattr(analysis, "score", 0.0) or 0.0)
         opportunity_score = float(getattr(consumed.opportunity, "score", 0.0) or 0.0)
-        qg = bool(getattr(selected, "quality_gate", False)) if selected is not None else False
-        reason = "" if qg else "STRATEGY_QUALITY_FAIL" if selected is not None else "ANALYSIS_NO_STRATEGY"
         explanation = str(getattr(analysis, "explanation", None) or getattr(analysis, "reason", None) or "")
+        reason = str(getattr(analysis, "reason", None) or "")
         return OpportunitySearchResult(
             instrument_uid=str(cls._field(instrument, "uid", cls._field(instrument, "instrument_uid", ""))),
             ticker=str(cls._field(instrument, "ticker", "")),
@@ -114,7 +106,7 @@ class LiveOpportunitySearchService(OpportunitySearchService):
             price=cls._float_or_none(cls._field(instrument, "last_price", None)),
             market_regime=getattr(analysis, "market_regime", None),
             strategy_name=strategy_name,
-            strategy_score=strategy_score if selected is not None else score,
+            strategy_score=strategy_score if strategy_name is not None else score,
             opportunity_score=opportunity_score,
             decision=recommendation,
             status="ANALYSIS_READY",
