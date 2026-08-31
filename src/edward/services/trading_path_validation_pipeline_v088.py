@@ -37,7 +37,9 @@ class TradingPathValidationPipelineV088:
         returns = tuple(float(trade.return_pct) for trade in backtest.trades)
         economic = EconomicValidationV088.validate(returns, costs)
         temporal = TradingPathEvidenceServiceV088.temporal_blocks(returns)
-        statistics = TradingPathStatisticalValidationV088.evaluate(returns, temporal)
+        statistics = TradingPathStatisticalValidationV088.evaluate(
+            returns, tuple((value,) for value in temporal)
+        )
         evidence = TradingPathEvidenceServiceV088.build(returns)
         return TradingPathPipelineResultV088(
             candidate=candidate,
