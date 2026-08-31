@@ -9,6 +9,7 @@ from edward.services.analysis_service_v08 import AnalysisServiceV08
 from edward.services.trading_path_candidate_service_v088 import TradingPathCandidateServiceV088
 from edward.services.trading_path_ranking_v088 import RankedTradingPathV088, TradingPathRankingServiceV088
 from edward.services.trading_path_validation_pipeline_v088 import TradingPathPipelineResultV088, TradingPathValidationPipelineV088
+from edward.services.economic_validation_v088 import TradingCostModelV088
 
 logger = logging.getLogger(__name__)
 
@@ -65,12 +66,13 @@ class AnalysisTradingPathAdapterV088:
         ranked = TradingPathRankingServiceV088.rank_and_deduplicate(candidates)
         observations = discovery.observations
         validation_results: list[TradingPathPipelineResultV088] = []
+        cost_model = getattr(self.analysis_service, "costs", None) or TradingCostModelV088()
         for item in ranked:
             result = TradingPathValidationPipelineV088.run(
                 item.candidate,
                 ordered,
                 observations,
-                self.analysis_service.costs,
+                cost_model,
             )
             validation_results.append(result)
         logger.warning(
