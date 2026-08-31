@@ -93,6 +93,21 @@ class TInvestAdapterClient:
     def get_instrument(self, instrument_id: str) -> dict: return self._request("POST", "/instruments/get", {"instrument_id": instrument_id})
     def get_last_prices(self, instrument_ids: list[str]) -> dict: return self._request("POST", "/market/last-prices", {"instrument_ids": instrument_ids})
     def get_close_prices(self, instrument_ids: list[str]) -> dict: return self._request("POST", "/market/close-prices", {"instrument_ids": instrument_ids})
+    def get_candles(self, instrument_id: str, start: Any, end: Any, interval: str = "CANDLE_INTERVAL_DAY", limit: int = 2400) -> dict:
+        """Return historical candles without changing the requested time window."""
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        return self._request(
+            "POST",
+            "/market/candles",
+            {
+                "instrument_id": str(instrument_id),
+                "from": start.isoformat() if hasattr(start, "isoformat") else str(start),
+                "to": end.isoformat() if hasattr(end, "isoformat") else str(end),
+                "interval": str(interval),
+                "limit": int(limit),
+            },
+        )
     def get_trading_status(self, instrument_id: str) -> dict: return self._request("POST", "/market/trading-status", {"instrument_id": instrument_id})
     def get_trading_statuses(self, instrument_ids: list[str]) -> dict: return self._request("POST", "/market/trading-statuses", {"instrument_ids": instrument_ids})
     def get_orders(self, account_id: str) -> dict: return self._request("POST", "/orders", {"account_id": account_id})
