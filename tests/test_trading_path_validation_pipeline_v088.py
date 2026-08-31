@@ -1,8 +1,9 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from edward.domain import TradingPathCandidate, TradingPathEvidence, TradingPathRule
+from edward.services.analysis_service import Candle
 from edward.services.economic_validation_v088 import TradingCostModelV088
 from edward.services.event_observation_v086 import EventObservationV086
 from edward.services.trading_path_validation_pipeline_v088 import TradingPathValidationPipelineV088
@@ -16,11 +17,12 @@ def _candidate() -> TradingPathCandidate:
 
 
 def _candles():
-    return (
-        {"open": 100.0, "close": 100.0},
-        {"open": 100.0, "close": 101.0},
-        {"open": 101.0, "close": 103.0},
-        {"open": 103.0, "close": 104.0},
+    start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    values = ((99.0, 100.0), (100.0, 101.0), (101.0, 103.0), (103.0, 104.0))
+    return tuple(
+        Candle(start + timedelta(days=index), open_price, high, low, close, 1000.0)
+        for index, (open_price, close) in enumerate(values)
+        for high, low in [(max(open_price, close), min(open_price, close))]
     )
 
 
