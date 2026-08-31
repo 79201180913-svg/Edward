@@ -7,7 +7,7 @@ def test_temporal_blocks_preserve_order_and_cover_all_returns():
 
 
 def test_evidence_requires_all_temporal_blocks_to_be_positive_for_stability():
-    evidence = TradingPathEvidenceServiceV088.build((1.0, 2.0, -1.0, 4.0, 2.0, 3.0))
+    evidence = TradingPathEvidenceServiceV088.build((1.0, 2.0, -4.0, 4.0, 2.0, 3.0))
     assert evidence.temporal_block_count == 3
     assert evidence.temporal_positive_blocks == 2
     assert evidence.temporal_stable is False
