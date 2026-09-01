@@ -10,7 +10,9 @@ from edward.services.market_context_shadow_scoring_v011 import MarketContextShad
 from edward.services.market_data_loader_v011 import MarketDataLoaderV011, MarketDataRequest
 from edward.services.market_regime_context_v011 import MarketRegimeContextBuilderV011
 
+import logging
 
+logger = logging.getLogger(__name__)
 ANALYSIS_PIPELINE_V011_VERSION = "0.11.0"
 
 
