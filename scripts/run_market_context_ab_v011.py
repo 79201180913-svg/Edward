@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import argparse
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from edward.api.tinvest_adapter_client import TInvestAdapterClient
 from edward.services.analysis_service import Candle
-from edward.services.analysis_ui_helpers import parse_candles
 from edward.services.benchmark_instrument_resolver_v011 import BenchmarkInstrumentResolverV011
 from edward.services.market_context_ab_backtest_v011 import MarketContextABBacktestServiceV011
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_candles(response: dict) -> list[Candle]:
+    from edward.ui.analysis_ui_v04 import _parse_candles as parse_candles
+    return parse_candles(response)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -23,14 +27,16 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _load_candles(client: TInvestAdapterClient, instrument_uid: str, days: int) -> list[Candle]:
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=days)
     response = client.get_candles(
         instrument_uid,
-        start=__import__("datetime").datetime.now(__import__("datetime").timezone.utc) - timedelta(days=days),
-        end=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+        start=start,
+        end=end,
         interval="CANDLE_INTERVAL_DAY",
         limit=2400,
     )
-    candles = parse_candles(response)
+    candles = _parse_candles(response)
     if not candles:
         raise RuntimeError(f"No candles received for {instrument_uid}")
     return candles
@@ -61,7 +67,7 @@ def main() -> int:
         interval="CANDLE_INTERVAL_DAY",
         limit=2400,
     )
-    market_candles = parse_candles(response)
+    market_candles = _parse_candles(response)
     if not market_candles:
         raise RuntimeError(f"No benchmark candles received for {benchmark.instrument_uid}")
 
