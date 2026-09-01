@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Any, Iterable
 
 from edward.services.analysis_service import AnalysisResult, Candle
 from edward.services.analysis_service_v08 import AnalysisServiceV08
@@ -12,10 +12,14 @@ from edward.services.trading_path_validation_pipeline_v088 import TradingPathPip
 from edward.services.economic_validation_v088 import TradingCostModelV088
 from edward.services.trading_path_overlap_audit_v088 import TradingPathOverlapAuditV088, TradingPathOverlapEvidenceV088
 from edward.services.trading_path_multiple_testing_v088 import TradingPathMultipleTestingEvidenceV088, TradingPathMultipleTestingServiceV088
-from edward.services.trading_path_promotion_evidence_v088 import TradingPathPromotionEvidenceServiceV088
 from edward.services.trading_path_promotion_gate_v088 import TradingPathPromotionGateV088, TradingPathPromotionResultV088
+from edward.services.market_context_shadow_scoring_v011 import (
+    MarketContextShadowScoreV011,
+    MarketContextShadowScoringServiceV011,
+)
 
 logger = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True, slots=True)
 class AnalysisTradingPathResearchV088:
@@ -25,13 +29,24 @@ class AnalysisTradingPathResearchV088:
     overlap_evidence: tuple[TradingPathOverlapEvidenceV088, ...] = ()
     multiple_testing_evidence: tuple[TradingPathMultipleTestingEvidenceV088, ...] = ()
     promotion_results: tuple[TradingPathPromotionResultV088, ...] = ()
+    market_context_shadow: tuple[tuple[RankedTradingPathV088, MarketContextShadowScoreV011], ...] = ()
+
 
 class AnalysisTradingPathAdapterV088:
-    """Add v0.8.8 research validation without changing legacy decisions."""
+    """Add v0.8.8 research validation plus optional v0.11 shadow context ranking."""
+
     def __init__(self, analysis_service: AnalysisServiceV08 | None = None) -> None:
         self.analysis_service = analysis_service or AnalysisServiceV08()
 
-    def _research_from_analysis(self, *, analysis: AnalysisResult, instrument_uid: str, ticker: str, candles: tuple[Candle, ...]) -> AnalysisTradingPathResearchV088:
+    def _research_from_analysis(
+        self,
+        *,
+        analysis: AnalysisResult,
+        instrument_uid: str,
+        ticker: str,
+        candles: tuple[Candle, ...],
+        market_context: Any = None,
+    ) -> AnalysisTradingPathResearchV088:
         diagnostics = self.analysis_service.last_diagnostics
         if diagnostics is None or diagnostics.conditional_discovery is None:
             logger.warning("[V088 TRADING PATH ADAPTER] ticker=%s candidates=0 validation=0 reason=no_conditional_discovery", ticker)
@@ -59,6 +74,39 @@ class AnalysisTradingPathAdapterV088:
             )
             for result, overlap, multiple_testing in zip(validation_results, overlap_evidence, multiple_testing_evidence)
         )
+        shadow = MarketContextShadowScoringServiceV011.rank(ranked, market_context)
+        if shadow:
+            changed = sum(item.rank_delta != 0 for _, item in shadow)
+            mean_abs_delta = sum(abs(item.score_delta) for _, item in shadow) / len(shadow)
+            logger.warning(
+                "[V011 MARKET SHADOW SUMMARY] ticker=%s benchmark=%s candidates=%d rank_changed=%d mean_abs_score_delta=%.4f",
+                ticker,
+                getattr(market_context, "benchmark_id", "UNKNOWN"),
+                len(shadow),
+                changed,
+                mean_abs_delta,
+            )
+            for item, score in shadow:
+                rule = item.candidate.rule
+                logger.warning(
+                    "[V011 MARKET SHADOW RANK] ticker=%s baseline_rank=%d context_rank=%d rank_delta=%d hypothesis=%s regime=%s volatility=%s direction=%s horizon=%d baseline_score=%.6f context_score=%.6f delta=%.6f regime_compat=%s rs_component=%.6f vol_component=%.6f confidence_hint_delta=%.6f",
+                    ticker,
+                    score.baseline_rank,
+                    score.context_rank,
+                    score.rank_delta,
+                    rule.hypothesis,
+                    rule.regime,
+                    rule.volatility_bucket,
+                    rule.direction,
+                    rule.horizon,
+                    score.baseline_score,
+                    score.context_adjusted_score,
+                    score.score_delta,
+                    score.regime_compatibility,
+                    score.relative_strength_component,
+                    score.volatility_component,
+                    score.confidence_hint_delta,
+                )
         logger.warning("[V088 TRADING PATH RANKING] ticker=%s candidates=%d ranked=%d validated=%d overlap_audited=%d promotion_evaluated=%d recommendation_unchanged=%s", ticker, len(candidates), len(ranked), len(validation_results), len(overlap_evidence), len(promotion_results), analysis.recommendation)
         for rank, item in enumerate(ranked, 1):
             rule = item.candidate.rule
@@ -66,15 +114,61 @@ class AnalysisTradingPathAdapterV088:
         for result, overlap, multiple_testing, promotion in zip(validation_results, overlap_evidence, multiple_testing_evidence, promotion_results):
             evidence = result.statistical_evidence
             logger.warning("[V088 TRADING PATH VALIDATED] ticker=%s hypothesis=%s regime=%s volatility=%s direction=%s horizon=%d trades=%d gross=%.6f net=%.6f mean=%.6f ci95=[%.6f,%.6f] adjusted_ci=[%.6f,%.6f] positive_blocks=%d event_overlap=%.6f holding_overlap=%.6f multiple_tests=%d promotion=%s reasons=%s", ticker, result.candidate.rule.hypothesis, result.candidate.rule.regime, result.candidate.rule.volatility_bucket, result.candidate.rule.direction, result.candidate.rule.horizon, result.trades, result.gross_return_pct, result.net_return_pct, evidence.mean_return_pct, evidence.ci95_low_pct, evidence.ci95_high_pct, multiple_testing.adjusted_ci95_low_pct, multiple_testing.adjusted_ci95_high_pct, evidence.positive_temporal_blocks, overlap.max_event_overlap_ratio, overlap.max_holding_overlap_ratio, multiple_testing.tests_count, promotion.status.value, ",".join(promotion.reasons) or "NONE")
-        return AnalysisTradingPathResearchV088(analysis=analysis, ranked_candidates=ranked, validation_results=validation_results, overlap_evidence=overlap_evidence, multiple_testing_evidence=multiple_testing_evidence, promotion_results=promotion_results)
+        return AnalysisTradingPathResearchV088(
+            analysis=analysis,
+            ranked_candidates=ranked,
+            validation_results=validation_results,
+            overlap_evidence=overlap_evidence,
+            multiple_testing_evidence=multiple_testing_evidence,
+            promotion_results=promotion_results,
+            market_context_shadow=shadow,
+        )
 
-    def analyze(self, *, instrument_uid: str, ticker: str, candles: Iterable[Candle], profile: str = "medium_term", risk_profile: str = "balanced", horizon: str = "medium") -> AnalysisTradingPathResearchV088:
+    def analyze(
+        self,
+        *,
+        instrument_uid: str,
+        ticker: str,
+        candles: Iterable[Candle],
+        profile: str = "medium_term",
+        risk_profile: str = "balanced",
+        horizon: str = "medium",
+        market_context: Any = None,
+    ) -> AnalysisTradingPathResearchV088:
         ordered = tuple(candles)
-        analysis = self.analysis_service.analyze(instrument_uid=instrument_uid, ticker=ticker, candles=ordered, profile=profile, risk_profile=risk_profile, horizon=horizon)
-        return self.research_from_analysis(analysis=analysis, instrument_uid=instrument_uid, ticker=ticker, candles=ordered)
+        analysis = self.analysis_service.analyze(
+            instrument_uid=instrument_uid,
+            ticker=ticker,
+            candles=ordered,
+            profile=profile,
+            risk_profile=risk_profile,
+            horizon=horizon,
+        )
+        return self.research_from_analysis(
+            analysis=analysis,
+            instrument_uid=instrument_uid,
+            ticker=ticker,
+            candles=ordered,
+            market_context=market_context,
+        )
 
-    def research_from_analysis(self, *, analysis: AnalysisResult, instrument_uid: str, ticker: str, candles: Iterable[Candle]) -> AnalysisTradingPathResearchV088:
+    def research_from_analysis(
+        self,
+        *,
+        analysis: AnalysisResult,
+        instrument_uid: str,
+        ticker: str,
+        candles: Iterable[Candle],
+        market_context: Any = None,
+    ) -> AnalysisTradingPathResearchV088:
         """Run v0.8.8 research from an already-computed legacy analysis."""
-        return self._research_from_analysis(analysis=analysis, instrument_uid=instrument_uid, ticker=ticker, candles=tuple(candles))
+        return self._research_from_analysis(
+            analysis=analysis,
+            instrument_uid=instrument_uid,
+            ticker=ticker,
+            candles=tuple(candles),
+            market_context=market_context,
+        )
+
 
 __all__ = ["AnalysisTradingPathResearchV088", "AnalysisTradingPathAdapterV088"]
