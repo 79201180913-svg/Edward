@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from edward.api.tinvest_adapter_client import TInvestAdapterClient
 from edward.services.analysis_service import Candle
-from edward.services.analysis_ui_v04 import _parse_candles
+from edward.services.analysis_ui_helpers import parse_candles
 from edward.services.benchmark_instrument_resolver_v011 import BenchmarkInstrumentResolverV011
 from edward.services.market_benchmark_resolver_v011 import BenchmarkDefinition
 from edward.services.market_context_ab_backtest_v011 import MarketContextABBacktestServiceV011
@@ -43,7 +43,7 @@ def _load_candles(client: TInvestAdapterClient, instrument_uid: str, days: int) 
         interval="CANDLE_INTERVAL_DAY",
         limit=2400,
     )
-    candles = _parse_candles(response)
+    candles = parse_candles(response)
     if not candles:
         raise RuntimeError(f"No candles received for {instrument_uid}")
     return candles
@@ -77,7 +77,7 @@ def main() -> int:
         interval="CANDLE_INTERVAL_DAY",
         limit=2400,
     )
-    market_candles = _parse_candles(response)
+    market_candles = parse_candles(response)
     if not market_candles:
         raise RuntimeError(f"No benchmark candles received for {benchmark.instrument_uid}")
 
