@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Any, Callable
 
 import edward.services.opportunity_search_service as opportunity_search_module
@@ -30,6 +31,32 @@ class LiveOpportunitySearchService(OpportunitySearchService):
     @property
     def cache_info(self) -> dict[str, int]:
         return {}
+
+    @staticmethod
+    def _enforce_execution_readiness(result: Any, *, forecast_quality_pass: bool = False, forecast_quality_label: str = "НЕ ПРИМЕНИМ") -> Any:
+        decision = str(getattr(result, "decision", "") or "").upper()
+        quantity = float(getattr(result, "recommended_quantity", 0) or 0)
+        actionable = decision in {"BUY", "SELL", "ADD", "REDUCE"}
+        reason = str(getattr(result, "reason", "") or "")
+        if actionable and quantity <= 0:
+            ready = False
+            reason = f"{reason}; POSITION_SIZE_NOT_READY; Исполнение: НЕТ"
+        elif actionable:
+            ready = True
+            suffix = f"; Контроль качества прогноза: {forecast_quality_label}" if forecast_quality_pass else ""
+            reason = f"{reason}{suffix}; Исполнение: ДА"
+        else:
+            ready = False
+            reason = f"{reason}; Исполнение: НЕТ"
+        try:
+            return replace(result, execution_ready=ready, reason=reason)
+        except (TypeError, ValueError):
+            try:
+                result.execution_ready = ready
+                result.reason = reason
+            except Exception:
+                pass
+            return result
 
     def _canonical_result(self, instrument: Any, opportunity: Any, quantity: float) -> OpportunitySearchResult:
         path = opportunity.best_path
