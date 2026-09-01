@@ -42,10 +42,6 @@ class AnalysisTradingPathAdapterV088:
     def _resolve_market_context(market_context: Any, instrument_uid: str) -> Any:
         if market_context is not None:
             return market_context
-        # Compatibility bridge for the current v0.8.8 UI: it builds the
-        # market snapshot immediately before invoking this adapter but does not
-        # yet pass it as an argument. Reuse it only when instrument identity
-        # matches, preventing a stale snapshot from another instrument.
         try:
             from edward.services.market_context_runtime_service_v011 import MarketContextRuntimeServiceV011
             snapshot = MarketContextRuntimeServiceV011.last_built_snapshot
@@ -54,34 +50,6 @@ class AnalysisTradingPathAdapterV088:
         except Exception:
             logger.debug("[V011 MARKET SHADOW] latest snapshot bridge unavailable", exc_info=True)
         return None
-
-    @staticmethod
-    def _apply_market_context_order(
-        ranked: tuple[RankedTradingPathV088, ...],
-        validation_results: tuple[TradingPathPipelineResultV088, ...],
-        overlap_evidence: tuple[TradingPathOverlapEvidenceV088, ...],
-        multiple_testing_evidence: tuple[TradingPathMultipleTestingEvidenceV088, ...],
-        promotion_results: tuple[TradingPathPromotionResultV088, ...],
-        shadow: tuple[tuple[RankedTradingPathV088, MarketContextShadowScoreV011], ...],
-    ) -> tuple[
-        tuple[RankedTradingPathV088, ...],
-        tuple[TradingPathPipelineResultV088, ...],
-        tuple[TradingPathOverlapEvidenceV088, ...],
-        tuple[TradingPathMultipleTestingEvidenceV088, ...],
-        tuple[TradingPathPromotionResultV088, ...],
-    ]:
-        if not shadow:
-            return ranked, validation_results, overlap_evidence, multiple_testing_evidence, promotion_results
-        context_positions = {id(item): score.context_rank for item, score in shadow}
-        rows = list(zip(ranked, validation_results, overlap_evidence, multiple_testing_evidence, promotion_results))
-        rows.sort(key=lambda row: context_positions.get(id(row[0]), len(rows) + 1))
-        return (
-            tuple(row[0] for row in rows),
-            tuple(row[1] for row in rows),
-            tuple(row[2] for row in rows),
-            tuple(row[3] for row in rows),
-            tuple(row[4] for row in rows),
-        )
 
     def _research_from_analysis(
         self,
@@ -97,12 +65,20 @@ class AnalysisTradingPathAdapterV088:
             logger.warning("[V088 TRADING PATH ADAPTER] ticker=%s candidates=0 validation=0 reason=no_conditional_discovery", ticker)
             return AnalysisTradingPathResearchV088(analysis=analysis, ranked_candidates=())
         discovery = diagnostics.conditional_discovery
-        candidates = TradingPathCandidateServiceV088.promote(discovery, instrument_uid=instrument_uid, ticker=ticker)
-        ranked = TradingPathRankingServiceV088.rank_and_deduplicate(candidates)
+        ranked = TradingPathRankingServiceV088.rank_and_deduplicate(
+            TradingPathCandidateServiceV088.promote(discovery, instrument_uid=instrument_uid, ticker=ticker)
+        )
+        candidates = tuple(item.candidate for item in ranked)
         legacy_cost_model = getattr(self.analysis_service, "costs", None)
         cost_model = TradingCostModelV088.from_legacy(legacy_cost_model) if legacy_cost_model is not None else TradingCostModelV088()
-        validation_results = tuple(TradingPathValidationPipelineV088.run(item.candidate, candles, discovery.observations, cost_model) for item in ranked)
-        overlap_evidence = tuple(TradingPathOverlapAuditV088.audit(item.candidate, candidates, discovery.observations) for item in ranked)
+        validation_results = tuple(
+            TradingPathValidationPipelineV088.run(item.candidate, candles, discovery.observations, cost_model)
+            for item in ranked
+        )
+        overlap_evidence = tuple(
+            TradingPathOverlapAuditV088.audit(item.candidate, candidates, discovery.observations)
+            for item in ranked
+        )
         multiple_testing_evidence = tuple(
             TradingPathMultipleTestingServiceV088.evaluate(
                 mean_return_pct=result.statistical_evidence.mean_return_pct,
@@ -117,10 +93,14 @@ class AnalysisTradingPathAdapterV088:
                 overlap=overlap,
                 multiple_testing=multiple_testing,
             )
-            for result, overlap, multiple_testing in zip(validation_results, overlap_evidence, multiple_testing_evidence)
+            for result, overlap, multiple_testing in zip(
+                validation_results, overlap_evidence, multiple_testing_evidence
+            )
         )
+
         resolved_context = self._resolve_market_context(market_context, instrument_uid)
         shadow = MarketContextShadowScoringServiceV011.rank(ranked, resolved_context)
+
         if shadow:
             changed = sum(item.rank_delta != 0 for _, item in shadow)
             mean_abs_delta = sum(abs(item.score_delta) for _, item in shadow) / len(shadow)
@@ -153,43 +133,95 @@ class AnalysisTradingPathAdapterV088:
                     score.volatility_component,
                     score.confidence_hint_delta,
                 )
-            baseline_top = ranked[0].candidate.rule if ranked else None
-            ranked, validation_results, overlap_evidence, multiple_testing_evidence, promotion_results = self._apply_market_context_order(
-                ranked,
-                validation_results,
-                overlap_evidence,
-                multiple_testing_evidence,
-                promotion_results,
-                shadow,
-            )
-            top_rule = ranked[0].candidate.rule
-            logger.warning(
-                "[V011 MARKET-AWARE RANKING] ticker=%s benchmark=%s baseline_top=%s context_top=%s changed=%d",
-                ticker,
-                getattr(resolved_context, "benchmark_id", "UNKNOWN"),
-                baseline_top.hypothesis if baseline_top is not None else None,
-                top_rule.hypothesis,
-                changed,
-            )
         else:
             logger.warning(
                 "[V011 MARKET SHADOW SUMMARY] ticker=%s status=SKIPPED reason=no_full_market_context",
                 ticker,
             )
-        logger.warning("[V088 TRADING PATH RANKING] ticker=%s candidates=%d ranked=%d validated=%d overlap_audited=%d promotion_evaluated=%d recommendation_unchanged=%s", ticker, len(candidates), len(ranked), len(validation_results), len(overlap_evidence), len(promotion_results), analysis.recommendation)
-        for rank, item in enumerate(ranked, 1):
+
+        ordered_ranked = ranked
+        ordered_validation = validation_results
+        ordered_overlap = overlap_evidence
+        ordered_multiple = multiple_testing_evidence
+        ordered_promotion = promotion_results
+
+        if shadow:
+            ordered_shadow = tuple(sorted(shadow, key=lambda pair: pair[1].context_rank))
+            baseline_index = {id(item): index for index, item in enumerate(ranked)}
+            ordered_ranked = tuple(item for item, _ in ordered_shadow)
+            index_order = tuple(baseline_index[id(item)] for item in ordered_ranked)
+            ordered_validation = tuple(validation_results[index] for index in index_order)
+            ordered_overlap = tuple(overlap_evidence[index] for index in index_order)
+            ordered_multiple = tuple(multiple_testing_evidence[index] for index in index_order)
+            ordered_promotion = tuple(promotion_results[index] for index in index_order)
+            logger.warning(
+                "[V011 MARKET-AWARE RANKING] ticker=%s benchmark=%s baseline_top=%s context_top=%s changed=%d",
+                ticker,
+                getattr(resolved_context, "benchmark_id", "UNKNOWN"),
+                ranked[0].candidate.rule.hypothesis if ranked else "NONE",
+                ordered_ranked[0].candidate.rule.hypothesis if ordered_ranked else "NONE",
+                sum(index != position for position, index in enumerate(index_order)),
+            )
+
+        logger.warning(
+            "[V088 TRADING PATH RANKING] ticker=%s candidates=%d ranked=%d validated=%d overlap_audited=%d promotion_evaluated=%d recommendation_unchanged=%s",
+            ticker,
+            len(candidates),
+            len(ordered_ranked),
+            len(ordered_validation),
+            len(ordered_overlap),
+            len(ordered_promotion),
+            analysis.recommendation,
+        )
+        for rank, item in enumerate(ordered_ranked, 1):
             rule = item.candidate.rule
-            logger.warning("[V088 TRADING PATH RANKED] ticker=%s rank=%d hypothesis=%s regime=%s volatility=%s direction=%s horizon=%d score=%.6f status=%s", ticker, rank, rule.hypothesis, rule.regime, rule.volatility_bucket, rule.direction, rule.horizon, item.score, item.candidate.status)
-        for result, overlap, multiple_testing, promotion in zip(validation_results, overlap_evidence, multiple_testing_evidence, promotion_results):
+            logger.warning(
+                "[V088 TRADING PATH RANKED] ticker=%s rank=%d hypothesis=%s regime=%s volatility=%s direction=%s horizon=%d score=%.6f status=%s",
+                ticker,
+                rank,
+                rule.hypothesis,
+                rule.regime,
+                rule.volatility_bucket,
+                rule.direction,
+                rule.horizon,
+                item.score,
+                item.candidate.status,
+            )
+        for result, overlap, multiple_testing, promotion in zip(
+            ordered_validation, ordered_overlap, ordered_multiple, ordered_promotion
+        ):
             evidence = result.statistical_evidence
-            logger.warning("[V088 TRADING PATH VALIDATED] ticker=%s hypothesis=%s regime=%s volatility=%s direction=%s horizon=%d trades=%d gross=%.6f net=%.6f mean=%.6f ci95=[%.6f,%.6f] adjusted_ci=[%.6f,%.6f] positive_blocks=%d event_overlap=%.6f holding_overlap=%.6f multiple_tests=%d promotion=%s reasons=%s", ticker, result.candidate.rule.hypothesis, result.candidate.rule.regime, result.candidate.rule.volatility_bucket, result.candidate.rule.direction, result.candidate.rule.horizon, result.trades, result.gross_return_pct, result.net_return_pct, evidence.mean_return_pct, evidence.ci95_low_pct, evidence.ci95_high_pct, multiple_testing.adjusted_ci95_low_pct, multiple_testing.adjusted_ci95_high_pct, evidence.positive_temporal_blocks, overlap.max_event_overlap_ratio, overlap.max_holding_overlap_ratio, multiple_testing.tests_count, promotion.status.value, ",".join(promotion.reasons) or "NONE")
+            logger.warning(
+                "[V088 TRADING PATH VALIDATED] ticker=%s hypothesis=%s regime=%s volatility=%s direction=%s horizon=%d trades=%d gross=%.6f net=%.6f mean=%.6f ci95=[%.6f,%.6f] adjusted_ci=[%.6f,%.6f] positive_blocks=%d event_overlap=%.6f holding_overlap=%.6f multiple_tests=%d promotion=%s reasons=%s",
+                ticker,
+                result.candidate.rule.hypothesis,
+                result.candidate.rule.regime,
+                result.candidate.rule.volatility_bucket,
+                result.candidate.rule.direction,
+                result.candidate.rule.horizon,
+                result.trades,
+                result.gross_return_pct,
+                result.net_return_pct,
+                evidence.mean_return_pct,
+                evidence.ci95_low_pct,
+                evidence.ci95_high_pct,
+                multiple_testing.adjusted_ci95_low_pct,
+                multiple_testing.adjusted_ci95_high_pct,
+                evidence.positive_temporal_blocks,
+                overlap.max_event_overlap_ratio,
+                overlap.max_holding_overlap_ratio,
+                multiple_testing.tests_count,
+                promotion.status.value,
+                ",".join(promotion.reasons) or "NONE",
+            )
+
         return AnalysisTradingPathResearchV088(
             analysis=analysis,
-            ranked_candidates=ranked,
-            validation_results=validation_results,
-            overlap_evidence=overlap_evidence,
-            multiple_testing_evidence=multiple_testing_evidence,
-            promotion_results=promotion_results,
+            ranked_candidates=ordered_ranked,
+            validation_results=ordered_validation,
+            overlap_evidence=ordered_overlap,
+            multiple_testing_evidence=ordered_multiple,
+            promotion_results=ordered_promotion,
             market_context_shadow=shadow,
         )
 
@@ -230,7 +262,6 @@ class AnalysisTradingPathAdapterV088:
         candles: Iterable[Candle],
         market_context: Any = None,
     ) -> AnalysisTradingPathResearchV088:
-        """Run v0.8.8 research from an already-computed legacy analysis."""
         return self._research_from_analysis(
             analysis=analysis,
             instrument_uid=instrument_uid,
