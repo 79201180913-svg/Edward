@@ -21,7 +21,6 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
     if original_open_analysis is None:
         raise RuntimeError("v0.8.8 analysis frontend installer is unavailable")
 
-    # Install the normal frontend first; we only decorate its existing entrypoint.
     original_open_analysis(app_class, client_class)
 
     import edward.ui.analysis_ui_v04 as legacy
@@ -44,15 +43,8 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
         outer = ttk.Frame(progress, padding=18)
         outer.pack(fill="both", expand=True)
 
-        ttk.Label(
-            outer,
-            text=f"Анализ {ticker}",
-            font=("TkDefaultFont", 16, "bold"),
-        ).pack(anchor="w")
-        ttk.Label(
-            outer,
-            text="v0.8.8 Trading Paths + v0.8.11 Market Context",
-        ).pack(anchor="w", pady=(2, 14))
+        ttk.Label(outer, text=f"Анализ {ticker}", font=("TkDefaultFont", 16, "bold")).pack(anchor="w")
+        ttk.Label(outer, text="v0.8.8 Trading Paths + v0.8.11 Market Context").pack(anchor="w", pady=(2, 14))
 
         phase_var = tk.StringVar(value="Подготовка анализа…")
         detail_var = tk.StringVar(value="Запуск общего pipeline")
@@ -66,6 +58,7 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
 
         closed = False
         stage = 0
+        analysis_result: Any = None
 
         def refresh() -> None:
             if closed:
@@ -116,8 +109,10 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
             return result
 
         def adapter_analyze_with_progress(self: Any, *args: Any, **kwargs: Any) -> Any:
+            nonlocal analysis_result
             set_phase(3, "Этап 3 из 4 — строим Trading Paths", "Candidate Discovery → validation → overlap → multiple testing → Quality Gate…")
             result = original_adapter_analyze(self, *args, **kwargs)
+            analysis_result = result
             candidates = len(getattr(result, "ranked_candidates", ()))
             statuses = [getattr(item.status, "value", item.status) for item in getattr(result, "promotion_results", ())]
             set_phase(
@@ -137,8 +132,23 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
 
             set_phase(1, "Этап 1 из 4 — запускаем анализ", f"Подготавливаем данные {ticker}…")
             normal_open_analysis(app)
-            set_phase(4, "Анализ завершён", "Все результаты рассчитаны и показаны в окне анализа.")
-            progress.after(900, progress.destroy)
+
+            if analysis_result is not None:
+                statuses = [getattr(item.status, "value", item.status) for item in getattr(analysis_result, "promotion_results", ())]
+                promoted = statuses.count("promoted")
+                research_only = statuses.count("research_only")
+                rejected = statuses.count("rejected")
+                candidates = len(getattr(analysis_result, "ranked_candidates", ()))
+                phase_var.set("АНАЛИЗ ЗАВЕРШЁН")
+                detail_var.set(
+                    f"Итог: {candidates} Trading Paths | {promoted} Promoted | {research_only} Research Only | {rejected} Rejected"
+                )
+                percent_var.set("4 / 4 этапа — ГОТОВО")
+                progressbar.configure(value=4)
+            else:
+                set_phase(4, "Анализ завершён", "Результаты рассчитаны и показаны в окне анализа.")
+            refresh()
+            progress.after(1500, progress.destroy)
             progress.wait_window()
             closed = True
         except Exception:
