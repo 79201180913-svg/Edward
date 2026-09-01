@@ -19,6 +19,10 @@ def _value(value: object) -> object:
     return getattr(value, "value", value)
 
 
+def _field(value: object, name: str) -> object:
+    return getattr(value, name, None)
+
+
 class AnalysisPathRuntimeServiceV012:
     """Execute the complete v0.8.12 path analysis without order execution."""
 
@@ -89,11 +93,12 @@ class AnalysisPathRuntimeServiceV012:
                 rank=with_opportunity.rank,
             )
             finalized.append(final)
+            opportunity = final.opportunity
             logger.warning(
                 "[V012 PATH DECISION] ticker=%s hypothesis=%s regime=%s volatility=%s direction=%s horizon=%d rank=%s validation=%s ev=%s risk=%s opportunity=%s confidence=%s decision=%s state=%s reason=%s",
                 ticker, final.hypothesis, final.regime, final.volatility_bucket, final.direction, final.horizon,
-                final.rank, _value(final.status), final.opportunity.expected_value_pct, final.opportunity.risk_score,
-                final.opportunity.score, final.opportunity.confidence, _value(final.decision), _value(final.current_state),
+                final.rank, _value(final.status), _field(opportunity, "expected_value_pct"), _field(opportunity, "risk_score"),
+                _field(opportunity, "score"), _field(opportunity, "confidence"), _value(final.decision), _value(final.current_state),
                 ",".join(result.reasons) or "READY",
             )
 
