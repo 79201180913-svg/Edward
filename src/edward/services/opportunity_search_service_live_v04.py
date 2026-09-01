@@ -9,6 +9,16 @@ from edward.services.trading_path_opportunity_runtime_service_v013 import Tradin
 ResultCallback = Callable[[OpportunitySearchResult, int, int], None]
 
 
+class _ProvidedAnalysisService:
+    """Backward-compatible test seam for a precomputed analysis result."""
+
+    def __init__(self, result: Any):
+        self.result = result
+
+    def analyze(self, **_kwargs: Any) -> Any:
+        return self.result
+
+
 class LiveOpportunitySearchService(OpportunitySearchService):
     """Live Opportunity consumer backed exclusively by canonical v0.8.12 Trading Paths."""
 
@@ -46,18 +56,15 @@ class LiveOpportunitySearchService(OpportunitySearchService):
             strategy_score=float(path_opportunity.score or 0.0),
             opportunity_score=float(path_opportunity.score or 0.0),
             decision=str(decision).upper() if decision is not None else None,
-            status=str(status).upper(),
-            reason=reason,
-            explanation=explanation,
-            quantity=quantity,
-            risk_score=float(path_opportunity.risk_score or 0.0),
-            execution_ready=False,
-            canonical_opportunity=opportunity,
+            status=str(status).upper(), reason=reason, explanation=explanation,
+            quantity=quantity, risk_score=float(path_opportunity.risk_score or 0.0),
+            execution_ready=False, canonical_opportunity=opportunity,
         )
 
     def scan(self, *, profile: str = "medium_term", instrument_kind: str = "SHARE", scope: str = MARKET_SCOPE, progress_callback: ProgressCallback | None = None, result_callback: ResultCallback | None = None, force_recompute: bool = False) -> list[OpportunitySearchResult]:
         scope = str(scope or MARKET_SCOPE).upper()
-        if scope not in {"MARKET", "PORTFOLIO"}: raise ValueError(f"Unsupported opportunity scope: {scope}")
+        if scope not in {"MARKET", "PORTFOLIO"}:
+            raise ValueError(f"Unsupported opportunity scope: {scope}")
         self._notify(progress_callback, "Загрузка списка инструментов", 2.0, 0, 0)
         account_id = self._active_account(); positions = self.client.get_positions(account_id) if account_id else None
         instruments = self._build_universe(scope=scope, instrument_kind=instrument_kind, positions=positions); total = len(instruments)
@@ -107,4 +114,4 @@ class LiveOpportunitySearchService(OpportunitySearchService):
         return OpportunitySearchResult(str(LiveOpportunitySearchService._field(instrument, "uid", LiveOpportunitySearchService._field(instrument, "instrument_uid", ""))), str(LiveOpportunitySearchService._field(instrument, "ticker", "")), str(LiveOpportunitySearchService._field(instrument, "name", "")), price, None, None, 0.0, 0.0, None, "ANALYSIS_UNAVAILABLE", "ANALYSIS_UNAVAILABLE", reason, quantity, 0.0)
 
 
-__all__ = ["LiveOpportunitySearchService"]
+__all__ = ["_ProvidedAnalysisService", "LiveOpportunitySearchService"]
