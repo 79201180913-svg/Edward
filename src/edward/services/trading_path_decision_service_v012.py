@@ -11,6 +11,12 @@ from edward.domain import (
 )
 
 
+class TradingPathDecisionV012(StrEnum):
+    BUY = "buy"
+    WAIT = "wait"
+    PASS = "pass"
+
+
 class TradingPathDecisionReasonV012(StrEnum):
     READY = "ready"
     RISK_GATE_FAILED = "risk_gate_failed"
@@ -25,7 +31,7 @@ class TradingPathDecisionReasonV012(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class TradingPathDecisionResultV012:
-    decision: TradingPathDecision
+    decision: TradingPathDecisionV012
     current_state: TradingPathCurrentState
     status: TradingPathAnalysisStatus
     reasons: tuple[str, ...]
@@ -47,8 +53,11 @@ class TradingPathDecisionServiceV012:
 
         if analysis.evidence is None:
             reasons.append(TradingPathDecisionReasonV012.EVIDENCE_UNAVAILABLE.value)
-        if validation.promotion_status == TradingPathAnalysisStatus.REJECTED.value:
+        if validation is None:
+            reasons.append("VALIDATION_UNAVAILABLE")
+        elif validation.promotion_status == TradingPathAnalysisStatus.REJECTED.value:
             reasons.append(TradingPathDecisionReasonV012.VALIDATION_REJECTED.value)
+
         if opportunity is None:
             reasons.append(TradingPathDecisionReasonV012.MISSING_OPPORTUNITY.value)
         else:
@@ -71,23 +80,23 @@ class TradingPathDecisionServiceV012:
         }
         if any(reason in hard_failures for reason in reasons):
             return TradingPathDecisionResultV012(
-                decision=TradingPathDecision.PASS,
+                decision=TradingPathDecisionV012.PASS,
                 current_state=TradingPathCurrentState.INVALID,
                 status=TradingPathAnalysisStatus.REJECTED,
                 reasons=tuple(reasons),
             )
         if reasons:
             return TradingPathDecisionResultV012(
-                decision=TradingPathDecision.WAIT,
+                decision=TradingPathDecisionV012.WAIT,
                 current_state=TradingPathCurrentState.WAIT,
                 status=TradingPathAnalysisStatus.VALIDATED,
                 reasons=tuple(reasons),
             )
         return TradingPathDecisionResultV012(
-            decision=TradingPathDecision.BUY,
+            decision=TradingPathDecisionV012.BUY,
             current_state=TradingPathCurrentState.ENTRY_READY,
             status=TradingPathAnalysisStatus.PROMOTABLE,
-            reasons=(TradingPathDecisionReasonV012.READY.value,),
+            reasons=(),
         )
 
     @classmethod
@@ -111,10 +120,15 @@ class TradingPathDecisionServiceV012:
             market_context=analysis.market_context,
             opportunity=analysis.opportunity,
             current_state=result.current_state,
-            decision=result.decision,
+            decision=TradingPathDecision(result.decision.value),
             status=result.status,
             rank=analysis.rank,
         )
 
 
-__all__ = ["TradingPathDecisionReasonV012", "TradingPathDecisionResultV012", "TradingPathDecisionServiceV012"]
+__all__ = [
+    "TradingPathDecisionV012",
+    "TradingPathDecisionReasonV012",
+    "TradingPathDecisionResultV012",
+    "TradingPathDecisionServiceV012",
+]
