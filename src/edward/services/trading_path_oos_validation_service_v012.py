@@ -8,7 +8,7 @@ from typing import Sequence
 from edward.domain import TradingPathCandidate
 from edward.services.analysis_service import Candle
 from edward.services.event_observation_v086 import EventObservationBuilderV086
-from edward.services.trading_path_validation_service_v012 import TradingPathValidationResultV012, TradingPathValidationServiceV012
+from edward.services.trading_path_validation_service_v012 import TradingPathValidationServiceV012
 
 logger = logging.getLogger(__name__)
 
@@ -73,25 +73,24 @@ class TradingPathOOSValidationServiceV012:
         )
 
     @classmethod
-    def validate(cls, candidate, candles: Sequence[Candle], *, windows=DEFAULT_WINDOWS, test_size=DEFAULT_TEST_SIZE):
+    def validate(cls, candidate: TradingPathCandidate, candles: Sequence[Candle], *, windows=DEFAULT_WINDOWS, test_size=DEFAULT_TEST_SIZE, observations=None):
         ordered = tuple(sorted(candles, key=lambda item: item.timestamp))
-        observations = EventObservationBuilderV086.build(ordered)
-        total = len(ordered)
         if windows < 1 or test_size < 1:
             raise ValueError("windows and test_size must be positive")
         required = windows * test_size
-        if total < required:
-            logger.warning("[V012 PATH OOS] insufficient candles=%d required=%d ticker=%s", total, required, candidate.rule.ticker)
+        if len(ordered) < required:
+            logger.warning("[V012 PATH OOS] insufficient candles=%d required=%d ticker=%s", len(ordered), required, candidate.rule.ticker)
             return ()
-        base = total - required
+        canonical_observations = observations if observations is not None else EventObservationBuilderV086.build(ordered)
+        base = len(ordered) - required
         return tuple(
-            cls._evaluate_window(candidate, observations, ordered, base + offset * test_size, base + (offset + 1) * test_size, offset + 1)
+            cls._evaluate_window(candidate, canonical_observations, ordered, base + offset * test_size, base + (offset + 1) * test_size, offset + 1)
             for offset in range(windows)
         )
 
     @classmethod
-    def build_validation(cls, candidate, candles: Sequence[Candle], *, windows=DEFAULT_WINDOWS, test_size=DEFAULT_TEST_SIZE):
-        result = cls.validate(candidate, candles, windows=windows, test_size=test_size)
+    def build_validation(cls, candidate, candles: Sequence[Candle], *, windows=DEFAULT_WINDOWS, test_size=DEFAULT_TEST_SIZE, observations=None):
+        result = cls.validate(candidate, candles, windows=windows, test_size=test_size, observations=observations)
         positive_pct = sum(item.positive for item in result) / len(result) * 100.0 if result else None
         robustness = None
         if result:
