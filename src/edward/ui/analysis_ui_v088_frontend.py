@@ -327,7 +327,11 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
                     if isinstance(metadata, dict):
                         metadata["instrument_uid"] = uid
 
-                market_service = MarketContextRuntimeServiceV011(fetcher=app.client.get_candles)
+                market_service = MarketContextRuntimeServiceV011(
+                    fetcher=app.client.get_candles,
+                    indicatives_fetcher=app.client.get_indicatives,
+                    find_instrument_fetcher=app.client.find_instrument,
+                )
                 benchmark, snapshot = market_service.build(
                     instrument_metadata=metadata,
                     asset_candles=candles,
