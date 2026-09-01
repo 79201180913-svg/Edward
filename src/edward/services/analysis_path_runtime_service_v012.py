@@ -15,6 +15,10 @@ from edward.services.trading_path_risk_service_v012 import TradingPathRiskServic
 logger = logging.getLogger(__name__)
 
 
+def _value(value: object) -> object:
+    return getattr(value, "value", value)
+
+
 class AnalysisPathRuntimeServiceV012:
     """Execute the complete v0.8.12 path analysis without order execution."""
 
@@ -88,17 +92,17 @@ class AnalysisPathRuntimeServiceV012:
             logger.warning(
                 "[V012 PATH DECISION] ticker=%s hypothesis=%s regime=%s volatility=%s direction=%s horizon=%d rank=%s validation=%s ev=%s risk=%s opportunity=%s confidence=%s decision=%s state=%s reason=%s",
                 ticker, final.hypothesis, final.regime, final.volatility_bucket, final.direction, final.horizon,
-                final.rank, final.status.value, final.opportunity.expected_value_pct, final.opportunity.risk_score,
-                final.opportunity.score, final.opportunity.confidence, final.decision.value, final.current_state.value,
+                final.rank, _value(final.status), final.opportunity.expected_value_pct, final.opportunity.risk_score,
+                final.opportunity.score, final.opportunity.confidence, _value(final.decision), _value(final.current_state),
                 ",".join(result.reasons) or "READY",
             )
 
         logger.warning(
             "[V012 PATH RUNTIME] ticker=%s candidates=%d analyses=%d buy=%d wait=%d pass=%d",
             ticker, len(candidates), len(finalized),
-            sum(item.decision.value == "buy" for item in finalized),
-            sum(item.decision.value == "wait" for item in finalized),
-            sum(item.decision.value == "pass" for item in finalized),
+            sum(_value(item.decision) == "buy" for item in finalized),
+            sum(_value(item.decision) == "wait" for item in finalized),
+            sum(_value(item.decision) == "pass" for item in finalized),
         )
         return tuple(finalized)
 
