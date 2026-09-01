@@ -6,15 +6,20 @@ from datetime import datetime, timedelta, timezone
 
 from edward.api.tinvest_adapter_client import TInvestAdapterClient
 from edward.services.analysis_service import Candle
+from edward.services.analysis_ui_v04 import _parse_candles
 from edward.services.benchmark_instrument_resolver_v011 import BenchmarkInstrumentResolverV011
+from edward.services.market_benchmark_resolver_v011 import BenchmarkDefinition
 from edward.services.market_context_ab_backtest_v011 import MarketContextABBacktestServiceV011
 
 logger = logging.getLogger(__name__)
 
 
-def _parse_candles(response: dict) -> list[Candle]:
-    from edward.ui.analysis_ui_v04 import _parse_candles as parse_candles
-    return parse_candles(response)
+def build_cutoff_indices(candle_count: int, step: int = 120) -> tuple[int, ...]:
+    if candle_count <= 360:
+        return ()
+    if step <= 0:
+        raise ValueError("cutoff step must be positive")
+    return tuple(range(300, candle_count - 60, step))
 
 
 def _parse_args() -> argparse.Namespace:
@@ -27,6 +32,8 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _load_candles(client: TInvestAdapterClient, instrument_uid: str, days: int) -> list[Candle]:
+    if days <= 0:
+        raise ValueError("days must be positive")
     end = datetime.now(timezone.utc)
     start = end - timedelta(days=days)
     response = client.get_candles(
@@ -52,13 +59,16 @@ def main() -> int:
     end = instrument_candles[-1].timestamp
 
     resolver = BenchmarkInstrumentResolverV011(client.get_indicatives, client.find_instrument)
-    benchmark = resolver.resolve(type("Benchmark", (), {
-        "benchmark_id": "IMOEX",
-        "benchmark_kind": "EQUITY_MARKET",
-        "market": "MOEX",
-        "supported": True,
-        "reason": "",
-    })())
+    benchmark = resolver.resolve(BenchmarkDefinition(
+        benchmark_id="IMOEX",
+        benchmark_kind="EQUITY_MARKET",
+        market="MOEX",
+        supported=True,
+        reason="",
+    ))
+
+    if not benchmark.instrument_uid:
+        raise RuntimeError("IMOEX benchmark UID could not be resolved")
 
     response = client.get_candles(
         benchmark.instrument_uid,
@@ -71,14 +81,9 @@ def main() -> int:
     if not market_candles:
         raise RuntimeError(f"No benchmark candles received for {benchmark.instrument_uid}")
 
-    cutoff_indices = tuple(range(300, max(300, len(instrument_candles) - 60), args.cutoff_step))
-    result = MarketContextABBacktestServiceV011().run(
-        instrument_candles=instrument_candles,
-        market_candles=market_candles,
-        cutoff_indices=cutoff_indices,
-        instrument_uid=args.instrument_uid,
-        ticker=args.ticker,
-    )
+    cutoff_indices = build_cutoff_indices(len(instrument_candles), args.cutoff_step)
+    if not cutoff_indices:
+        raise RuntimeError("Not enough candles for the requested A/B configuration")
 
     logger.warning(
         "[V011 MARKET AB RUNNER] ticker=%s benchmark=IMOEX instrument_candles=%d market_candles=%d cutoffs=%s",
@@ -87,6 +92,15 @@ def main() -> int:
         len(market_candles),
         cutoff_indices,
     )
+
+    result = MarketContextABBacktestServiceV011().run(
+        instrument_candles=instrument_candles,
+        market_candles=market_candles,
+        cutoff_indices=cutoff_indices,
+        instrument_uid=args.instrument_uid,
+        ticker=args.ticker,
+    )
+
     logger.warning(
         "[V011 MARKET AB RESULT] ticker=%s windows=%d rank_change_rate=%.2f "
         "baseline_top1_mean=%.6f context_top1_mean=%.6f "
