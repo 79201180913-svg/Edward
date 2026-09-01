@@ -110,6 +110,41 @@ def _get_instrument(self, instrument_id):
     return result
 
 
+def _find_instrument(self, query, trade=True, instrument_kind="INSTRUMENT_TYPE_UNSPECIFIED"):
+    """Contract-correct InstrumentsService.FindInstrument bridge.
+
+    The local HTTP adapter must forward the search to the actual T-Invest API;
+    otherwise a local 404 would be indistinguishable from a broker response.
+    """
+    query = str(query or "").strip()
+    if not query:
+        raise ValueError("query is required")
+    payload = {
+        "query": query,
+        "instrumentKind": str(instrument_kind or "INSTRUMENT_TYPE_UNSPECIFIED"),
+        "apiTradeAvailableFlag": bool(trade),
+    }
+    result = self._rest_request("InstrumentsService/FindInstrument", payload)
+    _adapter.logger.info(
+        "[INSTRUMENT SEARCH] query=%s kind=%s trade_available=%s results=%s",
+        query,
+        payload["instrumentKind"],
+        payload["apiTradeAvailableFlag"],
+        len(result.get("instruments", []) or []) if isinstance(result, dict) else 0,
+    )
+    return result
+
+
+def _indicatives(self):
+    """Contract-correct InstrumentsService.Indicatives bridge."""
+    result = self._rest_request("InstrumentsService/Indicatives", {})
+    _adapter.logger.info(
+        "[INDICATIVES] results=%s",
+        len(result.get("instruments", []) or []) if isinstance(result, dict) else 0,
+    )
+    return result
+
+
 _adapter.AdapterState.operations = _operations
 _adapter.AdapterState.orders = _orders
 _adapter.AdapterState.order_state = _order_state
@@ -120,6 +155,8 @@ _adapter.AdapterState.post_stop_order = _create_stop_order
 _adapter.AdapterState.get_stop_orders = _stop_orders
 _adapter.AdapterState.cancel_stop_order = _cancel_stop_order
 _adapter.AdapterState.get_instrument = _get_instrument
+_adapter.AdapterState.find_instrument = _find_instrument
+_adapter.AdapterState.get_indicatives = _indicatives
 
 _original_handler_do_post = _adapter.Handler.do_POST
 
@@ -133,6 +170,29 @@ def _handler_do_post(self):
             return
         except Exception as exc:
             _adapter.logger.exception("[INSTRUMENT LOOKUP ERROR] %s", exc)
+            self._send(500, {"error": str(exc), "type": type(exc).__name__})
+            return
+    if self.path == "/instruments/search":
+        try:
+            payload = self._read_json()
+            result = _adapter.STATE.find_instrument(
+                str(payload.get("query") or ""),
+                bool(payload.get("api_trade_available_flag", True)),
+                str(payload.get("instrument_kind") or "INSTRUMENT_TYPE_UNSPECIFIED"),
+            )
+            self._send(200, result)
+            return
+        except Exception as exc:
+            _adapter.logger.exception("[INSTRUMENT SEARCH ERROR] %s", exc)
+            self._send(500, {"error": str(exc), "type": type(exc).__name__})
+            return
+    if self.path == "/instruments/indicatives":
+        try:
+            result = _adapter.STATE.get_indicatives()
+            self._send(200, result)
+            return
+        except Exception as exc:
+            _adapter.logger.exception("[INDICATIVES ERROR] %s", exc)
             self._send(500, {"error": str(exc), "type": type(exc).__name__})
             return
     return _original_handler_do_post(self)
