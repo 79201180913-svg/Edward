@@ -46,6 +46,8 @@ def test_pipeline_attaches_market_context_without_changing_baseline():
     assert result.analysis == baseline.analysis
     assert result.opportunity == baseline.opportunity
     assert result.forecast_quality_score == baseline.forecast_quality_score
+    assert result.trading_path_research is not None
+    assert hasattr(result.trading_path_research, "market_context_shadow")
 
 
 def test_pipeline_rejects_missing_market_candles():
