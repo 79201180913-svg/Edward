@@ -14,32 +14,19 @@ def test_live_scan_consumes_canonical_trading_path_result_without_legacy_opportu
     ]
 
     canonical_path = SimpleNamespace(
-        hypothesis="BREAKOUT_EXPANSION",
-        strategy_family="BREAKOUT_EXPANSION",
-        regime="RANGE",
-        volatility_bucket="Normal",
-        direction="Positive",
-        horizon=5,
+        hypothesis="BREAKOUT_EXPANSION", strategy_family="BREAKOUT_EXPANSION",
+        regime="RANGE", volatility_bucket="Normal", direction="Positive", horizon=5,
         status=SimpleNamespace(value="promotable"),
         opportunity=SimpleNamespace(score=75.0, risk_score=20.0, risk_gate=True, confidence=80.0, expected_value_pct=3.2),
     )
     canonical = SimpleNamespace(
-        best_path=canonical_path,
-        decision=SimpleNamespace(value="buy"),
-        current_state=SimpleNamespace(value="entry_ready"),
-        total_paths=1,
-        promoted_paths=1,
-        research_only_paths=0,
-        rejected_paths=0,
+        best_path=canonical_path, decision=SimpleNamespace(value="buy"),
+        current_state=SimpleNamespace(value="entry_ready"), total_paths=1,
+        promoted_paths=1, research_only_paths=0, rejected_paths=0,
     )
-
-    service.path_runtime = SimpleNamespace(scan_instrument=lambda **kwargs: canonical)
+    service.path_runtime = SimpleNamespace(scan_instrument=lambda **_kwargs: canonical)
     monkeypatch.setattr(OpportunitySearchService, "_get_candles", lambda self, instrument_uid: [object()] * 300)
-
-    def fail_if_called(*_args, **_kwargs):
-        raise AssertionError("legacy opportunity evaluation must not run")
-
-    service._evaluate_instrument = fail_if_called
+    service._evaluate_instrument = lambda **_kwargs: (_ for _ in ()).throw(AssertionError("legacy opportunity evaluation must not run"))
 
     results = service.scan(profile="medium_term", instrument_kind="SHARE", scope="MARKET")
 
