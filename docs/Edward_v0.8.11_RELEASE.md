@@ -2,7 +2,7 @@
 
 ## Release status
 
-Version `0.8.11` freezes and integrates the Market Context scope into the Edward platform.
+Version `0.8.11` freezes and integrates the Market Context scope into the Edward platform. The release is merged into `main`.
 
 ## Included
 
