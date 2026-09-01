@@ -73,6 +73,7 @@ class TradingPathCandidateServiceV088:
                 candidate.rule.direction,
                 candidate.rule.horizon,
                 candidate.evidence.observations,
+                candidate.evidence.excess_return_pct,
                 candidate.status,
             )
         return candidates
