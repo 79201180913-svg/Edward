@@ -20,20 +20,12 @@ class ResolvedBenchmarkInstrument:
 
 
 class BenchmarkInstrumentResolverV011:
-    """Resolve a logical benchmark to a real T-Invest instrument UID.
-
-    Indicatives is the authoritative source for index/commodity instruments.
-    A FindInstrument fallback is supported for environments where the
-    Indicatives endpoint is unavailable (notably some sandbox adapter/runtime
-    combinations). The fallback is explicitly restricted to INDEX instruments
-    and non-tradable search results, so a normal share with the same ticker
-    cannot silently become the benchmark.
-    """
+    """Resolve a logical benchmark to a real T-Invest instrument UID."""
 
     def __init__(
         self,
         indicatives_fetcher: Callable[[], Any],
-        find_instrument_fetcher: Callable[[str, bool], Any] | None = None,
+        find_instrument_fetcher: Callable[..., Any] | None = None,
     ) -> None:
         self._indicatives_fetcher = indicatives_fetcher
         self._find_instrument_fetcher = find_instrument_fetcher
@@ -53,11 +45,25 @@ class BenchmarkInstrumentResolverV011:
             if not self._is_not_found(exc) or self._find_instrument_fetcher is None:
                 raise
 
-        response = self._find_instrument_fetcher(logical_id, False)
+        response = self._find_index(logical_id)
         exact = self._match_index_search(self._items(response), logical_id)
         if not exact:
             raise ValueError(f"Index benchmark not found by FindInstrument fallback: {logical_id}")
         return self._resolved(exact, logical_id, "FIND_INSTRUMENT_FALLBACK")
+
+    def _find_index(self, logical_id: str) -> Any:
+        """Call FindInstrument with the explicit INDEX kind when supported.
+
+        The explicit instrumentKind is part of the public T-Invest FindInstrument
+        contract and prevents a same-ticker share from being considered a benchmark.
+        Keep a two-argument compatibility fallback for existing test doubles.
+        """
+        try:
+            return self._find_instrument_fetcher(logical_id, False, "INSTRUMENT_TYPE_INDEX")
+        except TypeError as exc:
+            if "positional" not in str(exc).lower() and "argument" not in str(exc).lower():
+                raise
+            return self._find_instrument_fetcher(logical_id, False)
 
     @staticmethod
     def _is_not_found(exc: Exception) -> bool:
