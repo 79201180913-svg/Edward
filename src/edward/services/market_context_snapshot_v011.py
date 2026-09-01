@@ -23,10 +23,10 @@ class MarketContextSnapshotV011:
     relative_strength: RelativeStrengthResultV011 | None
     volatility: VolatilityContextResultV011 | None
     context_status: str
-    context_reason: str | None = None
     version: str = MARKET_CONTEXT_SNAPSHOT_VERSION
 
     def validate_point_in_time(self) -> bool:
+        """Return False if any nested context claims a timestamp after ``as_of``."""
         if self.market_regime is not None and self.market_regime.as_of > self.as_of:
             return False
         if self.relative_strength is not None and self.relative_strength.as_of > self.as_of:
@@ -36,7 +36,13 @@ class MarketContextSnapshotV011:
         return True
 
 
-def resolve_context_status(*, benchmark_supported: bool, market_regime: MarketRegimeContextV011 | None, relative_strength: RelativeStrengthResultV011 | None, volatility: VolatilityContextResultV011 | None) -> str:
+def resolve_context_status(
+    *,
+    benchmark_supported: bool,
+    market_regime: MarketRegimeContextV011 | None,
+    relative_strength: RelativeStrengthResultV011 | None,
+    volatility: VolatilityContextResultV011 | None,
+) -> str:
     if not benchmark_supported:
         return "UNAVAILABLE"
     available = [market_regime is not None, relative_strength is not None, volatility is not None]

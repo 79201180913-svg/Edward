@@ -13,12 +13,29 @@ from edward.services.market_volatility_context_v011 import MarketVolatilityConte
 from edward.services.relative_strength_analyzer_v011 import RelativeStrengthAnalyzerV011
 
 
-logger = logging.getLogger(__name__)
 MARKET_CONTEXT_RUNTIME_SERVICE_V011_VERSION = "0.11.0"
+logger = logging.getLogger(__name__)
 
 
 class MarketContextRuntimeServiceV011:
-    """Runtime boundary for additive, point-in-time market context."""
+    """Runtime boundary that loads and builds point-in-time market context.
+
+    Market context is additive evidence. If benchmark data is unavailable,
+    the service returns an explicit UNAVAILABLE snapshot instead of failing
+    the canonical instrument analysis.
+
+    ``last_built_snapshot`` is a narrow compatibility bridge for the current
+    v0.8.8 UI, which builds market context immediately before invoking the
+    legacy Trading Path adapter but cannot yet pass the snapshot explicitly.
+    It is observability/shadow-only and must not be used for persisted state.
+
+    ``last_built_market_candles`` is a transient bridge for the point-in-time
+    market-context research diagnostic. It is only populated alongside a
+    successful snapshot and is never persisted.
+    """
+
+    last_built_snapshot: MarketContextSnapshotV011 | None = None
+    last_built_market_candles: tuple[Any, ...] = ()
 
     def __init__(
         self,
@@ -55,21 +72,46 @@ class MarketContextRuntimeServiceV011:
             return str(instrument_metadata.get("instrument_uid", instrument_metadata.get("uid", "")))
         return str(getattr(instrument_metadata, "instrument_uid", getattr(instrument_metadata, "uid", "")))
 
-    def _unavailable_snapshot(self, *, instrument_id: str, as_of: datetime, benchmark_id: str | None, reason: str) -> MarketContextSnapshotV011:
-        snapshot = MarketContextSnapshotV011(
-            instrument_id=instrument_id,
-            as_of=as_of,
-            benchmark_id=benchmark_id,
-            benchmark_supported=False,
-            market_regime=None,
-            relative_strength=None,
-            volatility=None,
-            context_status="UNAVAILABLE",
-            context_reason=reason,
-        )
-        if not snapshot.validate_point_in_time():
-            raise ValueError("Market context failed point-in-time validation")
+    @classmethod
+    def _set_last_snapshot(
+        cls,
+        snapshot: MarketContextSnapshotV011,
+        market_candles: Sequence[Any] = (),
+    ) -> MarketContextSnapshotV011:
+        cls.last_built_snapshot = snapshot
+        cls.last_built_market_candles = tuple(market_candles)
         return snapshot
+
+    @classmethod
+    def _set_unavailable_snapshot(
+        cls,
+        *,
+        instrument_id: str,
+        as_of: datetime,
+        benchmark_id: str,
+    ) -> MarketContextSnapshotV011:
+        cls.last_built_market_candles = ()
+        return cls._set_last_snapshot(
+            MarketContextSnapshotV011(
+                instrument_id=instrument_id,
+                as_of=as_of,
+                benchmark_id=benchmark_id,
+                benchmark_supported=True,
+                market_regime=None,
+                relative_strength=None,
+                volatility=None,
+                context_status="UNAVAILABLE",
+            )
+        )
+
+    @staticmethod
+    def _log_unavailable(instrument_id: str, benchmark_id: str, exc: Exception) -> None:
+        logger.warning(
+            "[V011 MARKET CONTEXT] instrument=%s benchmark=%s status=UNAVAILABLE reason=BENCHMARK_DATA_UNAVAILABLE details=%s",
+            instrument_id,
+            benchmark_id,
+            exc,
+        )
 
     def build(
         self,
@@ -82,37 +124,27 @@ class MarketContextRuntimeServiceV011:
     ) -> tuple[Any, MarketContextSnapshotV011]:
         if not asset_candles:
             raise ValueError("asset_candles are required")
-        effective_as_of = as_of or max(candle.timestamp for candle in asset_candles)
-        instrument_id = self._instrument_id(instrument_metadata)
         benchmark = self.benchmark_resolver.resolve(instrument_metadata)
         if not benchmark.supported or not benchmark.benchmark_id:
-            return benchmark, self._unavailable_snapshot(
-                instrument_id=instrument_id,
-                as_of=effective_as_of,
-                benchmark_id=None,
-                reason=benchmark.reason,
-            )
+            raise ValueError(f"Market context is unsupported: {benchmark.reason}")
+
+        effective_as_of = as_of or max(candle.timestamp for candle in asset_candles)
+        instrument_id = self._instrument_id(instrument_metadata)
 
         try:
             resolved = self.benchmark_instrument_resolver.resolve(benchmark)
-        except Exception as exc:
-            reason = f"BENCHMARK_DATA_UNAVAILABLE: {exc}"
-            logger.warning(
-                "[V011 MARKET CONTEXT] instrument=%s logical_benchmark=%s status=UNAVAILABLE reason=%s",
-                instrument_id,
-                benchmark.benchmark_id,
-                reason,
-            )
-            return benchmark, self._unavailable_snapshot(
+        except (ValueError, RuntimeError) as exc:
+            self._log_unavailable(instrument_id, benchmark.benchmark_id, exc)
+            return benchmark, self._set_unavailable_snapshot(
                 instrument_id=instrument_id,
                 as_of=effective_as_of,
                 benchmark_id=benchmark.benchmark_id,
-                reason=reason,
             )
 
         effective_start = min(candle.timestamp for candle in asset_candles)
         if effective_start >= effective_as_of:
             effective_start = effective_as_of - timedelta(days=1)
+
         try:
             market_candles = self.loader.load(
                 MarketDataRequest(
@@ -122,70 +154,50 @@ class MarketContextRuntimeServiceV011:
                     limit=limit,
                 )
             )
-        except Exception as exc:
-            reason = f"BENCHMARK_DATA_UNAVAILABLE: {exc}"
-            logger.warning(
-                "[V011 MARKET CONTEXT] instrument=%s logical_benchmark=%s resolved_uid=%s status=UNAVAILABLE reason=%s",
-                instrument_id,
-                benchmark.benchmark_id,
-                resolved.instrument_uid,
-                reason,
+            if not market_candles:
+                raise ValueError(f"No benchmark candles received for {resolved.instrument_uid}")
+            market_regime = self.context_builder.build(
+                instrument_id=resolved.instrument_uid,
+                as_of=effective_as_of,
+                candles=market_candles,
             )
-            return benchmark, self._unavailable_snapshot(
+            relative_strength = self.relative_strength_analyzer.analyze(
+                instrument_candles=asset_candles,
+                market_candles=market_candles,
+                as_of=effective_as_of,
+                horizon_bars=horizon_bars,
+            )
+            volatility = self.volatility_analyzer.analyze(
+                instrument_candles=asset_candles,
+                market_candles=market_candles,
+                as_of=effective_as_of,
+                horizon_bars=horizon_bars,
+            )
+            snapshot = MarketContextSnapshotV011(
                 instrument_id=instrument_id,
                 as_of=effective_as_of,
                 benchmark_id=benchmark.benchmark_id,
-                reason=reason,
-            )
-        if not market_candles:
-            reason = f"BENCHMARK_DATA_UNAVAILABLE: no candles for {resolved.instrument_uid}"
-            return benchmark, self._unavailable_snapshot(
-                instrument_id=instrument_id,
-                as_of=effective_as_of,
-                benchmark_id=benchmark.benchmark_id,
-                reason=reason,
-            )
-
-        market_regime = self.context_builder.build(instrument_id=resolved.instrument_uid, as_of=effective_as_of, candles=market_candles)
-        relative_strength = self.relative_strength_analyzer.analyze(
-            instrument_candles=asset_candles,
-            market_candles=market_candles,
-            as_of=effective_as_of,
-            horizon_bars=horizon_bars,
-        )
-        volatility = self.volatility_analyzer.analyze(
-            instrument_candles=asset_candles,
-            market_candles=market_candles,
-            as_of=effective_as_of,
-            horizon_bars=horizon_bars,
-        )
-        snapshot = MarketContextSnapshotV011(
-            instrument_id=instrument_id,
-            as_of=effective_as_of,
-            benchmark_id=benchmark.benchmark_id,
-            benchmark_supported=benchmark.supported,
-            market_regime=market_regime,
-            relative_strength=relative_strength,
-            volatility=volatility,
-            context_status=resolve_context_status(
-                benchmark_supported=benchmark.supported,
+                benchmark_supported=True,
                 market_regime=market_regime,
                 relative_strength=relative_strength,
                 volatility=volatility,
-            ),
-            context_reason=None,
-        )
-        if not snapshot.validate_point_in_time():
-            raise ValueError("Market context failed point-in-time validation")
-        logger.warning(
-            "[V011 MARKET CONTEXT] instrument=%s logical_benchmark=%s resolved_uid=%s status=%s as_of=%s",
-            instrument_id,
-            benchmark.benchmark_id,
-            resolved.instrument_uid,
-            snapshot.context_status,
-            snapshot.as_of,
-        )
-        return benchmark, snapshot
+                context_status=resolve_context_status(
+                    benchmark_supported=True,
+                    market_regime=market_regime,
+                    relative_strength=relative_strength,
+                    volatility=volatility,
+                ),
+            )
+            if not snapshot.validate_point_in_time():
+                raise ValueError("Market context failed point-in-time validation")
+            return benchmark, self._set_last_snapshot(snapshot, market_candles)
+        except (ValueError, RuntimeError) as exc:
+            self._log_unavailable(instrument_id, benchmark.benchmark_id, exc)
+            return benchmark, self._set_unavailable_snapshot(
+                instrument_id=instrument_id,
+                as_of=effective_as_of,
+                benchmark_id=benchmark.benchmark_id,
+            )
 
 
 __all__ = ["MARKET_CONTEXT_RUNTIME_SERVICE_V011_VERSION", "MarketContextRuntimeServiceV011"]

@@ -7,6 +7,7 @@ from typing import Any
 
 from edward.services.analysis_service_v08 import AnalysisServiceV08
 from edward.services.analysis_trading_path_adapter_v088 import AnalysisTradingPathAdapterV088
+from edward.services.market_context_runtime_service_v011 import MarketContextRuntimeServiceV011
 from edward.storage.sqlite_store import SQLiteStore
 from edward.config.application_settings import ApplicationSettingsStore
 
@@ -41,6 +42,25 @@ def _fmt_ratio(value: Any) -> str:
         return "N/A"
 
 
+def _unwrap_instrument(response: Any) -> Any:
+    if isinstance(response, (list, tuple)):
+        return response[0] if response else {}
+    if isinstance(response, dict):
+        for key in ("instrument", "item", "instrument_info"):
+            if response.get(key) is not None:
+                value = response[key]
+                if isinstance(value, (list, tuple)):
+                    return value[0] if value else {}
+                return value
+    return response
+
+
+def _field(value: Any, name: str, default: Any = None) -> Any:
+    if isinstance(value, dict):
+        return value.get(name, default)
+    return getattr(value, name, default)
+
+
 def install(app_class: type[Any], client_class: type[Any]) -> None:
     import edward.ui.analysis_ui_v04 as legacy
 
@@ -55,8 +75,8 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
         window = tk.Toplevel(app)
         ticker = str(detail.get("ticker", ""))
         window.title(f"Анализ акции v0.8.8 — {ticker}")
-        window.geometry("1350x900")
-        window.minsize(1180, 760)
+        window.geometry("1350x980")
+        window.minsize(1180, 820)
         window.transient(app)
 
         outer = ttk.Frame(window)
@@ -75,7 +95,7 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
         header = ttk.Frame(content)
         header.pack(fill="x", pady=(0, 12))
         ttk.Label(header, text=f"Анализ: {ticker}", style="Title.TLabel").pack(side="left")
-        ttk.Label(header, text="v0.8.8 Trading Paths", font=("TkDefaultFont", 12, "bold")).pack(side="left", padx=(14, 0))
+        ttk.Label(header, text="v0.8.8 Trading Paths + v0.8.11 Market Context", font=("TkDefaultFont", 12, "bold")).pack(side="left", padx=(14, 0))
         profile_var = tk.StringVar(value="medium_term")
         ttk.Label(header, text="Профиль:").pack(side="left", padx=(28, 6))
         ttk.Combobox(header, textvariable=profile_var, state="readonly", values=("long_term", "medium_term", "speculative"), width=16).pack(side="left")
@@ -102,6 +122,25 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
             cell.grid(row=0, column=col, sticky="nsew")
             ttk.Label(cell, text=title).pack(anchor="w")
             ttk.Label(cell, textvariable=summary_vars[key], font=("TkDefaultFont", 15, "bold")).pack(anchor="w", pady=(4, 0))
+
+        context_frame = ttk.LabelFrame(content, text="v0.8.11 Market Context — point-in-time evidence", padding=10)
+        context_frame.pack(fill="x", pady=(0, 12))
+        for col in range(6):
+            context_frame.columnconfigure(col, weight=1)
+        context_vars = {k: tk.StringVar(value="—") for k in ("status", "benchmark", "regime", "relative", "volatility", "as_of")}
+        context_items = (
+            ("status", "Context"),
+            ("benchmark", "Benchmark"),
+            ("regime", "Market Regime"),
+            ("relative", "Relative Strength"),
+            ("volatility", "Relative Volatility"),
+            ("as_of", "As Of"),
+        )
+        for col, (key, title) in enumerate(context_items):
+            cell = ttk.Frame(context_frame, padding=5)
+            cell.grid(row=0, column=col, sticky="nsew")
+            ttk.Label(cell, text=title).pack(anchor="w")
+            ttk.Label(cell, textvariable=context_vars[key], font=("TkDefaultFont", 10, "bold"), wraplength=190).pack(anchor="w", pady=(3, 0))
 
         best_frame = ttk.LabelFrame(content, text="Лучший исследованный путь", padding=12)
         best_frame.pack(fill="x", pady=(0, 12))
@@ -144,7 +183,7 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
             legacy_tree.column(key, width=width, anchor="center")
         legacy_tree.pack(fill="x")
 
-        state: dict[str, Any] = {"research": None}
+        state: dict[str, Any] = {"research": None, "market_context": None}
 
         def show_path(index: int) -> None:
             research = state.get("research")
@@ -231,6 +270,35 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
                 best_vars["status"].set("NO RESEARCH PATH")
                 best_vars["reason"].set("Conditional Discovery не предоставил кандидатов.")
 
+        def populate_market_context(benchmark: Any, snapshot: Any) -> None:
+            state["market_context"] = snapshot
+            context_vars["status"].set(snapshot.context_status)
+            context_vars["benchmark"].set(f"{benchmark.benchmark_id} / {benchmark.benchmark_kind}")
+            regime_result = getattr(snapshot.market_regime, "result", None)
+            context_vars["regime"].set(str(getattr(regime_result, "regime", regime_result or "UNAVAILABLE")))
+            relative = snapshot.relative_strength
+            context_vars["relative"].set(
+                f"{getattr(relative, 'classification', 'UNAVAILABLE')} ({_fmt_pct(getattr(relative, 'excess_return_pct', None))})"
+            )
+            volatility = snapshot.volatility
+            relative_vol = getattr(volatility, "relative_volatility", None)
+            context_vars["volatility"].set(
+                f"{getattr(volatility, 'classification', 'UNAVAILABLE')} ({relative_vol:.2f}x)" if relative_vol is not None else "UNAVAILABLE"
+            )
+            context_vars["as_of"].set(str(snapshot.as_of))
+            logger.warning(
+                "[V011 MARKET CONTEXT] ticker=%s benchmark=%s status=%s regime=%s relative=%s excess=%s volatility=%s relative_volatility=%s as_of=%s",
+                ticker,
+                benchmark.benchmark_id,
+                snapshot.context_status,
+                getattr(regime_result, "regime", "UNAVAILABLE"),
+                getattr(relative, "classification", "UNAVAILABLE"),
+                getattr(relative, "excess_return_pct", None),
+                getattr(volatility, "classification", "UNAVAILABLE"),
+                relative_vol,
+                snapshot.as_of,
+            )
+
         def on_select(_event: Any) -> None:
             selected = tree.selection()
             if selected:
@@ -240,29 +308,48 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
 
         def set_running(value: bool) -> None:
             run_button.configure(state="disabled" if value else "normal")
-            status_var.set("Выполнение v0.8.8…" if value else "Готово")
+            status_var.set("Выполнение v0.8.11 + v0.8.8…" if value else "Готово")
 
         def run() -> None:
             set_running(True)
             try:
-                response = app.client.get_candles(str(detail["instrument_uid"]), interval="CANDLE_INTERVAL_DAY", days=2400)
+                uid = str(detail["instrument_uid"])
+                response = app.client.get_candles(uid, interval="CANDLE_INTERVAL_DAY", days=2400)
                 candles = _parse_candles(response)
                 if not candles:
                     raise RuntimeError("Исторические свечи не получены")
+
+                metadata = _unwrap_instrument(app.client.get_instrument(uid))
+                if not _field(metadata, "instrument_type", None):
+                    metadata = dict(detail)
+                    metadata["instrument_type"] = detail.get("instrument_kind", "SHARE")
+                if not _field(metadata, "instrument_uid", None):
+                    if isinstance(metadata, dict):
+                        metadata["instrument_uid"] = uid
+
+                market_service = MarketContextRuntimeServiceV011(fetcher=app.client.get_candles)
+                benchmark, snapshot = market_service.build(
+                    instrument_metadata=metadata,
+                    asset_candles=candles,
+                    as_of=max(candle.timestamp for candle in candles),
+                )
+                populate_market_context(benchmark, snapshot)
+
                 service = AnalysisServiceV08()
                 adapter = AnalysisTradingPathAdapterV088(service)
-                research = adapter.analyze(instrument_uid=str(detail["instrument_uid"]), ticker=ticker, candles=candles, profile=profile_var.get())
+                research = adapter.analyze(instrument_uid=uid, ticker=ticker, candles=candles, profile=profile_var.get())
                 try:
                     settings = ApplicationSettingsStore().load()
                     SQLiteStore(settings.storage_path)
                 except Exception:
                     pass
                 populate(research)
-                status_var.set("v0.8.8 анализ завершён")
+                status_var.set("v0.8.11 context + v0.8.8 анализ завершены")
                 logger.warning("[V088 UI] ticker=%s candidates=%d validated=%d promoted=%d research_only=%d rejected=%d", ticker, len(research.ranked_candidates), len(research.validation_results), sum(getattr(x.status, 'value', x.status) == 'promoted' for x in research.promotion_results), sum(getattr(x.status, 'value', x.status) == 'research_only' for x in research.promotion_results), sum(getattr(x.status, 'value', x.status) == 'rejected' for x in research.promotion_results))
             except Exception as exc:
                 status_var.set("Ошибка анализа")
-                tk.messagebox.showerror("Анализ v0.8.8", str(exc))
+                logger.exception("[V011 UI] ticker=%s market-context integration failed", ticker)
+                tk.messagebox.showerror("Анализ v0.8.11", str(exc))
             finally:
                 set_running(False)
 

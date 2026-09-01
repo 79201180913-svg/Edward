@@ -88,19 +88,24 @@ class TInvestAdapterClient:
             return self._request("POST", "/positions", {"account_id": account_id})
         return self._normalize_sandbox_positions(self.get_sandbox_positions(account_id))
 
-    def find_instrument(self, query: str, trade_available_only: bool = True) -> dict: return self._request("POST", "/instruments/search", {"query": query, "api_trade_available_flag": trade_available_only})
+    def find_instrument(self, query: str, trade_available_only: bool = True, instrument_kind: str = "INSTRUMENT_TYPE_UNSPECIFIED") -> dict:
+        return self._request("POST", "/instruments/search", {"query": query, "instrument_kind": instrument_kind, "api_trade_available_flag": trade_available_only})
+
     def list_instruments(self, instrument_kind: str = "SHARE", trade_available_only: bool = True) -> dict: return self._request("POST", "/instruments/list", {"instrument_kind": instrument_kind, "api_trade_available_flag": trade_available_only})
     def get_instrument(self, instrument_id: str) -> dict: return self._request("POST", "/instruments/get", {"instrument_id": instrument_id})
+    def get_indicatives(self) -> dict: return self._request("POST", "/instruments/indicatives", {})
     def get_last_prices(self, instrument_ids: list[str]) -> dict: return self._request("POST", "/market/last-prices", {"instrument_ids": instrument_ids})
     def get_close_prices(self, instrument_ids: list[str]) -> dict: return self._request("POST", "/market/close-prices", {"instrument_ids": instrument_ids})
+    def get_candles(self, instrument_id: str, start: Any, end: Any, interval: str = "CANDLE_INTERVAL_DAY", limit: int = 2400) -> dict:
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        return self._request("POST", "/market/candles", {"instrument_id": str(instrument_id), "from": start.isoformat() if hasattr(start, "isoformat") else str(start), "to": end.isoformat() if hasattr(end, "isoformat") else str(end), "interval": str(interval), "limit": int(limit)})
     def get_trading_status(self, instrument_id: str) -> dict: return self._request("POST", "/market/trading-status", {"instrument_id": instrument_id})
     def get_trading_statuses(self, instrument_ids: list[str]) -> dict: return self._request("POST", "/market/trading-statuses", {"instrument_ids": instrument_ids})
     def get_orders(self, account_id: str) -> dict: return self._request("POST", "/orders", {"account_id": account_id})
     def get_order_state(self, account_id: str, order_id: str) -> dict: return self._request("POST", "/orders/state", {"account_id": account_id, "order_id": order_id})
-    def get_order_price(self, account_id: str, instrument_id: str, price: Any, direction: str, quantity: int) -> dict:
-        return self._request("POST", "/orders/price", {"account_id": account_id, "instrument_id": instrument_id, "price": self._quotation_payload(price), "direction": direction, "quantity": quantity})
-    def get_max_lots(self, account_id: str, instrument_id: str, price: Any) -> dict:
-        return self._request("POST", "/orders/max-lots", {"account_id": account_id, "instrument_id": instrument_id, "price": self._quotation_payload(price)})
+    def get_order_price(self, account_id: str, instrument_id: str, price: Any, direction: str, quantity: int) -> dict: return self._request("POST", "/orders/price", {"account_id": account_id, "instrument_id": instrument_id, "price": self._quotation_payload(price), "direction": direction, "quantity": quantity})
+    def get_max_lots(self, account_id: str, instrument_id: str, price: Any) -> dict: return self._request("POST", "/orders/max-lots", {"account_id": account_id, "instrument_id": instrument_id, "price": self._quotation_payload(price)})
     def get_operations(self, account_id: str, limit: int = 1000) -> dict: return self._request("POST", "/operations", {"account_id": account_id, "limit": limit})
 
     @staticmethod
@@ -116,7 +121,6 @@ class TInvestAdapterClient:
 
     @staticmethod
     def _order_request_id(request: Any) -> str:
-        """Return a deterministic UUID for the broker request idempotency field."""
         raw = str(getattr(request, "request_id", "") or getattr(request, "execution_id", "") or "").strip()
         if not raw:
             return str(uuid.uuid4())
@@ -137,11 +141,9 @@ class TInvestAdapterClient:
             "price": TInvestAdapterClient._quotation_payload(getattr(request, "price", getattr(request, "entry_price", None))),
         }
 
-    def post_order(self, request: Any) -> dict:
-        return self._request("POST", "/orders/create", self._order_payload(request))
+    def post_order(self, request: Any) -> dict: return self._request("POST", "/orders/create", self._order_payload(request))
 
     def create_order(self, payload: dict[str, Any]) -> dict:
-        """ExecutionEngine-compatible order creation boundary."""
         normalized = dict(payload)
         if "price" in normalized:
             normalized["price"] = self._quotation_payload(normalized["price"])
@@ -153,20 +155,13 @@ class TInvestAdapterClient:
                 normalized["request_id"] = str(uuid.uuid5(uuid.NAMESPACE_URL, raw))
         return self._request("POST", "/orders/create", normalized)
 
-    def order_state(self, account_id: str, order_id: str) -> dict:
-        """ExecutionEngine-compatible order state boundary."""
-        return self.get_order_state(account_id, order_id)
-
+    def order_state(self, account_id: str, order_id: str) -> dict: return self.get_order_state(account_id, order_id)
     def cancel_order(self, account_id: str, order_id: str) -> dict: return self._request("POST", "/orders/cancel", {"account_id": account_id, "order_id": order_id})
     def replace_order(self, request: Any, order_id: str) -> dict:
         payload = self._order_payload(request)
         payload["order_id"] = order_id
         return self._request("POST", "/orders/replace", payload)
 
-    def post_stop_order(self, request: dict[str, Any]) -> dict:
-        return self._request("POST", "/stop-orders/create", request)
-
-    def get_stop_orders(self, account_id: str) -> dict:
-        return self._request("POST", "/stop-orders", {"account_id": account_id})
-
+    def post_stop_order(self, request: dict[str, Any]) -> dict: return self._request("POST", "/stop-orders/create", request)
+    def get_stop_orders(self, account_id: str) -> dict: return self._request("POST", "/stop-orders", {"account_id": account_id})
     def cancel_stop_order(self, account_id: str, stop_order_id: str) -> dict: return self._request("POST", "/stop-orders/cancel", {"account_id": account_id, "stop_order_id": stop_order_id})
