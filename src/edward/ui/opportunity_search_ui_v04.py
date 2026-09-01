@@ -111,11 +111,17 @@ def install_opportunity_search_ui(app_class: type[Any]) -> None:
                 tree.insert("","end",values=row_values(item))
             buy=sum(x.decision=="BUY" for x in state["results"]); wait=sum(x.decision=="WAIT" for x in state["results"]); passed=sum(x.decision=="PASS" for x in state["results"]); paths=sum(getattr(getattr(x,"canonical_opportunity",None),"total_paths",0) for x in state["results"]); summary_var.set(f"Покупка: {buy}   Ждать: {wait}   Пропустить: {passed}   Путей: {paths}")
         def update_progress(stage,percent,current,total): progress_var.set(percent); suffix=f" ({current}/{total})" if total else ""; progress_text_var.set(f"{stage} — {percent:.0f}%{suffix}"); status_var.set("Выполняется")
+        def publish_result(result,current,total):
+            state["results"].append(result)
+            render()
+            progress_text_var.set(f"Обработано: {result.ticker} — {current}/{total}")
         def scan():
             scan_button.configure(state="disabled"); state["results"]=[]; render(); progress_var.set(0); progress_text_var.set("Подготовка сканирования — 0%"); status_var.set("Запуск"); scope,kind,profile=scope_code(),kind_code(),profile_code()
             def worker():
                 try:
-                    service=LiveOpportunitySearchService(self.client); results=service.scan(profile=profile,instrument_kind=kind,scope=scope,progress_callback=lambda s,p,c,t:self.after(0,lambda:update_progress(s,p,c,t))); self.after(0,lambda:finish(results))
+                    service=LiveOpportunitySearchService(self.client)
+                    results=service.scan(profile=profile,instrument_kind=kind,scope=scope,progress_callback=lambda s,p,c,t:self.after(0,lambda:update_progress(s,p,c,t)),result_callback=lambda result,c,t:self.after(0,lambda:publish_result(result,c,t)))
+                    self.after(0,lambda:finish(results))
                 except Exception as exc: self.after(0,lambda:fail(exc))
             threading.Thread(target=worker,daemon=True).start()
         def finish(results): state["results"]=results; progress_var.set(100); progress_text_var.set(f"Анализ завершён — 100% ({len(results)} инструментов)"); status_var.set("Готово"); scan_button.configure(state="normal"); render()
