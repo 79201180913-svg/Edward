@@ -5,6 +5,7 @@ from typing import Iterable
 
 from edward.domain import TradingPathAnalysisV012
 from edward.services.analysis_service import Candle
+from edward.services.event_observation_v086 import EventObservationBuilderV086
 from edward.services.trading_path_analysis_builder_v012 import TradingPathAnalysisBuilderV012
 from edward.services.trading_path_decision_service_v012 import TradingPathDecisionServiceV012
 from edward.services.trading_path_expected_value_service_v012 import TradingPathExpectedValueServiceV012
@@ -42,6 +43,9 @@ class AnalysisPathRuntimeServiceV012:
         discovery = ConditionalDiscoveryServiceV086.run(ordered)
         candidates = TradingPathCandidateServiceV088.promote(discovery, instrument_uid=instrument_uid, ticker=ticker)
         analyses = TradingPathAnalysisBuilderV012.build(candidates, ordered)
+        # Build the expensive canonical event annotation set once per instrument.
+        # Reusing it across all candidates preserves the exact validation/EV semantics.
+        observations = EventObservationBuilderV086.build(ordered)
         finalized: list[TradingPathAnalysisV012] = []
 
         for analysis in analyses:
@@ -58,8 +62,8 @@ class AnalysisPathRuntimeServiceV012:
             )
             if candidate is None:
                 continue
-            oos_windows = TradingPathOOSValidationServiceV012.validate(candidate, ordered)
-            expected_value = TradingPathExpectedValueServiceV012.calculate(candidate, ordered)
+            oos_windows = TradingPathOOSValidationServiceV012.validate(candidate, ordered, observations=observations)
+            expected_value = TradingPathExpectedValueServiceV012.calculate(candidate, ordered, observations=observations)
             risk_result = TradingPathRiskServiceV012.evaluate(
                 analysis,
                 candles=ordered,
