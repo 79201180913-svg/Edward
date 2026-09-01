@@ -19,14 +19,14 @@ class TradingPathDecisionV012(StrEnum):
 
 class TradingPathDecisionReasonV012(StrEnum):
     READY = "ready"
-    RISK_GATE_FAILED = "risk_gate_failed"
-    VALIDATION_REJECTED = "validation_rejected"
-    MISSING_OPPORTUNITY = "missing_opportunity"
-    MISSING_EV = "missing_ev"
-    MISSING_SCORE = "missing_score"
-    LOW_SCORE = "low_score"
-    LOW_CONFIDENCE = "low_confidence"
-    EVIDENCE_UNAVAILABLE = "evidence_unavailable"
+    RISK_GATE_FAILED = "RISK_GATE_FAILED"
+    VALIDATION_REJECTED = "PATH_VALIDATION_REJECTED"
+    MISSING_OPPORTUNITY = "OPPORTUNITY_UNAVAILABLE"
+    MISSING_EV = "EV_UNAVAILABLE"
+    MISSING_SCORE = "OPPORTUNITY_SCORE_UNAVAILABLE"
+    LOW_SCORE = "OPPORTUNITY_SCORE_BELOW_THRESHOLD"
+    LOW_CONFIDENCE = "CONFIDENCE_BELOW_THRESHOLD"
+    EVIDENCE_UNAVAILABLE = "EVIDENCE_UNAVAILABLE"
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,14 +50,12 @@ class TradingPathDecisionServiceV012:
         reasons: list[str] = []
         opportunity = analysis.opportunity
         validation = analysis.validation
-
         if analysis.evidence is None:
             reasons.append(TradingPathDecisionReasonV012.EVIDENCE_UNAVAILABLE.value)
         if validation is None:
             reasons.append("VALIDATION_UNAVAILABLE")
         elif validation.promotion_status == TradingPathAnalysisStatus.REJECTED.value:
             reasons.append(TradingPathDecisionReasonV012.VALIDATION_REJECTED.value)
-
         if opportunity is None:
             reasons.append(TradingPathDecisionReasonV012.MISSING_OPPORTUNITY.value)
         else:
@@ -73,62 +71,21 @@ class TradingPathDecisionServiceV012:
                 reasons.append(TradingPathDecisionReasonV012.LOW_CONFIDENCE.value)
             elif opportunity.confidence < minimum_confidence:
                 reasons.append(TradingPathDecisionReasonV012.LOW_CONFIDENCE.value)
-
-        hard_failures = {
-            TradingPathDecisionReasonV012.RISK_GATE_FAILED.value,
-            TradingPathDecisionReasonV012.VALIDATION_REJECTED.value,
-        }
-        if any(reason in hard_failures for reason in reasons):
-            return TradingPathDecisionResultV012(
-                decision=TradingPathDecisionV012.PASS,
-                current_state=TradingPathCurrentState.INVALID,
-                status=TradingPathAnalysisStatus.REJECTED,
-                reasons=tuple(reasons),
-            )
-        if reasons:
-            return TradingPathDecisionResultV012(
-                decision=TradingPathDecisionV012.WAIT,
-                current_state=TradingPathCurrentState.WAIT,
-                status=TradingPathAnalysisStatus.VALIDATED,
-                reasons=tuple(reasons),
-            )
-        return TradingPathDecisionResultV012(
-            decision=TradingPathDecisionV012.BUY,
-            current_state=TradingPathCurrentState.ENTRY_READY,
-            status=TradingPathAnalysisStatus.PROMOTABLE,
-            reasons=(),
-        )
+        hard_failures = {TradingPathDecisionReasonV012.RISK_GATE_FAILED.value, TradingPathDecisionReasonV012.VALIDATION_REJECTED.value}
+        decision = TradingPathDecisionV012.PASS if any(r in hard_failures for r in reasons) else TradingPathDecisionV012.WAIT if reasons else TradingPathDecisionV012.BUY
+        return TradingPathDecisionResultV012(decision=decision, current_state=TradingPathCurrentState.INVALID if decision is TradingPathDecisionV012.PASS else TradingPathCurrentState.WAIT if decision is TradingPathDecisionV012.WAIT else TradingPathCurrentState.ENTRY_READY, status=TradingPathAnalysisStatus.REJECTED if decision is TradingPathDecisionV012.PASS else TradingPathAnalysisStatus.VALIDATED if decision is TradingPathDecisionV012.WAIT else TradingPathAnalysisStatus.PROMOTABLE, reasons=tuple(reasons))
 
     @classmethod
-    def apply(
-        cls,
-        analysis: TradingPathAnalysisV012,
-        **kwargs: object,
-    ) -> TradingPathAnalysisV012:
+    def apply(cls, analysis: TradingPathAnalysisV012, **kwargs: object) -> TradingPathAnalysisV012:
         result = cls.decide(analysis, **kwargs)
         return TradingPathAnalysisV012(
-            instrument_uid=analysis.instrument_uid,
-            ticker=analysis.ticker,
-            strategy_family=analysis.strategy_family,
-            hypothesis=analysis.hypothesis,
-            regime=analysis.regime,
-            volatility_bucket=analysis.volatility_bucket,
-            direction=analysis.direction,
-            horizon=analysis.horizon,
-            evidence=analysis.evidence,
-            validation=analysis.validation,
-            market_context=analysis.market_context,
-            opportunity=analysis.opportunity,
-            current_state=result.current_state,
-            decision=TradingPathDecision(result.decision.value),
-            status=result.status,
+            instrument_uid=analysis.instrument_uid, ticker=analysis.ticker, strategy_family=analysis.strategy_family,
+            hypothesis=analysis.hypothesis, regime=analysis.regime, volatility_bucket=analysis.volatility_bucket,
+            direction=analysis.direction, horizon=analysis.horizon, evidence=analysis.evidence,
+            validation=analysis.validation, market_context=analysis.market_context, opportunity=analysis.opportunity,
+            current_state=result.current_state, decision=TradingPathDecision(result.decision.value), status=result.status,
             rank=analysis.rank,
         )
 
 
-__all__ = [
-    "TradingPathDecisionV012",
-    "TradingPathDecisionReasonV012",
-    "TradingPathDecisionResultV012",
-    "TradingPathDecisionServiceV012",
-]
+__all__ = ["TradingPathDecisionV012", "TradingPathDecisionReasonV012", "TradingPathDecisionResultV012", "TradingPathDecisionServiceV012"]
