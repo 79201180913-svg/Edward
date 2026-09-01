@@ -88,60 +88,31 @@ def _get_instrument(self, instrument_id):
     instrument_id = str(instrument_id or "")
     if not instrument_id:
         raise ValueError("instrument_id is required")
-    result = self._rest_request(
-        "InstrumentsService/GetInstrumentBy",
-        {
-            "idType": "INSTRUMENT_ID_TYPE_UID",
-            "id": instrument_id,
-        },
-    )
+    result = self._rest_request("InstrumentsService/GetInstrumentBy", {"idType": "INSTRUMENT_ID_TYPE_UID", "id": instrument_id})
     instrument = result.get("instrument") if isinstance(result, dict) else None
     risk_fields = {}
     if isinstance(instrument, dict):
         for key in ("dlong", "dshort", "dlong_min", "dshort_min", "dlong_client", "dshort_client", "short_enabled_flag"):
             risk_fields[key] = instrument.get(key)
-    _adapter.logger.info(
-        "[INSTRUMENT LOOKUP] instrument_uid=%s found=%s keys=%s risk_fields=%s",
-        instrument_id,
-        bool(result),
-        list(result.keys()) if isinstance(result, dict) else type(result).__name__,
-        risk_fields,
-    )
+    _adapter.logger.info("[INSTRUMENT LOOKUP] instrument_uid=%s found=%s keys=%s risk_fields=%s", instrument_id, bool(result), list(result.keys()) if isinstance(result, dict) else type(result).__name__, risk_fields)
     return result
 
 
 def _find_instrument(self, query, trade=True, instrument_kind="INSTRUMENT_TYPE_UNSPECIFIED"):
-    """Contract-correct InstrumentsService.FindInstrument bridge.
-
-    The local HTTP adapter must forward the search to the actual T-Invest API;
-    otherwise a local 404 would be indistinguishable from a broker response.
-    """
+    """Contract-correct InstrumentsService.FindInstrument bridge."""
     query = str(query or "").strip()
     if not query:
         raise ValueError("query is required")
-    payload = {
-        "query": query,
-        "instrumentKind": str(instrument_kind or "INSTRUMENT_TYPE_UNSPECIFIED"),
-        "apiTradeAvailableFlag": bool(trade),
-    }
+    payload = {"query": query, "instrumentKind": str(instrument_kind or "INSTRUMENT_TYPE_UNSPECIFIED"), "apiTradeAvailableFlag": bool(trade)}
     result = self._rest_request("InstrumentsService/FindInstrument", payload)
-    _adapter.logger.info(
-        "[INSTRUMENT SEARCH] query=%s kind=%s trade_available=%s results=%s",
-        query,
-        payload["instrumentKind"],
-        payload["apiTradeAvailableFlag"],
-        len(result.get("instruments", []) or []) if isinstance(result, dict) else 0,
-    )
+    _adapter.logger.info("[INSTRUMENT SEARCH] query=%s kind=%s trade_available=%s results=%s", query, payload["instrumentKind"], payload["apiTradeAvailableFlag"], len(result.get("instruments", []) or []) if isinstance(result, dict) else 0)
     return result
 
 
 def _indicatives(self):
     """Contract-correct InstrumentsService.Indicatives bridge."""
     result = self._rest_request("InstrumentsService/Indicatives", {})
-    _adapter.logger.info(
-        "[INDICATIVES] results=%s",
-        len(result.get("instruments", []) or []) if isinstance(result, dict) else 0,
-    )
+    _adapter.logger.info("[INDICATIVES] results=%s", len(result.get("instruments", []) or []) if isinstance(result, dict) else 0)
     return result
 
 
@@ -175,11 +146,7 @@ def _handler_do_post(self):
     if self.path == "/instruments/search":
         try:
             payload = self._read_json()
-            result = _adapter.STATE.find_instrument(
-                str(payload.get("query") or ""),
-                bool(payload.get("api_trade_available_flag", True)),
-                str(payload.get("instrument_kind") or "INSTRUMENT_TYPE_UNSPECIFIED"),
-            )
+            result = _adapter.STATE.find_instrument(str(payload.get("query") or ""), bool(payload.get("api_trade_available_flag", True)), str(payload.get("instrument_kind") or "INSTRUMENT_TYPE_UNSPECIFIED"))
             self._send(200, result)
             return
         except Exception as exc:
@@ -205,5 +172,9 @@ tinvest_candles_patch.install(_adapter)
 import tinvest_multifactor_patch_v081
 
 tinvest_multifactor_patch_v081.install()
+
+import tinvest_client_disconnect_patch
+
+tinvest_client_disconnect_patch.install()
 
 if __name__ == "__main__": _adapter.main()

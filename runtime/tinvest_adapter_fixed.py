@@ -4,6 +4,7 @@ import base64
 import os
 import ssl
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -220,14 +221,8 @@ def _sandbox_create_order(self, payload):
 def _list_instruments(self, kind="SHARE", trade=True):
     key = str(kind).upper()
     method_map = {
-        "SHARE": "Shares",
-        "BOND": "Bonds",
-        "ETF": "Etfs",
-        "CURRENCY": "Currencies",
-        "FUTURES": "Futures",
-        "OPTION": "Options",
-        "SP": "StructuredNotes",
-        "DFA": "Dfas",
+        "SHARE": "Shares", "BOND": "Bonds", "ETF": "Etfs", "CURRENCY": "Currencies",
+        "FUTURES": "Futures", "OPTION": "Options", "SP": "StructuredNotes", "DFA": "Dfas",
     }
     method_name = method_map.get(key)
     if method_name is None:
@@ -236,8 +231,37 @@ def _list_instruments(self, kind="SHARE", trade=True):
     return self._rest_request(f"InstrumentsService/{method_name}", request)
 
 
+LAST_PRICES_BATCH_SIZE = 50
+LAST_PRICES_RETRIES = 2
+LAST_PRICES_RETRY_DELAY_SECONDS = 0.5
+
+
 def _last_prices(self, ids):
-    return self._rest_request("MarketDataService/GetLastPrices", {"instrumentId": [str(value) for value in ids], "lastPriceType": "LAST_PRICE_UNSPECIFIED"})
+    values = [str(value) for value in ids]
+    if not values:
+        return {"last_prices": []}
+    merged: dict[str, object] = {"last_prices": []}
+    for start in range(0, len(values), LAST_PRICES_BATCH_SIZE):
+        chunk = values[start:start + LAST_PRICES_BATCH_SIZE]
+        for attempt in range(LAST_PRICES_RETRIES + 1):
+            try:
+                response = self._rest_request(
+                    "MarketDataService/GetLastPrices",
+                    {"instrumentId": chunk, "lastPriceType": "LAST_PRICE_UNSPECIFIED"},
+                )
+                if isinstance(response, dict):
+                    prices = response.get("last_prices")
+                    if isinstance(prices, list):
+                        merged["last_prices"].extend(prices)
+                    for key, value in response.items():
+                        if key != "last_prices" and key not in merged:
+                            merged[key] = value
+                break
+            except RuntimeError as exc:
+                if "HTTP 504" not in str(exc) or attempt >= LAST_PRICES_RETRIES:
+                    raise
+                time.sleep(LAST_PRICES_RETRY_DELAY_SECONDS * (attempt + 1))
+    return merged
 
 
 def _close_prices(self, ids):
