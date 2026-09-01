@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 from typing import Any
 
 from edward.services.analysis_service_v08 import AnalysisServiceV08
@@ -21,11 +21,7 @@ def _parse_candles(response: Any) -> list[Any]:
 
 def _status_text(status: Any) -> str:
     value = getattr(status, "value", status)
-    return {
-        "promoted": "PROMOTED",
-        "research_only": "RESEARCH ONLY",
-        "rejected": "REJECTED",
-    }.get(str(value), str(value).upper())
+    return {"promoted": "PROMOTED", "research_only": "RESEARCH ONLY", "rejected": "REJECTED"}.get(str(value), str(value).upper())
 
 
 def _fmt_pct(value: Any) -> str:
@@ -75,7 +71,7 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
         window = tk.Toplevel(app)
         ticker = str(detail.get("ticker", ""))
         window.title(f"Анализ акции v0.8.8 — {ticker}")
-        window.geometry("1350x980")
+        window.geometry("1350x1040")
         window.minsize(1180, 820)
         window.transient(app)
 
@@ -109,34 +105,27 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
         for i in range(6):
             summary.columnconfigure(i, weight=1)
         summary_vars = {k: tk.StringVar(value="—") for k in ("legacy", "candidates", "validated", "promoted", "research", "rejected")}
-        summary_items = (
-            ("legacy", "Legacy QG"),
-            ("candidates", "Trading Paths"),
-            ("validated", "Validated"),
-            ("promoted", "Promoted"),
-            ("research", "Research Only"),
-            ("rejected", "Rejected"),
-        )
-        for col, (key, title) in enumerate(summary_items):
+        for col, (key, title) in enumerate((("legacy", "Legacy QG"), ("candidates", "Trading Paths"), ("validated", "Validated"), ("promoted", "Promoted"), ("research", "Research Only"), ("rejected", "Rejected"))):
             cell = ttk.Frame(summary, padding=6)
             cell.grid(row=0, column=col, sticky="nsew")
             ttk.Label(cell, text=title).pack(anchor="w")
             ttk.Label(cell, textvariable=summary_vars[key], font=("TkDefaultFont", 15, "bold")).pack(anchor="w", pady=(4, 0))
+
+        decision_frame = ttk.LabelFrame(content, text="Финальное торговое решение по инструменту", padding=14)
+        decision_frame.pack(fill="x", pady=(0, 12))
+        decision_var = tk.StringVar(value="Решение: —")
+        decision_detail_var = tk.StringVar(value="Ожидание завершения анализа")
+        decision_reason_var = tk.StringVar(value="")
+        ttk.Label(decision_frame, textvariable=decision_var, font=("TkDefaultFont", 18, "bold")).pack(anchor="w")
+        ttk.Label(decision_frame, textvariable=decision_detail_var, font=("TkDefaultFont", 10, "bold"), wraplength=1200).pack(anchor="w", pady=(5, 0))
+        ttk.Label(decision_frame, textvariable=decision_reason_var, wraplength=1200, justify="left").pack(anchor="w", pady=(5, 0))
 
         context_frame = ttk.LabelFrame(content, text="v0.8.11 Market Context — point-in-time evidence", padding=10)
         context_frame.pack(fill="x", pady=(0, 12))
         for col in range(6):
             context_frame.columnconfigure(col, weight=1)
         context_vars = {k: tk.StringVar(value="—") for k in ("status", "benchmark", "regime", "relative", "volatility", "as_of")}
-        context_items = (
-            ("status", "Context"),
-            ("benchmark", "Benchmark"),
-            ("regime", "Market Regime"),
-            ("relative", "Relative Strength"),
-            ("volatility", "Relative Volatility"),
-            ("as_of", "As Of"),
-        )
-        for col, (key, title) in enumerate(context_items):
+        for col, (key, title) in enumerate((("status", "Context"), ("benchmark", "Benchmark"), ("regime", "Market Regime"), ("relative", "Relative Strength"), ("volatility", "Relative Volatility"), ("as_of", "As Of"))):
             cell = ttk.Frame(context_frame, padding=5)
             cell.grid(row=0, column=col, sticky="nsew")
             ttk.Label(cell, text=title).pack(anchor="w")
@@ -158,12 +147,7 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
         paths_frame.pack(fill="both", expand=True, pady=(0, 12))
         columns = ("rank", "path", "n", "net", "mean", "ci", "temporal", "event", "holding", "multiple", "status")
         tree = ttk.Treeview(paths_frame, columns=columns, show="headings", height=14)
-        headings = (
-            ("rank", "#", 45), ("path", "Trading Path", 340), ("n", "N", 55),
-            ("net", "Net %", 90), ("mean", "Mean %", 90), ("ci", "Adjusted CI95", 150),
-            ("temporal", "Temporal", 80), ("event", "Event", 75), ("holding", "Holding", 75),
-            ("multiple", "MT", 65), ("status", "Статус", 125),
-        )
+        headings = (("rank", "#", 45), ("path", "Trading Path", 340), ("n", "N", 55), ("net", "Net %", 90), ("mean", "Mean %", 90), ("ci", "Adjusted CI95", 150), ("temporal", "Temporal", 80), ("event", "Event", 75), ("holding", "Holding", 75), ("multiple", "MT", 65), ("status", "Статус", 125))
         for key, title, width in headings:
             tree.heading(key, text=title)
             tree.column(key, width=width, anchor="center" if key != "path" else "w")
@@ -183,7 +167,7 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
             legacy_tree.column(key, width=width, anchor="center")
         legacy_tree.pack(fill="x")
 
-        state: dict[str, Any] = {"research": None, "market_context": None}
+        state: dict[str, Any] = {"research": None, "market_context": None, "candles": [], "position": None}
 
         def show_path(index: int) -> None:
             research = state.get("research")
@@ -201,9 +185,7 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
             temporal_text = f"{evidence.positive_temporal_blocks}/{len(evidence.temporal_blocks)} positive blocks"
             reason_text = ", ".join(promotion.reasons) if promotion.reasons else "NONE — all promotion checks passed"
             lines = (
-                f"Trading Path: {path}",
-                f"Ranking score: {ranked.score:.6f}",
-                f"Observations: {evidence.observations}",
+                f"Trading Path: {path}", f"Ranking score: {ranked.score:.6f}", f"Observations: {evidence.observations}",
                 f"Gross Return: {_fmt_pct(validation.gross_return_pct)} | Net Return: {_fmt_pct(validation.net_return_pct)}",
                 f"Mean: {_fmt_pct(evidence.mean_return_pct)} | Median: {_fmt_pct(evidence.median_return_pct)} | Win Rate: {evidence.win_rate_pct:.1f}%",
                 f"CI95: {_fmt_pct(evidence.ci95_low_pct)} → {_fmt_pct(evidence.ci95_high_pct)}",
@@ -211,13 +193,40 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
                 f"Temporal: {temporal_text} | Stable: {'YES' if getattr(temporal, 'temporal_stable', False) else 'NO'}",
                 f"Overlap: event={_fmt_ratio(overlap.max_event_overlap_ratio)}, holding={_fmt_ratio(overlap.max_holding_overlap_ratio)}",
                 f"Multiple testing: {multiple.tests_count} tests | adjusted alpha={multiple.adjusted_alpha:.6f} | PASS={'YES' if multiple.passes else 'NO'}",
-                f"Promotion: {_status_text(promotion.status)}",
-                f"Blocking reasons: {reason_text}",
+                f"Promotion: {_status_text(promotion.status)}", f"Blocking reasons: {reason_text}",
             )
             detail_text.configure(state="normal")
             detail_text.delete("1.0", "end")
             detail_text.insert("1.0", "\n".join(lines))
             detail_text.configure(state="disabled")
+
+        def apply_final_decision(research: Any) -> None:
+            candles = state.get("candles") or []
+            position = state.get("position")
+            if not candles or position is None:
+                return
+            try:
+                from edward.services.decision_engine import DecisionEngine
+                from edward.services.opportunity_engine import OpportunityEngine
+                from edward.ui.analysis_ui_v04 import _build_decision_request
+
+                winner = next((item for item in research.analysis.strategies if item.quality_gate), None)
+                opportunity = OpportunityEngine.evaluate(research.analysis, candles, winner)
+                request = _build_decision_request(app, detail, research.analysis, opportunity, winner, position, profile_var.get())
+                decision = DecisionEngine.evaluate(request)
+                action = getattr(decision.decision, "value", decision.decision) or "UNAVAILABLE"
+                decision_var.set(f"Решение: {str(action).upper()}")
+                decision_detail_var.set(
+                    f"Strategy Score: {decision.strategy_score:.1f}   |   Opportunity Score: {decision.opportunity_score:.1f}   |   Статус: {getattr(decision.status, 'value', decision.status)}"
+                )
+                reasons = ", ".join(decision.reason_codes) if decision.reason_codes else "нет"
+                decision_reason_var.set(f"Почему: {decision.explanation}   Коды: {reasons}")
+                logger.warning("[V012 UI DECISION] ticker=%s decision=%s status=%s strategy_score=%.4f opportunity_score=%.4f reasons=%s", ticker, action, getattr(decision.status, "value", decision.status), decision.strategy_score, decision.opportunity_score, reasons)
+            except Exception as exc:
+                decision_var.set("Решение: UNAVAILABLE")
+                decision_detail_var.set("Decision Engine не смог сформировать итоговое решение")
+                decision_reason_var.set(f"Ошибка: {exc}")
+                logger.exception("[V012 UI DECISION] ticker=%s decision evaluation failed", ticker)
 
         def populate(research: Any) -> None:
             state["research"] = research
@@ -241,7 +250,6 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
                 promotion = research.promotion_results[idx]
                 rule = ranked.candidate.rule
                 evidence = result.statistical_evidence
-                temporal = result.temporal_evidence
                 path = f"{rule.hypothesis} | {rule.regime} | {rule.volatility_bucket} | {rule.direction} | H={rule.horizon}"
                 ci = f"{multiple.adjusted_ci95_low_pct:+.2f}…{multiple.adjusted_ci95_high_pct:+.2f}%"
                 tree.insert("", "end", iid=str(idx), values=(idx + 1, path, evidence.observations, _fmt_pct(result.net_return_pct), _fmt_pct(evidence.mean_return_pct), ci, f"{evidence.positive_temporal_blocks}/{len(evidence.temporal_blocks)}", _fmt_ratio(overlap.max_event_overlap_ratio), _fmt_ratio(overlap.max_holding_overlap_ratio), "PASS" if multiple.passes else "FAIL", _status_text(promotion.status)))
@@ -269,6 +277,7 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
                 best_vars["path"].set("Trading Paths не найдены")
                 best_vars["status"].set("NO RESEARCH PATH")
                 best_vars["reason"].set("Conditional Discovery не предоставил кандидатов.")
+            apply_final_decision(research)
 
         def populate_market_context(benchmark: Any, snapshot: Any) -> None:
             state["market_context"] = snapshot
@@ -277,27 +286,12 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
             regime_result = getattr(snapshot.market_regime, "result", None)
             context_vars["regime"].set(str(getattr(regime_result, "regime", regime_result or "UNAVAILABLE")))
             relative = snapshot.relative_strength
-            context_vars["relative"].set(
-                f"{getattr(relative, 'classification', 'UNAVAILABLE')} ({_fmt_pct(getattr(relative, 'excess_return_pct', None))})"
-            )
+            context_vars["relative"].set(f"{getattr(relative, 'classification', 'UNAVAILABLE')} ({_fmt_pct(getattr(relative, 'excess_return_pct', None))})")
             volatility = snapshot.volatility
             relative_vol = getattr(volatility, "relative_volatility", None)
-            context_vars["volatility"].set(
-                f"{getattr(volatility, 'classification', 'UNAVAILABLE')} ({relative_vol:.2f}x)" if relative_vol is not None else "UNAVAILABLE"
-            )
+            context_vars["volatility"].set(f"{getattr(volatility, 'classification', 'UNAVAILABLE')} ({relative_vol:.2f}x)" if relative_vol is not None else "UNAVAILABLE")
             context_vars["as_of"].set(str(snapshot.as_of))
-            logger.warning(
-                "[V011 MARKET CONTEXT] ticker=%s benchmark=%s status=%s regime=%s relative=%s excess=%s volatility=%s relative_volatility=%s as_of=%s",
-                ticker,
-                benchmark.benchmark_id,
-                snapshot.context_status,
-                getattr(regime_result, "regime", "UNAVAILABLE"),
-                getattr(relative, "classification", "UNAVAILABLE"),
-                getattr(relative, "excess_return_pct", None),
-                getattr(volatility, "classification", "UNAVAILABLE"),
-                relative_vol,
-                snapshot.as_of,
-            )
+            logger.warning("[V011 MARKET CONTEXT] ticker=%s benchmark=%s status=%s regime=%s relative=%s excess=%s volatility=%s relative_volatility=%s as_of=%s", ticker, benchmark.benchmark_id, snapshot.context_status, getattr(regime_result, "regime", "UNAVAILABLE"), getattr(relative, "classification", "UNAVAILABLE"), getattr(relative, "excess_return_pct", None), getattr(volatility, "classification", "UNAVAILABLE"), relative_vol, snapshot.as_of)
 
         def on_select(_event: Any) -> None:
             selected = tree.selection()
@@ -318,25 +312,17 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
                 candles = _parse_candles(response)
                 if not candles:
                     raise RuntimeError("Исторические свечи не получены")
+                state["candles"] = candles
 
                 metadata = _unwrap_instrument(app.client.get_instrument(uid))
                 if not _field(metadata, "instrument_type", None):
                     metadata = dict(detail)
                     metadata["instrument_type"] = detail.get("instrument_kind", "SHARE")
-                if not _field(metadata, "instrument_uid", None):
-                    if isinstance(metadata, dict):
-                        metadata["instrument_uid"] = uid
+                if not _field(metadata, "instrument_uid", None) and isinstance(metadata, dict):
+                    metadata["instrument_uid"] = uid
 
-                market_service = MarketContextRuntimeServiceV011(
-                    fetcher=app.client.get_candles,
-                    indicatives_fetcher=app.client.get_indicatives,
-                    find_instrument_fetcher=app.client.find_instrument,
-                )
-                benchmark, snapshot = market_service.build(
-                    instrument_metadata=metadata,
-                    asset_candles=candles,
-                    as_of=max(candle.timestamp for candle in candles),
-                )
+                market_service = MarketContextRuntimeServiceV011(fetcher=app.client.get_candles, indicatives_fetcher=app.client.get_indicatives, find_instrument_fetcher=app.client.find_instrument)
+                benchmark, snapshot = market_service.build(instrument_metadata=metadata, asset_candles=candles, as_of=max(candle.timestamp for candle in candles))
                 populate_market_context(benchmark, snapshot)
 
                 service = AnalysisServiceV08()
@@ -347,17 +333,22 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
                     SQLiteStore(settings.storage_path)
                 except Exception:
                     pass
+                try:
+                    from edward.ui.analysis_ui_v04 import _position_context
+                    state["position"] = _position_context(app, uid)
+                except Exception:
+                    state["position"] = None
                 populate(research)
-                status_var.set("v0.8.11 context + v0.8.8 анализ завершены")
+                status_var.set("v0.8.11 context + v0.8.8 анализ + Decision Engine завершены")
                 logger.warning("[V088 UI] ticker=%s candidates=%d validated=%d promoted=%d research_only=%d rejected=%d", ticker, len(research.ranked_candidates), len(research.validation_results), sum(getattr(x.status, 'value', x.status) == 'promoted' for x in research.promotion_results), sum(getattr(x.status, 'value', x.status) == 'research_only' for x in research.promotion_results), sum(getattr(x.status, 'value', x.status) == 'rejected' for x in research.promotion_results))
             except Exception as exc:
                 status_var.set("Ошибка анализа")
                 logger.exception("[V011 UI] ticker=%s market-context integration failed", ticker)
-                tk.messagebox.showerror("Анализ v0.8.11", str(exc))
+                messagebox.showerror("Анализ v0.8.11", str(exc))
             finally:
                 set_running(False)
 
-        run_button.configure(command=lambda: run())
+        run_button.configure(command=run)
         run()
 
     legacy._open_analysis = open_analysis
