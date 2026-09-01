@@ -25,6 +25,15 @@ from .trading_path import (
     TradingPathRule,
     TradingPathStatus,
 )
+from .trading_path_analysis_v012 import (
+    TradingPathAnalysisStatus,
+    TradingPathAnalysisV012,
+    TradingPathCurrentState,
+    TradingPathDecision,
+    TradingPathMarketContext,
+    TradingPathOpportunity,
+    TradingPathValidationSummary,
+)
 
 __all__ = [
     "ExecutionDecision",
@@ -48,4 +57,11 @@ __all__ = [
     "TradingPathEvidence",
     "TradingPathRule",
     "TradingPathStatus",
+    "TradingPathAnalysisStatus",
+    "TradingPathAnalysisV012",
+    "TradingPathCurrentState",
+    "TradingPathDecision",
+    "TradingPathMarketContext",
+    "TradingPathOpportunity",
+    "TradingPathValidationSummary",
 ]
