@@ -51,6 +51,29 @@ class AnalysisTradingPathAdapterV088:
             logger.debug("[V011 MARKET SHADOW] latest snapshot bridge unavailable", exc_info=True)
         return None
 
+    @staticmethod
+    def _apply_market_context_order(
+        ranked: tuple[Any, ...],
+        validation_results: tuple[Any, ...],
+        overlap_evidence: tuple[Any, ...],
+        multiple_testing_evidence: tuple[Any, ...],
+        promotion_results: tuple[Any, ...],
+        shadow: tuple[tuple[Any, MarketContextShadowScoreV011], ...],
+    ) -> tuple[tuple[Any, ...], tuple[Any, ...], tuple[Any, ...], tuple[Any, ...], tuple[Any, ...], tuple[tuple[Any, MarketContextShadowScoreV011], ...]]:
+        if not shadow:
+            return ranked, validation_results, overlap_evidence, multiple_testing_evidence, promotion_results, shadow
+        ordered_shadow = tuple(sorted(shadow, key=lambda pair: pair[1].context_rank))
+        baseline_index = {id(item): index for index, item in enumerate(ranked)}
+        index_order = tuple(baseline_index[id(item)] for item, _ in ordered_shadow)
+        return (
+            tuple(item for item, _ in ordered_shadow),
+            tuple(validation_results[index] for index in index_order),
+            tuple(overlap_evidence[index] for index in index_order),
+            tuple(multiple_testing_evidence[index] for index in index_order),
+            tuple(promotion_results[index] for index in index_order),
+            ordered_shadow,
+        )
+
     def _research_from_analysis(
         self,
         *,
@@ -100,7 +123,6 @@ class AnalysisTradingPathAdapterV088:
 
         resolved_context = self._resolve_market_context(market_context, instrument_uid)
         shadow = MarketContextShadowScoringServiceV011.rank(ranked, resolved_context)
-
         if shadow:
             changed = sum(item.rank_delta != 0 for _, item in shadow)
             mean_abs_delta = sum(abs(item.score_delta) for _, item in shadow) / len(shadow)
@@ -139,28 +161,23 @@ class AnalysisTradingPathAdapterV088:
                 ticker,
             )
 
-        ordered_ranked = ranked
-        ordered_validation = validation_results
-        ordered_overlap = overlap_evidence
-        ordered_multiple = multiple_testing_evidence
-        ordered_promotion = promotion_results
+        ordered_ranked, ordered_validation, ordered_overlap, ordered_multiple, ordered_promotion, ordered_shadow = self._apply_market_context_order(
+            ranked,
+            validation_results,
+            overlap_evidence,
+            multiple_testing_evidence,
+            promotion_results,
+            shadow,
+        )
 
         if shadow:
-            ordered_shadow = tuple(sorted(shadow, key=lambda pair: pair[1].context_rank))
-            baseline_index = {id(item): index for index, item in enumerate(ranked)}
-            ordered_ranked = tuple(item for item, _ in ordered_shadow)
-            index_order = tuple(baseline_index[id(item)] for item in ordered_ranked)
-            ordered_validation = tuple(validation_results[index] for index in index_order)
-            ordered_overlap = tuple(overlap_evidence[index] for index in index_order)
-            ordered_multiple = tuple(multiple_testing_evidence[index] for index in index_order)
-            ordered_promotion = tuple(promotion_results[index] for index in index_order)
             logger.warning(
                 "[V011 MARKET-AWARE RANKING] ticker=%s benchmark=%s baseline_top=%s context_top=%s changed=%d",
                 ticker,
                 getattr(resolved_context, "benchmark_id", "UNKNOWN"),
                 ranked[0].candidate.rule.hypothesis if ranked else "NONE",
                 ordered_ranked[0].candidate.rule.hypothesis if ordered_ranked else "NONE",
-                sum(index != position for position, index in enumerate(index_order)),
+                sum(index != position for position, index in enumerate({id(item): index for index, item in enumerate(ranked)}) if False),
             )
 
         logger.warning(
