@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from math import sqrt
+from statistics import mean, pstdev
 from typing import Sequence
 
 from edward.domain import TradingPathAnalysisV012
@@ -19,13 +21,41 @@ class TradingPathRiskResultV012:
 
 
 class TradingPathRiskServiceV012:
-    """Evaluate risk for a concrete path using the existing RiskEngine.
+    """Evaluate path risk using existing RiskEngine semantics and path OOS evidence."""
 
-    The adapter deliberately does not invent path-specific risk math. Until the
-    path has a compatible StrategyResult projection, callers must supply one.
-    This keeps risk semantics identical to the existing platform while making
-    path eligibility explicit.
-    """
+    @staticmethod
+    def _max_drawdown_pct(returns_pct: Sequence[float]) -> float:
+        equity, peak, maximum = 100.0, 100.0, 0.0
+        for value in returns_pct:
+            equity *= 1.0 + float(value) / 100.0
+            peak = max(peak, equity)
+            maximum = max(maximum, (peak - equity) / peak * 100.0) if peak > 0 else maximum
+        return maximum
+
+    @staticmethod
+    def _strategy_projection(analysis: TradingPathAnalysisV012, oos_windows) -> StrategyResult | None:
+        returns = tuple(value for window in oos_windows for value in window.returns_pct)
+        if not returns:
+            return None
+        average = mean(returns)
+        deviation = pstdev(returns) if len(returns) > 1 else 0.0
+        sharpe = average / deviation * sqrt(len(returns)) if deviation > 0 else 0.0
+        positive_windows = sum(window.positive for window in oos_windows)
+        return StrategyResult(
+            strategy=analysis.strategy_family,
+            parameters={"path_hypothesis": analysis.hypothesis},
+            return_pct=average,
+            max_drawdown_pct=TradingPathRiskServiceV012._max_drawdown_pct(returns),
+            sharpe=sharpe,
+            trades=len(returns),
+            stability=positive_windows / len(oos_windows) * 100.0 if oos_windows else 0.0,
+            quality_gate=False,
+            score=0.0,
+            test_score=average,
+            wf_windows=len(oos_windows),
+            positive_return_windows=positive_windows,
+            positive_sharpe_windows=sum(window.excess_return_pct > 0 for window in oos_windows),
+        )
 
     @classmethod
     def evaluate(
@@ -33,8 +63,9 @@ class TradingPathRiskServiceV012:
         analysis: TradingPathAnalysisV012,
         *,
         candles: Sequence[Candle],
-        strategy_result: StrategyResult | None,
         profile: str,
+        oos_windows=(),
+        strategy_result: StrategyResult | None = None,
         position_weight_pct: float = 0.0,
         target_weight_pct: float = 0.0,
         max_position_weight_pct: float | None = None,
@@ -42,8 +73,9 @@ class TradingPathRiskServiceV012:
         available_cash: float | None = None,
         estimated_trade_value: float | None = None,
     ) -> TradingPathRiskResultV012:
+        projected = strategy_result or cls._strategy_projection(analysis, oos_windows)
         risk = RiskEngine.evaluate(
-            strategy_result=strategy_result,
+            strategy_result=projected,
             candles=list(candles),
             profile=profile,
             position_weight_pct=position_weight_pct,
@@ -57,13 +89,7 @@ class TradingPathRiskServiceV012:
         reason = None if eligible else ",".join(risk.reasons) or "RISK_GATE_FAILED"
         logger.warning(
             "[V012 PATH RISK] ticker=%s hypothesis=%s score=%.2f gate=%s critical=%s eligible=%s reason=%s",
-            analysis.ticker,
-            analysis.hypothesis,
-            risk.score,
-            risk.gate,
-            risk.critical,
-            eligible,
-            reason or "none",
+            analysis.ticker, analysis.hypothesis, risk.score, risk.gate, risk.critical, eligible, reason or "none",
         )
         return TradingPathRiskResultV012(risk=risk, path_eligible=eligible, reason=reason)
 
