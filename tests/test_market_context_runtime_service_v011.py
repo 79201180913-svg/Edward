@@ -47,6 +47,41 @@ def test_runtime_resolves_logical_benchmark_to_uid_before_fetch():
     assert candle_calls[0][3] == "CANDLE_INTERVAL_DAY"
 
 
+def test_runtime_marks_unavailable_and_does_not_raise_when_benchmark_cannot_be_resolved():
+    service = MarketContextRuntimeServiceV011(
+        fetcher=lambda *args: {"candles": _candles()},
+        indicatives_fetcher=lambda: {"indicatives": []},
+        find_instrument_fetcher=lambda *args: {"instruments": []},
+    )
+
+    benchmark, snapshot = service.build(
+        instrument_metadata={"uid": "asset-1", "instrument_type": "STOCK", "class_code": "TQBR"},
+        asset_candles=_candles(),
+    )
+
+    assert benchmark.benchmark_id == "IMOEX"
+    assert snapshot.context_status == "UNAVAILABLE"
+    assert snapshot.market_regime is None
+    assert snapshot.relative_strength is None
+    assert snapshot.volatility is None
+    assert snapshot.validate_point_in_time() is True
+
+
+def test_runtime_marks_unavailable_when_benchmark_candles_are_missing():
+    service = MarketContextRuntimeServiceV011(
+        fetcher=lambda *args: {"candles": []},
+        indicatives_fetcher=lambda: {"indicatives": [{"uid": "imoex-uid", "ticker": "IMOEX"}]},
+    )
+
+    benchmark, snapshot = service.build(
+        instrument_metadata={"uid": "asset-1", "instrument_type": "STOCK", "class_code": "TQBR"},
+        asset_candles=_candles(),
+    )
+
+    assert benchmark.benchmark_id == "IMOEX"
+    assert snapshot.context_status == "UNAVAILABLE"
+
+
 def test_runtime_rejects_unsupported_instrument_before_fetch():
     calls = []
 
@@ -58,16 +93,3 @@ def test_runtime_rejects_unsupported_instrument_before_fetch():
     with pytest.raises(ValueError, match="Market context is unsupported"):
         service.build(instrument_metadata={"uid": "bond-1", "instrument_type": "BOND", "market": "MOEX"}, asset_candles=_candles())
     assert calls == []
-
-
-def test_runtime_rejects_unknown_benchmark_in_indicatives():
-    service = MarketContextRuntimeServiceV011(fetcher=lambda *args: {"candles": _candles()}, indicatives_fetcher=lambda: {"indicatives": []})
-    with pytest.raises(ValueError, match="Indicative benchmark not found: IMOEX"):
-        service.build(instrument_metadata={"uid": "asset-1", "instrument_type": "STOCK", "market": "MOEX"}, asset_candles=_candles())
-
-
-def test_runtime_rejects_ambiguous_benchmark_in_indicatives():
-    response = {"indicatives": [{"uid": "one", "ticker": "IMOEX"}, {"uid": "two", "ticker": "IMOEX"}]}
-    service = MarketContextRuntimeServiceV011(fetcher=lambda *args: {"candles": _candles()}, indicatives_fetcher=lambda: response)
-    with pytest.raises(ValueError, match="Indicative benchmark is ambiguous: IMOEX"):
-        service.build(instrument_metadata={"uid": "asset-1", "instrument_type": "STOCK", "market": "MOEX"}, asset_candles=_candles())
