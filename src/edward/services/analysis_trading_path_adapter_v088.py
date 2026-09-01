@@ -171,13 +171,16 @@ class AnalysisTradingPathAdapterV088:
         )
 
         if shadow:
+            baseline_index = {id(item): index for index, item in enumerate(ranked)}
+            index_order = tuple(baseline_index[id(item)] for item, _ in ordered_shadow)
+            changed = sum(index != position for position, index in enumerate(index_order))
             logger.warning(
                 "[V011 MARKET-AWARE RANKING] ticker=%s benchmark=%s baseline_top=%s context_top=%s changed=%d",
                 ticker,
                 getattr(resolved_context, "benchmark_id", "UNKNOWN"),
                 ranked[0].candidate.rule.hypothesis if ranked else "NONE",
                 ordered_ranked[0].candidate.rule.hypothesis if ordered_ranked else "NONE",
-                sum(index != position for position, index in enumerate({id(item): index for index, item in enumerate(ranked)}) if False),
+                changed,
             )
 
         logger.warning(
