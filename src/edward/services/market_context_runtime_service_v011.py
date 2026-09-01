@@ -23,7 +23,14 @@ class MarketContextRuntimeServiceV011:
     Market context is additive evidence. If benchmark data is unavailable,
     the service returns an explicit UNAVAILABLE snapshot instead of failing
     the canonical instrument analysis.
+
+    ``last_built_snapshot`` is a narrow compatibility bridge for the current
+    v0.8.8 UI, which builds market context immediately before invoking the
+    legacy Trading Path adapter but cannot yet pass the snapshot explicitly.
+    It is observability/shadow-only and must not be used for persisted state.
     """
+
+    last_built_snapshot: MarketContextSnapshotV011 | None = None
 
     def __init__(
         self,
@@ -59,6 +66,11 @@ class MarketContextRuntimeServiceV011:
         if isinstance(instrument_metadata, Mapping):
             return str(instrument_metadata.get("instrument_uid", instrument_metadata.get("uid", "")))
         return str(getattr(instrument_metadata, "instrument_uid", getattr(instrument_metadata, "uid", "")))
+
+    @classmethod
+    def _set_last_snapshot(cls, snapshot: MarketContextSnapshotV011) -> MarketContextSnapshotV011:
+        cls.last_built_snapshot = snapshot
+        return snapshot
 
     @staticmethod
     def _unavailable_snapshot(*, instrument_id: str, as_of: datetime, benchmark_id: str) -> MarketContextSnapshotV011:
@@ -104,11 +116,11 @@ class MarketContextRuntimeServiceV011:
             resolved = self.benchmark_instrument_resolver.resolve(benchmark)
         except (ValueError, RuntimeError) as exc:
             self._log_unavailable(instrument_id, benchmark.benchmark_id, exc)
-            return benchmark, self._unavailable_snapshot(
+            return benchmark, self._set_last_snapshot(self._unavailable_snapshot(
                 instrument_id=instrument_id,
                 as_of=effective_as_of,
                 benchmark_id=benchmark.benchmark_id,
-            )
+            ))
 
         effective_start = min(candle.timestamp for candle in asset_candles)
         if effective_start >= effective_as_of:
@@ -159,14 +171,14 @@ class MarketContextRuntimeServiceV011:
             )
             if not snapshot.validate_point_in_time():
                 raise ValueError("Market context failed point-in-time validation")
-            return benchmark, snapshot
+            return benchmark, self._set_last_snapshot(snapshot)
         except (ValueError, RuntimeError) as exc:
             self._log_unavailable(instrument_id, benchmark.benchmark_id, exc)
-            return benchmark, self._unavailable_snapshot(
+            return benchmark, self._set_last_snapshot(self._unavailable_snapshot(
                 instrument_id=instrument_id,
                 as_of=effective_as_of,
                 benchmark_id=benchmark.benchmark_id,
-            )
+            ))
 
 
 __all__ = ["MARKET_CONTEXT_RUNTIME_SERVICE_V011_VERSION", "MarketContextRuntimeServiceV011"]
