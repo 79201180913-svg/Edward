@@ -55,9 +55,10 @@ class TradingPathCandidateServiceV088:
             for cell in evidence.cells
             if cell.sufficient_sample and cell.excess_return_pct > 0.0
         )
+        source_version = getattr(result, "version", "unknown")
         logger.warning(
             "[V088 TRADING PATH CANDIDATES] source_version=%s ticker=%s hypotheses=%d candidates=%d",
-            result.version,
+            source_version,
             ticker,
             len(result.evidence),
             len(candidates),
@@ -72,7 +73,6 @@ class TradingPathCandidateServiceV088:
                 candidate.rule.direction,
                 candidate.rule.horizon,
                 candidate.evidence.observations,
-                candidate.evidence.excess_return_pct,
                 candidate.status,
             )
         return candidates
