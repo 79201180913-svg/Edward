@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import uuid
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
@@ -88,7 +87,17 @@ class TInvestAdapterClient:
             return self._request("POST", "/positions", {"account_id": account_id})
         return self._normalize_sandbox_positions(self.get_sandbox_positions(account_id))
 
-    def find_instrument(self, query: str, trade_available_only: bool = True) -> dict: return self._request("POST", "/instruments/search", {"query": query, "api_trade_available_flag": trade_available_only})
+    def find_instrument(self, query: str, trade_available_only: bool = True, instrument_kind: str = "INSTRUMENT_TYPE_UNSPECIFIED") -> dict:
+        return self._request(
+            "POST",
+            "/instruments/search",
+            {
+                "query": query,
+                "instrument_kind": instrument_kind,
+                "api_trade_available_flag": trade_available_only,
+            },
+        )
+
     def list_instruments(self, instrument_kind: str = "SHARE", trade_available_only: bool = True) -> dict: return self._request("POST", "/instruments/list", {"instrument_kind": instrument_kind, "api_trade_available_flag": trade_available_only})
     def get_instrument(self, instrument_id: str) -> dict: return self._request("POST", "/instruments/get", {"instrument_id": instrument_id})
     def get_indicatives(self) -> dict: return self._request("POST", "/instruments/indicatives", {})
@@ -117,39 +126,3 @@ class TInvestAdapterClient:
         whole = int(amount)
         nano = int((amount - Decimal(whole)) * Decimal("1000000000"))
         return {"units": str(whole), "nano": nano}
-
-    @staticmethod
-    def _order_request_id(request: Any) -> str:
-        raw = str(getattr(request, "request_id", "") or getattr(request, "execution_id", "") or "").strip()
-        if not raw:
-            return str(uuid.uuid4())
-        try:
-            return str(uuid.UUID(raw))
-        except (ValueError, AttributeError, TypeError):
-            return str(uuid.uuid5(uuid.NAMESPACE_URL, raw))
-
-    @staticmethod
-    def _order_payload(request: Any) -> dict:
-        return {"quantity": int(getattr(request, "quantity")), "direction": getattr(getattr(request, "side"), "value", getattr(request, "side")), "account_id": str(getattr(request, "account_id")), "order_type": getattr(getattr(request, "order_type"), "value", getattr(request, "order_type")), "instrument_uid": str(getattr(request, "instrument_uid")), "request_id": TInvestAdapterClient._order_request_id(request), "price": TInvestAdapterClient._quotation_payload(getattr(request, "price", getattr(request, "entry_price", None)))}
-
-    def post_order(self, request: Any) -> dict: return self._request("POST", "/orders/create", self._order_payload(request))
-    def create_order(self, payload: dict[str, Any]) -> dict:
-        normalized = dict(payload)
-        if "price" in normalized:
-            normalized["price"] = self._quotation_payload(normalized["price"])
-        if "request_id" in normalized:
-            raw = str(normalized["request_id"] or "").strip()
-            try:
-                normalized["request_id"] = str(uuid.UUID(raw)) if raw else str(uuid.uuid4())
-            except (ValueError, AttributeError, TypeError):
-                normalized["request_id"] = str(uuid.uuid5(uuid.NAMESPACE_URL, raw))
-        return self._request("POST", "/orders/create", normalized)
-    def order_state(self, account_id: str, order_id: str) -> dict: return self.get_order_state(account_id, order_id)
-    def cancel_order(self, account_id: str, order_id: str) -> dict: return self._request("POST", "/orders/cancel", {"account_id": account_id, "order_id": order_id})
-    def replace_order(self, request: Any, order_id: str) -> dict:
-        payload = self._order_payload(request)
-        payload["order_id"] = order_id
-        return self._request("POST", "/orders/replace", payload)
-    def post_stop_order(self, request: dict[str, Any]) -> dict: return self._request("POST", "/stop-orders/create", request)
-    def get_stop_orders(self, account_id: str) -> dict: return self._request("POST", "/stop-orders", {"account_id": account_id})
-    def cancel_stop_order(self, account_id: str, stop_order_id: str) -> dict: return self._request("POST", "/stop-orders/cancel", {"account_id": account_id, "stop_order_id": stop_order_id})
