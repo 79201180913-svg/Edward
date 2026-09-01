@@ -30,9 +30,6 @@ class AnalysisPathRuntimeServiceV012:
         candles: Iterable[Candle],
     ) -> tuple[TradingPathAnalysisV012, ...]:
         ordered = tuple(sorted(candles, key=lambda item: item.timestamp))
-        conditional_discovery = self.analysis_service.__class__.__dict__["analyze"]
-        # Reuse the canonical service dependencies without invoking the legacy
-        # recommendation path. Discovery is intentionally the only source here.
         from edward.services.conditional_discovery_service_v086 import ConditionalDiscoveryServiceV086
         from edward.services.trading_path_candidate_service_v088 import TradingPathCandidateServiceV088
 
