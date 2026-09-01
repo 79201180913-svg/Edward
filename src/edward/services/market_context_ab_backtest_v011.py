@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from statistics import mean, median, pstdev
+from statistics import mean, median
 from typing import Any, Sequence
 
 from edward.services.analysis_service import Candle
@@ -15,6 +15,7 @@ from edward.services.market_context_snapshot_v011 import MarketContextSnapshotV0
 from edward.services.market_regime_context_v011 import MarketRegimeContextBuilderV011
 from edward.services.market_volatility_context_v011 import MarketVolatilityContextAnalyzerV011
 from edward.services.relative_strength_analyzer_v011 import RelativeStrengthAnalyzerV011
+from edward.services.trading_rule_builder_v088 import TradingRuleBuilderV088
 
 logger = logging.getLogger(__name__)
 MARKET_CONTEXT_AB_BACKTEST_VERSION = "0.11.0"
@@ -75,22 +76,28 @@ class MarketContextABBacktestServiceV011:
         self.relative_strength_analyzer = RelativeStrengthAnalyzerV011()
         self.volatility_analyzer = MarketVolatilityContextAnalyzerV011()
 
-    @staticmethod
-    def _snapshot(*, instrument_id: str, as_of: Any, instrument_candles: Sequence[Candle], market_candles: Sequence[Candle]) -> MarketContextSnapshotV011:
+    def _snapshot(
+        self,
+        *,
+        instrument_id: str,
+        as_of: Any,
+        instrument_candles: Sequence[Candle],
+        market_candles: Sequence[Candle],
+    ) -> MarketContextSnapshotV011:
         instrument_point = tuple(c for c in instrument_candles if c.timestamp <= as_of)
         market_point = tuple(c for c in market_candles if c.timestamp <= as_of)
-        market_regime = MarketContextABBacktestServiceV011.context_regime_builder_static().build(
+        market_regime = self.context_regime_builder.build(
             instrument_id="benchmark",
             as_of=as_of,
             candles=market_point,
         )
-        relative_strength = RelativeStrengthAnalyzerV011().analyze(
+        relative_strength = self.relative_strength_analyzer.analyze(
             instrument_candles=instrument_point,
             market_candles=market_point,
             as_of=as_of,
             horizon_bars=20,
         )
-        volatility = MarketVolatilityContextAnalyzerV011().analyze(
+        volatility = self.volatility_analyzer.analyze(
             instrument_candles=instrument_point,
             market_candles=market_point,
             as_of=as_of,
@@ -115,55 +122,43 @@ class MarketContextABBacktestServiceV011:
             raise ValueError("A/B market context is not point-in-time safe")
         return snapshot
 
-    _context_builder = MarketRegimeContextBuilderV011()
-
-    @classmethod
-    def context_regime_builder_static(cls) -> MarketRegimeContextBuilderV011:
-        return cls._context_builder
-
     @staticmethod
     def _candidate_label(item: Any) -> str:
         rule = item.candidate.rule
         return f"{rule.hypothesis}/{rule.regime}/{rule.volatility_bucket}/{rule.direction}/H={rule.horizon}"
 
     @staticmethod
-    def _future_observations(candles: Sequence[Candle], cutoff_index: int):
-        observations = EventObservationBuilderV086.build(tuple(candles))
+    def future_observations(candles: Sequence[Candle], cutoff_index: int):
+        """Expose only events strictly after the cutoff; future labels are OOS-only."""
+        ordered = tuple(sorted(candles, key=lambda item: item.timestamp))
+        observations = EventObservationBuilderV086.build(ordered)
         return tuple(item for item in observations if item.index > cutoff_index)
 
     @staticmethod
     def _evaluate_candidate(candidate: Any, candles: Sequence[Candle], observations: Sequence[Any]) -> tuple[float, float, int]:
-        rule = candidate.candidate.rule
-        executable = EventBacktestV088.run(candles, observations, __import__("edward.services.trading_rule_builder_v088", fromlist=["TradingRuleBuilderV088"]).TradingRuleBuilderV088.build(candidate.candidate))
+        rule = TradingRuleBuilderV088.build(candidate.candidate)
+        executable = EventBacktestV088.run(candles, observations, rule)
         returns = tuple(trade.return_pct for trade in executable.trades)
         if not returns:
             return 0.0, 0.0, 0
         return mean(returns), sum(value > 0 for value in returns) / len(returns) * 100.0, len(returns)
 
-    @classmethod
-    def _aggregate(cls, values: Sequence[tuple[float, float, int]]) -> MarketContextABMetricV011:
+    @staticmethod
+    def aggregate(values: Sequence[tuple[float, float, int]]) -> MarketContextABMetricV011:
         if not values:
             return MarketContextABMetricV011(0, 0.0, 0.0, 0.0, 0, 0)
-        trade_weighted = []
-        total_trades = 0
-        positive = 0
-        window_returns = []
-        win_numerator = 0
-        for mean_return, win_rate, trades in values:
-            window_returns.append(mean_return)
-            positive += mean_return > 0
-            total_trades += trades
-            win_numerator += win_rate * trades / 100.0
-            if trades:
-                trade_weighted.extend([mean_return] * trades)
-        win_rate = win_numerator / total_trades * 100.0 if total_trades else 0.0
+        total_trades = sum(item[2] for item in values)
+        positive_windows = sum(item[0] > 0 for item in values)
+        window_returns = [item[0] for item in values]
+        winning_trades = sum(item[1] * item[2] / 100.0 for item in values)
+        win_rate = winning_trades / total_trades * 100.0 if total_trades else 0.0
         return MarketContextABMetricV011(
             windows=len(values),
             mean_oos_return_pct=mean(window_returns),
             median_oos_return_pct=median(window_returns),
             win_rate_pct=win_rate,
             total_trades=total_trades,
-            positive_windows=positive,
+            positive_windows=positive_windows,
         )
 
     def run(
@@ -180,7 +175,7 @@ class MarketContextABBacktestServiceV011:
         market = tuple(sorted(market_candles, key=lambda item: item.timestamp))
         if not ordered or not market:
             raise ValueError("instrument_candles and market_candles are required")
-        full_observations = self._future_observations(ordered, 0)
+        full_observations = self.future_observations(ordered, 0)
         window_results: list[MarketContextABWindowResultV011] = []
         baseline_values: list[tuple[float, float, int]] = []
         context_values: list[tuple[float, float, int]] = []
@@ -203,7 +198,12 @@ class MarketContextABBacktestServiceV011:
                 candles=train,
                 profile=profile,
             )
-            snapshot = self._snapshot(instrument_id=instrument_uid, as_of=as_of, instrument_candles=train, market_candles=market_train)
+            snapshot = self._snapshot(
+                instrument_id=instrument_uid,
+                as_of=as_of,
+                instrument_candles=train,
+                market_candles=market_train,
+            )
             shadow = MarketContextShadowScoringServiceV011.rank(research.ranked_candidates, snapshot)
             if not research.ranked_candidates or not shadow:
                 continue
@@ -247,10 +247,10 @@ class MarketContextABBacktestServiceV011:
                 rank_changed=self._candidate_label(baseline_top) != self._candidate_label(context_top),
             ))
 
-        baseline_metric = self._aggregate(baseline_values)
-        context_metric = self._aggregate(context_values)
-        baseline_top3_metric = self._aggregate(baseline_top3_values)
-        context_top3_metric = self._aggregate(context_top3_values)
+        baseline_metric = self.aggregate(baseline_values)
+        context_metric = self.aggregate(context_values)
+        baseline_top3_metric = self.aggregate(baseline_top3_values)
+        context_top3_metric = self.aggregate(context_top3_values)
         changed = sum(item.rank_changed for item in window_results)
         change_rate = changed / len(window_results) * 100.0 if window_results else 0.0
         logger.warning(
