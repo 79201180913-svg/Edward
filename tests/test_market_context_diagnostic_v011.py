@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from edward.services.analysis_service import Candle
-from edward.services.market_context_diagnostic_v011 import MarketContextDiagnosticV011
+from edward.services.market_context_diagnostic_v011 import MarketContextDiagnosticV011, _parse_args
 
 
 def _candles(count: int):
@@ -32,3 +32,26 @@ def test_cutoffs_reject_non_positive_step():
         assert str(exc) == "cutoff step must be positive"
     else:
         raise AssertionError("ValueError was not raised")
+
+
+def test_cli_parser_accepts_required_diagnostic_arguments(monkeypatch):
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "market_context_diagnostic_v011",
+            "--instrument-uid",
+            "uid-1",
+            "--ticker",
+            "RZSB",
+            "--days",
+            "2400",
+            "--cutoff-step",
+            "120",
+        ],
+    )
+    args = _parse_args()
+    assert args.instrument_uid == "uid-1"
+    assert args.ticker == "RZSB"
+    assert args.days == 2400
+    assert args.cutoff_step == 120
+    assert args.profile == "medium_term"
