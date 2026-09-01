@@ -38,6 +38,23 @@ class AnalysisTradingPathAdapterV088:
     def __init__(self, analysis_service: AnalysisServiceV08 | None = None) -> None:
         self.analysis_service = analysis_service or AnalysisServiceV08()
 
+    @staticmethod
+    def _resolve_market_context(market_context: Any, instrument_uid: str) -> Any:
+        if market_context is not None:
+            return market_context
+        # Compatibility bridge for the current v0.8.8 UI: it builds the
+        # market snapshot immediately before invoking this adapter but does not
+        # yet pass it as an argument. Reuse it only when instrument identity
+        # matches, preventing a stale snapshot from another instrument.
+        try:
+            from edward.services.market_context_runtime_service_v011 import MarketContextRuntimeServiceV011
+            snapshot = MarketContextRuntimeServiceV011.last_built_snapshot
+            if snapshot is not None and snapshot.instrument_id == instrument_uid:
+                return snapshot
+        except Exception:
+            logger.debug("[V011 MARKET SHADOW] latest snapshot bridge unavailable", exc_info=True)
+        return None
+
     def _research_from_analysis(
         self,
         *,
@@ -74,14 +91,15 @@ class AnalysisTradingPathAdapterV088:
             )
             for result, overlap, multiple_testing in zip(validation_results, overlap_evidence, multiple_testing_evidence)
         )
-        shadow = MarketContextShadowScoringServiceV011.rank(ranked, market_context)
+        resolved_context = self._resolve_market_context(market_context, instrument_uid)
+        shadow = MarketContextShadowScoringServiceV011.rank(ranked, resolved_context)
         if shadow:
             changed = sum(item.rank_delta != 0 for _, item in shadow)
             mean_abs_delta = sum(abs(item.score_delta) for _, item in shadow) / len(shadow)
             logger.warning(
                 "[V011 MARKET SHADOW SUMMARY] ticker=%s benchmark=%s candidates=%d rank_changed=%d mean_abs_score_delta=%.4f",
                 ticker,
-                getattr(market_context, "benchmark_id", "UNKNOWN"),
+                getattr(resolved_context, "benchmark_id", "UNKNOWN"),
                 len(shadow),
                 changed,
                 mean_abs_delta,
@@ -107,6 +125,11 @@ class AnalysisTradingPathAdapterV088:
                     score.volatility_component,
                     score.confidence_hint_delta,
                 )
+        else:
+            logger.warning(
+                "[V011 MARKET SHADOW SUMMARY] ticker=%s status=SKIPPED reason=no_full_market_context",
+                ticker,
+            )
         logger.warning("[V088 TRADING PATH RANKING] ticker=%s candidates=%d ranked=%d validated=%d overlap_audited=%d promotion_evaluated=%d recommendation_unchanged=%s", ticker, len(candidates), len(ranked), len(validation_results), len(overlap_evidence), len(promotion_results), analysis.recommendation)
         for rank, item in enumerate(ranked, 1):
             rule = item.candidate.rule
