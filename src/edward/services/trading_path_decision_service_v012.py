@@ -3,12 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-from edward.domain import (
-    TradingPathAnalysisStatus,
-    TradingPathAnalysisV012,
-    TradingPathCurrentState,
-    TradingPathDecision,
-)
+from edward.domain import TradingPathAnalysisStatus, TradingPathAnalysisV012, TradingPathCurrentState, TradingPathDecision
 
 
 class TradingPathDecisionV012(StrEnum):
@@ -38,42 +33,48 @@ class TradingPathDecisionResultV012:
 
 
 class TradingPathDecisionServiceV012:
-    """Resolve canonical path state without invoking an order/execution layer."""
-
     @staticmethod
-    def decide(
-        analysis: TradingPathAnalysisV012,
-        *,
-        minimum_opportunity_score: float = 70.0,
-        minimum_confidence: float = 60.0,
-    ) -> TradingPathDecisionResultV012:
+    def decide(analysis: TradingPathAnalysisV012, *, minimum_opportunity_score: float = 70.0, minimum_confidence: float = 60.0) -> TradingPathDecisionResultV012:
         reasons: list[str] = []
         opportunity = analysis.opportunity
         validation = analysis.validation
         if analysis.evidence is None:
-            reasons.append(TradingPathDecisionReasonV012.EVIDENCE_UNAVAILABLE.value)
+            reasons.append("EVIDENCE_UNAVAILABLE")
         if validation is None:
             reasons.append("VALIDATION_UNAVAILABLE")
-        elif validation.promotion_status == TradingPathAnalysisStatus.REJECTED.value:
-            reasons.append(TradingPathDecisionReasonV012.VALIDATION_REJECTED.value)
+        else:
+            promotion_status = getattr(validation, "promotion_status", None)
+            if promotion_status == "REJECTED" or promotion_status == TradingPathAnalysisStatus.REJECTED.value:
+                reasons.append("PATH_VALIDATION_REJECTED")
         if opportunity is None:
-            reasons.append(TradingPathDecisionReasonV012.MISSING_OPPORTUNITY.value)
+            reasons.append("OPPORTUNITY_UNAVAILABLE")
         else:
             if opportunity.risk_gate is False:
-                reasons.append(TradingPathDecisionReasonV012.RISK_GATE_FAILED.value)
+                reasons.append("RISK_GATE_FAILED")
             if opportunity.expected_value_pct is None:
-                reasons.append(TradingPathDecisionReasonV012.MISSING_EV.value)
+                reasons.append("EV_UNAVAILABLE")
             if opportunity.score is None:
-                reasons.append(TradingPathDecisionReasonV012.MISSING_SCORE.value)
+                reasons.append("OPPORTUNITY_SCORE_UNAVAILABLE")
             elif opportunity.score < minimum_opportunity_score:
-                reasons.append(TradingPathDecisionReasonV012.LOW_SCORE.value)
+                reasons.append("OPPORTUNITY_SCORE_BELOW_THRESHOLD")
             if opportunity.confidence is None:
-                reasons.append(TradingPathDecisionReasonV012.LOW_CONFIDENCE.value)
+                reasons.append("CONFIDENCE_UNAVAILABLE")
             elif opportunity.confidence < minimum_confidence:
-                reasons.append(TradingPathDecisionReasonV012.LOW_CONFIDENCE.value)
-        hard_failures = {TradingPathDecisionReasonV012.RISK_GATE_FAILED.value, TradingPathDecisionReasonV012.VALIDATION_REJECTED.value}
-        decision = TradingPathDecisionV012.PASS if any(r in hard_failures for r in reasons) else TradingPathDecisionV012.WAIT if reasons else TradingPathDecisionV012.BUY
-        return TradingPathDecisionResultV012(decision=decision, current_state=TradingPathCurrentState.INVALID if decision is TradingPathDecisionV012.PASS else TradingPathCurrentState.WAIT if decision is TradingPathDecisionV012.WAIT else TradingPathCurrentState.ENTRY_READY, status=TradingPathAnalysisStatus.REJECTED if decision is TradingPathDecisionV012.PASS else TradingPathAnalysisStatus.VALIDATED if decision is TradingPathDecisionV012.WAIT else TradingPathAnalysisStatus.PROMOTABLE, reasons=tuple(reasons))
+                reasons.append("CONFIDENCE_BELOW_THRESHOLD")
+        hard_failures = {"RISK_GATE_FAILED", "PATH_VALIDATION_REJECTED"}
+        if any(reason in hard_failures for reason in reasons):
+            decision = TradingPathDecisionV012.PASS
+            current_state = TradingPathCurrentState.INVALID
+            status = TradingPathAnalysisStatus.REJECTED
+        elif reasons:
+            decision = TradingPathDecisionV012.WAIT
+            current_state = TradingPathCurrentState.WAIT
+            status = TradingPathAnalysisStatus.VALIDATED
+        else:
+            decision = TradingPathDecisionV012.BUY
+            current_state = TradingPathCurrentState.ENTRY_READY
+            status = TradingPathAnalysisStatus.PROMOTABLE
+        return TradingPathDecisionResultV012(decision=decision, current_state=current_state, status=status, reasons=tuple(reasons))
 
     @classmethod
     def apply(cls, analysis: TradingPathAnalysisV012, **kwargs: object) -> TradingPathAnalysisV012:
