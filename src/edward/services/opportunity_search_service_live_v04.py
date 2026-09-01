@@ -4,7 +4,7 @@ from dataclasses import replace
 from typing import Any, Callable
 
 import edward.services.opportunity_search_service as opportunity_search_module
-from edward.services.opportunity_search_service import MARKET_SCOPE, ProgressCallback, OpportunitySearchResult, OpportunitySearchService
+from edward.services.opportunity_search_service import MARKET_SCOPE, PORTFOLIO_SCOPE, ProgressCallback, OpportunitySearchResult, OpportunitySearchService
 from edward.services.trading_path_opportunity_runtime_service_v013 import TradingPathOpportunityRuntimeServiceV013
 
 ResultCallback = Callable[[OpportunitySearchResult, int, int], None]
@@ -58,6 +58,55 @@ class LiveOpportunitySearchService(OpportunitySearchService):
                 pass
             return result
 
+    @staticmethod
+    def _position_instrument(position: Any) -> dict[str, Any]:
+        uid = LiveOpportunitySearchService._field(position, "instrument_uid", LiveOpportunitySearchService._field(position, "uid", ""))
+        ticker = LiveOpportunitySearchService._field(position, "ticker", LiveOpportunitySearchService._field(position, "symbol", ""))
+        name = LiveOpportunitySearchService._field(position, "name", "")
+        price = LiveOpportunitySearchService._field(position, "last_price", LiveOpportunitySearchService._field(position, "current_price", None))
+        kind = LiveOpportunitySearchService._field(position, "instrument_kind", LiveOpportunitySearchService._field(position, "instrument_type", "SHARE"))
+        return {
+            "uid": str(uid or ""),
+            "instrument_uid": str(uid or ""),
+            "ticker": str(ticker or uid or ""),
+            "name": str(name or ""),
+            "last_price": price,
+            "instrument_kind": str(kind or "SHARE").upper(),
+            "buy_available": True,
+            "sell_available": True,
+            "trading_available": True,
+        }
+
+    def _build_universe(self, *, scope: str, instrument_kind: str, positions: Any) -> list[Any]:
+        """Build the portfolio universe directly from held positions.
+
+        Portfolio scans must not enumerate the market catalog: the selected scope
+        already defines the complete instrument universe. Market scans retain the
+        inherited catalog-based implementation.
+        """
+        if str(scope or MARKET_SCOPE).upper() != PORTFOLIO_SCOPE:
+            return super()._build_universe(scope=scope, instrument_kind=instrument_kind, positions=positions)
+        held = positions if isinstance(positions, list) else self._field(positions, "securities", []) or []
+        requested_kind = str(instrument_kind or "SHARE").upper()
+        result: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for position in held:
+            instrument = self._position_instrument(position)
+            uid = instrument["uid"]
+            if not uid or uid in seen:
+                continue
+            position_kind = instrument["instrument_kind"]
+            if requested_kind != "ALL" and position_kind not in {requested_kind, "SHARE" if requested_kind == "SHARE" else requested_kind}:
+                continue
+            seen.add(uid)
+            result.append(instrument)
+        opportunity_search_module.logger.info(
+            "[V013 PORTFOLIO UNIVERSE] instruments=%d kind=%s source=positions",
+            len(result),
+            requested_kind,
+        )
+        return result
+
     def _canonical_result(self, instrument: Any, opportunity: Any, quantity: float) -> OpportunitySearchResult:
         path = opportunity.best_path
         decision = getattr(opportunity.decision, "value", opportunity.decision)
@@ -77,7 +126,7 @@ class LiveOpportunitySearchService(OpportunitySearchService):
             instrument_uid=str(self._field(instrument, "uid", self._field(instrument, "instrument_uid", ""))),
             ticker=str(self._field(instrument, "ticker", "")),
             name=str(self._field(instrument, "name", "")),
-            price=self._float_or_none(self._field(instrument, "last_price", None)),
+            price=self._float_or_none(self._field(instrument, "last_price", self._field(instrument, "current_price", None))),
             market_regime=path.regime,
             strategy_name=path.strategy_family,
             strategy_score=float(path_opportunity.score or 0.0),
@@ -90,7 +139,7 @@ class LiveOpportunitySearchService(OpportunitySearchService):
 
     def scan(self, *, profile: str = "medium_term", instrument_kind: str = "SHARE", scope: str = MARKET_SCOPE, progress_callback: ProgressCallback | None = None, result_callback: ResultCallback | None = None, force_recompute: bool = False) -> list[OpportunitySearchResult]:
         scope = str(scope or MARKET_SCOPE).upper()
-        if scope not in {"MARKET", "PORTFOLIO"}:
+        if scope not in {MARKET_SCOPE, PORTFOLIO_SCOPE}:
             raise ValueError(f"Unsupported opportunity scope: {scope}")
         self._notify(progress_callback, "Загрузка списка инструментов", 2.0, 0, 0)
         account_id = self._active_account(); positions = self.client.get_positions(account_id) if account_id else None
