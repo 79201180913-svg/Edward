@@ -3,13 +3,14 @@ from __future__ import annotations
 import argparse
 import logging
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+from typing import Any
 
 from edward.api.tinvest_adapter_client import TInvestAdapterClient
 from edward.services.analysis_service import Candle
-from edward.services.analysis_ui_helpers import parse_candles
 from edward.services.benchmark_instrument_resolver_v011 import BenchmarkInstrumentResolverV011
-from edward.services.market_benchmark_resolver_v011 import BenchmarkDefinition
 from edward.services.market_context_ab_backtest_v011 import MarketContextABBacktestServiceV011
+from edward.services.market_benchmark_resolver_v011 import BenchmarkDefinition
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,49 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _field(value: Any, name: str, default: Any = None) -> Any:
+    if isinstance(value, dict):
+        return value.get(name, default)
+    return getattr(value, name, default)
+
+
+def _number(value: Any) -> float:
+    if isinstance(value, dict) and ("units" in value or "nano" in value):
+        return float(Decimal(str(value.get("units", 0))) + Decimal(str(value.get("nano", 0))) / Decimal("1000000000"))
+    if value is None:
+        return 0.0
+    return float(value)
+
+
+def _timestamp(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    text = str(value).replace("Z", "+00:00")
+    parsed = datetime.fromisoformat(text)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _parse_candles(response: Any) -> list[Candle]:
+    raw = response.get("candles", []) if isinstance(response, dict) else getattr(response, "candles", [])
+    candles: list[Candle] = []
+    for item in raw or []:
+        timestamp = _field(item, "time", _field(item, "timestamp"))
+        if timestamp is None:
+            continue
+        candles.append(
+            Candle(
+                timestamp=_timestamp(timestamp),
+                open=_number(_field(item, "open", 0.0)),
+                high=_number(_field(item, "high", 0.0)),
+                low=_number(_field(item, "low", 0.0)),
+                close=_number(_field(item, "close", 0.0)),
+                volume=_number(_field(item, "volume", 0.0)),
+            )
+        )
+    candles.sort(key=lambda candle: candle.timestamp)
+    return candles
+
+
 def _load_candles(client: TInvestAdapterClient, instrument_uid: str, days: int) -> list[Candle]:
     if days <= 0:
         raise ValueError("days must be positive")
@@ -43,7 +87,7 @@ def _load_candles(client: TInvestAdapterClient, instrument_uid: str, days: int) 
         interval="CANDLE_INTERVAL_DAY",
         limit=2400,
     )
-    candles = parse_candles(response)
+    candles = _parse_candles(response)
     if not candles:
         raise RuntimeError(f"No candles received for {instrument_uid}")
     return candles
@@ -70,14 +114,14 @@ def main() -> int:
     if not benchmark.instrument_uid:
         raise RuntimeError("IMOEX benchmark UID could not be resolved")
 
-    response = client.get_candles(
+    market_response = client.get_candles(
         benchmark.instrument_uid,
         start=start,
         end=end,
         interval="CANDLE_INTERVAL_DAY",
         limit=2400,
     )
-    market_candles = parse_candles(response)
+    market_candles = _parse_candles(market_response)
     if not market_candles:
         raise RuntimeError(f"No benchmark candles received for {benchmark.instrument_uid}")
 
