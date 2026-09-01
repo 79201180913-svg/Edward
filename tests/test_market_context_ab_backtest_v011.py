@@ -7,13 +7,18 @@ from edward.services.analysis_service import Candle
 
 def _candles(count: int = 40):
     start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    prices = [100.0 + index for index in range(count)]
+    # Create one deterministic SHOCK_REVERSAL event after the cutoff used by
+    # the point-in-time helper test. The production event builder requires a
+    # close-to-close decline of at least 4%.
+    prices[25] = prices[24] * 0.95
     return tuple(
         Candle(
             timestamp=start + timedelta(days=index),
-            open=100.0 + index,
-            high=101.0 + index,
-            low=99.0 + index,
-            close=100.0 + index,
+            open=prices[index],
+            high=prices[index],
+            low=prices[index],
+            close=prices[index],
             volume=1000.0,
         )
         for index in range(count)
