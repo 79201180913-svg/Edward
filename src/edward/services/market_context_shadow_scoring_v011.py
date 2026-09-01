@@ -103,11 +103,22 @@ class MarketContextShadowScoringServiceV011:
             )
             scored.append((item, adjusted, regime_compatibility, relative_strength_component, volatility_component, confidence_hint_delta))
 
-        score_order = sorted(scored, key=lambda row: (-row[1], row[0].candidate.rule.hypothesis, row[0].candidate.rule.regime, row[0].candidate.rule.volatility_bucket, row[0].candidate.rule.direction, row[0].candidate.rule.horizon))
+        score_order = sorted(
+            scored,
+            key=lambda row: (
+                -row[1],
+                row[0].candidate.rule.hypothesis,
+                row[0].candidate.rule.regime,
+                row[0].candidate.rule.volatility_bucket,
+                row[0].candidate.rule.direction,
+                row[0].candidate.rule.horizon,
+            ),
+        )
         context_position = {id(row[0]): index + 1 for index, row in enumerate(score_order)}
 
         result: list[tuple[Any, MarketContextShadowScoreV011]] = []
-        for baseline_rank, (item, adjusted, regime_compatibility, relative_strength_component, volatility_component, confidence_hint_delta) in enumerate(baseline_items, 1):
+        for baseline_rank, row in enumerate(scored, 1):
+            item, adjusted, regime_compatibility, relative_strength_component, volatility_component, confidence_hint_delta = row
             context_rank = context_position[id(item)]
             result.append((
                 item,
