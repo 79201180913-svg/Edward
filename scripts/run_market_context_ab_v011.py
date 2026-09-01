@@ -16,11 +16,15 @@ logger = logging.getLogger(__name__)
 
 
 def build_cutoff_indices(candle_count: int, step: int = 120) -> tuple[int, ...]:
-    if candle_count <= 360:
-        return ()
     if step <= 0:
         raise ValueError("cutoff step must be positive")
-    return tuple(range(300, candle_count - 60, step))
+    warmup = 300
+    oos_tail = 60
+    first_cutoff = warmup
+    last_cutoff_exclusive = candle_count - oos_tail
+    if last_cutoff_exclusive <= first_cutoff:
+        return ()
+    return tuple(range(first_cutoff, last_cutoff_exclusive, step))
 
 
 def _parse_args() -> argparse.Namespace:
@@ -71,7 +75,7 @@ def _parse_candles(response: Any) -> list[Candle]:
                 volume=_number(_field(item, "volume", 0.0)),
             )
         )
-    candles.sort(key=lambda candle: candle.timestamp)
+    candles.sort(key=lambda item: item.timestamp)
     return candles
 
 
@@ -114,14 +118,14 @@ def main() -> int:
     if not benchmark.instrument_uid:
         raise RuntimeError("IMOEX benchmark UID could not be resolved")
 
-    market_response = client.get_candles(
+    response = client.get_candles(
         benchmark.instrument_uid,
         start=start,
         end=end,
         interval="CANDLE_INTERVAL_DAY",
         limit=2400,
     )
-    market_candles = _parse_candles(market_response)
+    market_candles = _parse_candles(response)
     if not market_candles:
         raise RuntimeError(f"No benchmark candles received for {benchmark.instrument_uid}")
 
