@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import errno
 import logging
 
-from . import tinvest_adapter
+import tinvest_adapter
 
 logger = logging.getLogger("edward.tinvest_adapter")
 
