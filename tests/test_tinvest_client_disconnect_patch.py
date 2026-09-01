@@ -1,14 +1,43 @@
 from __future__ import annotations
 
+import importlib.util
 import sys
 import types
 from pathlib import Path
 
-RUNTIME_DIR = Path(__file__).resolve().parents[1] / "runtime"
-if str(RUNTIME_DIR) not in sys.path:
-    sys.path.insert(0, str(RUNTIME_DIR))
+_PATCH_PATH = Path(__file__).resolve().parents[1] / "runtime" / "tinvest_client_disconnect_patch.py"
 
-import tinvest_client_disconnect_patch as patch
+
+class _Handler:
+    _client_disconnect_patch_installed = False
+
+    def _send(self, status, payload):
+        raise ConnectionAbortedError(10053, "connection aborted")
+
+    def do_POST(self):
+        raise AssertionError("not used")
+
+
+def _load_patch():
+    fake_adapter = types.ModuleType("tinvest_adapter")
+    fake_adapter.Handler = _Handler
+    previous = sys.modules.get("tinvest_adapter")
+    sys.modules["tinvest_adapter"] = fake_adapter
+    try:
+        spec = importlib.util.spec_from_file_location("tinvest_client_disconnect_patch", _PATCH_PATH)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return module
+    finally:
+        if previous is None:
+            sys.modules.pop("tinvest_adapter", None)
+        else:
+            sys.modules["tinvest_adapter"] = previous
+
+
+patch = _load_patch()
 
 
 def test_is_client_disconnect_recognizes_socket_disconnects():
@@ -27,20 +56,9 @@ def test_is_client_disconnect_does_not_swallow_unrelated_errors():
     assert not patch._is_client_disconnect(RuntimeError("real adapter failure"))
 
 
-def test_install_wraps_send_and_swallows_client_disconnect(monkeypatch):
-    class Handler:
-        _client_disconnect_patch_installed = False
-
-        def _send(self, status, payload):
-            raise ConnectionAbortedError(10053, "connection aborted")
-
-        def do_POST(self):
-            raise AssertionError("not used")
-
-    module = types.SimpleNamespace(Handler=Handler)
-    monkeypatch.setattr(patch, "tinvest_adapter", module)
+def test_install_wraps_send_and_swallows_client_disconnect():
     patch.install()
 
-    handler = Handler()
+    handler = _Handler()
     assert handler._send(200, {"ok": True}) is None
-    assert Handler._client_disconnect_patch_installed
+    assert _Handler._client_disconnect_patch_installed
