@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Mapping, Sequence
 
 from edward.services.analysis_pipeline_service_v082 import AnalysisPipelineServiceV082
 from edward.services.market_benchmark_resolver_v011 import MarketBenchmarkResolverV011
+from edward.services.market_context_shadow_scoring_v011 import MarketContextShadowScoringServiceV011
 from edward.services.market_data_loader_v011 import MarketDataLoaderV011, MarketDataRequest
 from edward.services.market_regime_context_v011 import MarketRegimeContextBuilderV011
 
@@ -62,13 +63,19 @@ class AnalysisPipelineV011Result:
     def overlay(self):
         return self.base.overlay
 
+    @property
+    def trading_path_research(self):
+        """Expose the v0.11 market-aware Trading Path research result."""
+        return getattr(getattr(getattr(self.base, "base", None), "base", None), "trading_path_research", None)
+
 
 class AnalysisPipelineServiceV011:
-    """Integrate market context without altering v0.8.2 scoring or QG.
+    """Integrate market context into Trading Path ranking while preserving QG.
 
-    Context is attached as an explicit evidence input. This step intentionally
-    does not modify opportunity, confidence, strategy scores, Walk Forward, or
-    Quality Gate. Conditional use of context is introduced in a later step.
+    Market context is computed from the instrument's benchmark and then applied
+    to the canonical v0.8.8 Trading Path research ranking. The underlying
+    statistical validation and Quality Gate remain unchanged; only research
+    priority is market-aware in v0.11.0.
     """
 
     def __init__(
@@ -114,9 +121,6 @@ class AnalysisPipelineServiceV011:
             candles=market_candles,
         )
 
-        # Deliberately pass no context-derived score into the canonical v0.8.2
-        # pipeline. v0.11.0 must first establish a clean baseline before context
-        # can condition discovery/evidence in the next integration step.
         base_result = self.base_pipeline.analyze(
             instrument_uid=instrument_uid,
             ticker=ticker,
@@ -131,8 +135,38 @@ class AnalysisPipelineServiceV011:
             fundamentals=fundamentals,
             **kwargs,
         )
+
+        market_aware_result = base_result
+        v081_result = getattr(base_result, "base", None)
+        v08_result = getattr(v081_result, "base", None)
+        existing_research = getattr(v08_result, "trading_path_research", None)
+        ranked_candidates = getattr(existing_research, "ranked_candidates", ()) if existing_research is not None else ()
+        if ranked_candidates:
+            shadow = MarketContextShadowScoringServiceV011.rank(ranked_candidates, market_context)
+            if shadow:
+                market_aware_ranked = tuple(item for item, _ in sorted(shadow, key=lambda pair: pair[1].context_rank))
+                market_aware_research = replace(
+                    existing_research,
+                    ranked_candidates=market_aware_ranked,
+                    market_context_shadow=shadow,
+                )
+                market_aware_v08 = replace(v08_result, trading_path_research=market_aware_research)
+                market_aware_v081 = replace(v081_result, base=market_aware_v08)
+                market_aware_result = replace(base_result, base=market_aware_v081)
+                top = min(shadow, key=lambda pair: pair[1].context_rank)[1]
+                logger.warning(
+                    "[V011 MARKET-AWARE RANKING] ticker=%s benchmark=%s baseline_top=%d context_top=%d rank_changed=%d",
+                    ticker,
+                    getattr(market_context, "benchmark_id", "UNKNOWN"),
+                    top.baseline_rank,
+                    top.context_rank,
+                    sum(item.rank_delta != 0 for _, item in shadow),
+                )
+        else:
+            logger.warning("[V011 MARKET-AWARE RANKING] ticker=%s status=SKIPPED reason=no_trading_path_candidates", ticker)
+
         return AnalysisPipelineV011Result(
-            base=base_result,
+            base=market_aware_result,
             benchmark=benchmark,
             market_context=market_context,
         )
