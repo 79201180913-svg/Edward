@@ -61,9 +61,6 @@ class TradingPathOOSValidationServiceV012:
             horizon = candidate.rule.horizon
             for item in path_events:
                 finish = item.index + horizon
-                # The realized target must stay inside the same evaluation
-                # window. Otherwise VALIDATION/OOS can read into the next
-                # temporal partition.
                 if finish >= end or finish >= len(candles):
                     continue
                 start_close = float(candles[item.index].close)
@@ -74,11 +71,14 @@ class TradingPathOOSValidationServiceV012:
 
         baseline = []
         horizon = candidate.rule.horizon
-        for index_ in range(start, min(end, len(candles) - horizon)):
-            a = float(candles[index_].close)
-            b = float(candles[index_ + horizon].close)
-            if a > 0 and b > 0:
-                baseline.append((b / a - 1.0) * 100.0)
+        baseline_end = min(end, len(candles))
+        last_start = baseline_end - horizon
+        if last_start > start:
+            for index_ in range(start, last_start):
+                a = float(candles[index_].close)
+                b = float(candles[index_ + horizon].close)
+                if a > 0 and b > 0:
+                    baseline.append((b / a - 1.0) * 100.0)
         event_mean = mean(values) if values else 0.0
         baseline_mean = mean(baseline) if baseline else 0.0
         return TradingPathOOSWindowV012(
