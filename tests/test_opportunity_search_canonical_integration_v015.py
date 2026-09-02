@@ -61,6 +61,7 @@ def test_opportunity_search_defaults_to_canonical_v014_analysis():
 
 
 def test_canonical_opportunity_adapter_delegates_analysis_to_v014_runtime(monkeypatch):
+    CanonicalOpportunityAnalysisV015.clear_cache()
     calls = {}
     expected = (SimpleNamespace(),)
 
@@ -85,6 +86,75 @@ def test_canonical_opportunity_adapter_delegates_analysis_to_v014_runtime(monkey
         "profile": "medium_term",
     }
     assert result.analyses == expected
+
+
+def test_canonical_analysis_cache_reuses_same_candle_snapshot(monkeypatch):
+    CanonicalOpportunityAnalysisV015.clear_cache()
+    calls = 0
+    expected = (SimpleNamespace(),)
+
+    def fake_analyze_paths(self, **kwargs):
+        nonlocal calls
+        calls += 1
+        return expected
+
+    monkeypatch.setattr(AnalysisPathRuntimeServiceV012, "analyze_paths", fake_analyze_paths)
+    candles = (1, 2, 3)
+
+    first = CanonicalOpportunityAnalysisV015.analyze(
+        instrument_uid="uid", ticker="SBER", candles=candles, profile="medium_term"
+    )
+    second = CanonicalOpportunityAnalysisV015.analyze(
+        instrument_uid="uid", ticker="SBER", candles=candles, profile="medium_term"
+    )
+
+    assert first is second
+    assert calls == 1
+
+
+def test_canonical_analysis_cache_invalidates_when_candles_change(monkeypatch):
+    CanonicalOpportunityAnalysisV015.clear_cache()
+    calls = 0
+    expected = (SimpleNamespace(),)
+
+    def fake_analyze_paths(self, **kwargs):
+        nonlocal calls
+        calls += 1
+        return expected
+
+    monkeypatch.setattr(AnalysisPathRuntimeServiceV012, "analyze_paths", fake_analyze_paths)
+
+    CanonicalOpportunityAnalysisV015.analyze(
+        instrument_uid="uid", ticker="SBER", candles=(1, 2, 3), profile="medium_term"
+    )
+    CanonicalOpportunityAnalysisV015.analyze(
+        instrument_uid="uid", ticker="SBER", candles=(1, 2, 4), profile="medium_term"
+    )
+
+    assert calls == 2
+
+
+def test_canonical_analysis_force_recompute_bypasses_cache(monkeypatch):
+    CanonicalOpportunityAnalysisV015.clear_cache()
+    calls = 0
+    expected = (SimpleNamespace(),)
+
+    def fake_analyze_paths(self, **kwargs):
+        nonlocal calls
+        calls += 1
+        return expected
+
+    monkeypatch.setattr(AnalysisPathRuntimeServiceV012, "analyze_paths", fake_analyze_paths)
+    candles = (1, 2, 3)
+
+    CanonicalOpportunityAnalysisV015.analyze(
+        instrument_uid="uid", ticker="SBER", candles=candles, profile="medium_term"
+    )
+    CanonicalOpportunityAnalysisV015.analyze(
+        instrument_uid="uid", ticker="SBER", candles=candles, profile="medium_term", force_recompute=True
+    )
+
+    assert calls == 2
 
 
 def test_unified_opportunity_engine_returns_canonical_opportunity_without_recalculation(monkeypatch):
