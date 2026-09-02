@@ -7,6 +7,10 @@ from edward.services.analysis_path_runtime_service_v012 import AnalysisPathRunti
 from edward.services.trading_path_analysis_builder_v012 import TradingPathAnalysisBuilderV012
 
 
+class HashableNamespace(SimpleNamespace):
+    __hash__ = object.__hash__
+
+
 def _candles(count=120, *, oos_close=100.0):
     candles = []
     for i in range(count):
@@ -25,8 +29,8 @@ def _candles(count=120, *, oos_close=100.0):
 
 
 def test_runtime_runs_canonical_path_stages(monkeypatch):
-    candidate = SimpleNamespace(rule=SimpleNamespace(instrument_uid="SBER", ticker="SBER", hypothesis="H1", regime="RANGE", volatility_bucket="Normal", direction="Positive", horizon=5))
-    analysis = SimpleNamespace(instrument_uid="SBER", ticker="SBER", strategy_family="H1", hypothesis="H1", regime="RANGE", volatility_bucket="Normal", direction="Positive", horizon=5, evidence=SimpleNamespace(), validation=SimpleNamespace(promotion_status="validated"), market_context=SimpleNamespace(), opportunity=SimpleNamespace(), current_state=SimpleNamespace(), decision=SimpleNamespace(), status=SimpleNamespace(), rank=1)
+    candidate = HashableNamespace(rule=SimpleNamespace(instrument_uid="SBER", ticker="SBER", hypothesis="H1", regime="RANGE", volatility_bucket="Normal", direction="Positive", horizon=5))
+    analysis = SimpleNamespace(instrument_uid="SBER", ticker="SBER", strategy_family="H1", hypothesis="H1", regime="RANGE", volatility_bucket="Normal", direction="Positive", horizon=5, evidence=SimpleNamespace(), validation=SimpleNamespace(promotion_status="validated", wf_persistence_pct=None, robustness_score=None, positive_oos_windows_pct=None), market_context=SimpleNamespace(), opportunity=SimpleNamespace(), current_state=SimpleNamespace(), decision=SimpleNamespace(), status=SimpleNamespace(), rank=1)
     observations = (SimpleNamespace(index=90, hypothesis="H1", regime="RANGE", volatility_bucket="Normal", direction="Positive"),)
     observation_builds = []
     monkeypatch.setattr("edward.services.conditional_discovery_service_v086.ConditionalDiscoveryServiceV086.run", lambda candles: SimpleNamespace(evidence=()))
@@ -49,7 +53,7 @@ def test_runtime_runs_canonical_path_stages(monkeypatch):
 
 def test_runtime_sends_adaptive_candidate_through_same_downstream_pipeline(monkeypatch):
     adaptive_candidate = TradingPathCandidate(rule=TradingPathRule(instrument_uid="SBER", ticker="SBER", hypothesis="ADAPTIVE_RULE:regime=RANGE AND return_5 >= 0.0", regime="RANGE", volatility_bucket="Adaptive", direction="Positive", horizon=5), evidence=TradingPathEvidence(observations=20, mean_forward_return_pct=1.0, median_forward_return_pct=1.0, win_rate_pct=60.0, baseline_mean_return_pct=0.0, excess_return_pct=1.0, sufficient_sample=True), source_version="0.8.14")
-    analysis = SimpleNamespace(instrument_uid="SBER", ticker="SBER", strategy_family="Adaptive Discovery", hypothesis=adaptive_candidate.rule.hypothesis, regime="RANGE", volatility_bucket="Adaptive", direction="Positive", horizon=5, evidence=SimpleNamespace(), validation=SimpleNamespace(promotion_status="validated"), market_context=SimpleNamespace(), opportunity=SimpleNamespace(), current_state=SimpleNamespace(), decision=SimpleNamespace(), status=SimpleNamespace(), rank=1)
+    analysis = SimpleNamespace(instrument_uid="SBER", ticker="SBER", strategy_family="Adaptive Discovery", hypothesis=adaptive_candidate.rule.hypothesis, regime="RANGE", volatility_bucket="Adaptive", direction="Positive", horizon=5, evidence=SimpleNamespace(), validation=SimpleNamespace(promotion_status="validated", wf_persistence_pct=None, robustness_score=None, positive_oos_windows_pct=None), market_context=SimpleNamespace(), opportunity=SimpleNamespace(), current_state=SimpleNamespace(), decision=SimpleNamespace(), status=SimpleNamespace(), rank=1)
     calls = {"oos": [], "ev": [], "risk": [], "opportunity": [], "decision": []}
     monkeypatch.setattr("edward.services.conditional_discovery_service_v086.ConditionalDiscoveryServiceV086.run", lambda candles: SimpleNamespace(evidence=()))
     monkeypatch.setattr("edward.services.trading_path_candidate_service_v014.TradingPathCandidateServiceV014.from_fixed", lambda discovery, **kwargs: ())
