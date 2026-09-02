@@ -4,7 +4,7 @@ import logging
 from statistics import mean
 from typing import Iterable, Sequence
 
-from edward.domain import TradingPathAnalysisV012
+from edward.domain import TradingPathAnalysisV012, TradingPathValidationSummary
 from edward.services.analysis_service import Candle
 from edward.services.event_observation_v086 import EventObservationBuilderV086
 from edward.services.trading_path_adaptive_discovery_service_v014 import TradingPathAdaptiveDiscoveryServiceV014
@@ -190,6 +190,27 @@ class AnalysisPathRuntimeServiceV012:
                 oos_windows=oos_results,
             )
             result = TradingPathDecisionServiceV012.decide(with_opportunity)
+
+            validation = with_opportunity.validation
+            integrity = statistical_integrity.get(candidate)
+            if integrity is not None:
+                validation = TradingPathValidationSummary(
+                    wf_persistence_pct=validation.wf_persistence_pct,
+                    robustness_score=validation.robustness_score,
+                    positive_oos_windows_pct=validation.positive_oos_windows_pct,
+                    statistical_valid=integrity.statistically_valid,
+                    overlap_valid=integrity.overlap_valid,
+                    multiple_testing_valid=integrity.multiple_testing_valid,
+                    promotion_status=validation.promotion_status,
+                    effective_sample_size=integrity.effective_sample_size,
+                    overlap_ratio_pct=integrity.overlap_ratio_pct,
+                    standard_error_pct=integrity.standard_error_pct,
+                    z_score=integrity.z_score,
+                    p_value_one_sided=integrity.p_value_one_sided,
+                    adjusted_p_value=integrity.adjusted_p_value,
+                    hypotheses_tested=integrity.hypotheses_tested,
+                )
+
             final = TradingPathAnalysisV012(
                 instrument_uid=with_opportunity.instrument_uid,
                 ticker=with_opportunity.ticker,
@@ -200,7 +221,7 @@ class AnalysisPathRuntimeServiceV012:
                 direction=with_opportunity.direction,
                 horizon=with_opportunity.horizon,
                 evidence=with_opportunity.evidence,
-                validation=with_opportunity.validation,
+                validation=validation,
                 market_context=with_opportunity.market_context,
                 opportunity=with_opportunity.opportunity,
                 current_state=result.current_state,
