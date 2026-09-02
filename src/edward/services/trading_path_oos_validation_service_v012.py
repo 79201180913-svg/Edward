@@ -59,15 +59,30 @@ class TradingPathOOSValidationServiceV012:
             ]
             values = []
             horizon = candidate.rule.horizon
+            excluded_boundary = 0
+            excluded_invalid_price = 0
             for item in path_events:
                 finish = item.index + horizon
                 if finish >= end or finish >= len(candles):
+                    excluded_boundary += 1
                     continue
                 start_close = float(candles[item.index].close)
                 finish_close = float(candles[finish].close)
                 if start_close <= 0 or finish_close <= 0:
+                    excluded_invalid_price += 1
                     continue
                 values.append((finish_close / start_close - 1.0) * 100.0)
+            logger.warning(
+                "[V012 FIXED OOS] ticker=%s hypothesis=%s range=%d:%d events=%d observations=%d excluded_boundary=%d excluded_invalid_price=%d",
+                candidate.rule.ticker,
+                candidate.rule.hypothesis,
+                start,
+                end,
+                len(path_events),
+                len(values),
+                excluded_boundary,
+                excluded_invalid_price,
+            )
 
         baseline = []
         horizon = candidate.rule.horizon
