@@ -10,10 +10,14 @@ class StrategyFamily(StrEnum):
     MOMENTUM = "Momentum"
     BREAKOUT = "Breakout"
     MEAN_REVERSION = "Mean Reversion"
-    ADAPTIVE_DISCOVERY = "Adaptive Discovery"
 
     @classmethod
     def values(cls) -> tuple[str, ...]:
+        """Return the legacy fixed strategy families only.
+
+        Adaptive Discovery is resolved by strategy_family_for_hypothesis() but is
+        intentionally not added to the legacy enum contract used by v0.12 callers.
+        """
         return tuple(item.value for item in cls)
 
 
@@ -24,18 +28,21 @@ STRATEGY_FAMILY_BY_HYPOTHESIS: dict[str, StrategyFamily] = {
     "PULLBACK_RECLAIM": StrategyFamily.MEAN_REVERSION,
     "SHOCK_REVERSAL": StrategyFamily.MEAN_REVERSION,
     "GAP_REVERSAL": StrategyFamily.MEAN_REVERSION,
-    "ADAPTIVE_RULE": StrategyFamily.ADAPTIVE_DISCOVERY,
 }
 
 
-def strategy_family_for_hypothesis(hypothesis: str) -> StrategyFamily | None:
+ADAPTIVE_DISCOVERY_FAMILY = "Adaptive Discovery"
+
+
+def strategy_family_for_hypothesis(hypothesis: str) -> StrategyFamily | str | None:
     key = hypothesis.upper()
     if key.startswith("ADAPTIVE_RULE:"):
-        return StrategyFamily.ADAPTIVE_DISCOVERY
+        return ADAPTIVE_DISCOVERY_FAMILY
     return STRATEGY_FAMILY_BY_HYPOTHESIS.get(key)
 
 
 __all__ = [
+    "ADAPTIVE_DISCOVERY_FAMILY",
     "STRATEGY_FAMILY_BY_HYPOTHESIS",
     "StrategyFamily",
     "strategy_family_for_hypothesis",
