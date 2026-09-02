@@ -15,7 +15,7 @@ from edward.services.opportunity_engine import OpportunityEngine as LegacyOpport
 from edward.services.opportunity_search_service import OpportunitySearchService
 
 
-def _analysis(*, decision: TradingPathDecision, hypothesis: str, source: str, rank: int = 1):
+def _analysis(*, decision: TradingPathDecision, hypothesis: str, source: str, rank: int = 1, statistical_valid: bool | None = True):
     evidence = SimpleNamespace(
         mean_forward_return_pct=2.5,
         max_drawdown_pct=4.0,
@@ -34,7 +34,9 @@ def _analysis(*, decision: TradingPathDecision, hypothesis: str, source: str, ra
         validation=TradingPathValidationSummary(
             robustness_score=80.0,
             positive_oos_windows_pct=100.0,
-            statistical_valid=True,
+            statistical_valid=statistical_valid,
+            overlap_valid=True,
+            multiple_testing_valid=True,
             promotion_status="validated",
         ),
         opportunity=TradingPathOpportunity(
@@ -131,6 +133,19 @@ def test_canonical_contract_preserves_adaptive_and_fixed_sources():
     assert view.strategies[0].quality_gate is True
     assert view.strategies[1].quality_gate is True
     assert view.best_analysis is fixed
+
+
+def test_canonical_quality_gate_fails_closed_when_statistical_validity_is_unknown():
+    analysis = _analysis(
+        decision=TradingPathDecision.BUY,
+        hypothesis="ADAPTIVE_RULE:regime=TREND_DOWN AND distance_to_low_20 <= 0.04",
+        source="adaptive",
+        statistical_valid=None,
+    )
+
+    result = CanonicalOpportunityAnalysisV015.from_analyses([analysis]).strategies[0]
+
+    assert result.quality_gate is False
 
 
 def test_empty_canonical_result_does_not_create_opportunity():
