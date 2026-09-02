@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
 from typing import Any, Iterable
 
 from edward.domain import TradingPathAnalysisV012
@@ -22,6 +23,8 @@ class CanonicalOpportunityAnalysisV015:
 
     analyses: tuple[TradingPathAnalysisV012, ...]
 
+    _cache: dict[tuple[str, str, str, str], "CanonicalOpportunityAnalysisV015"] = {}
+
     @classmethod
     def analyze(
         cls,
@@ -31,15 +34,47 @@ class CanonicalOpportunityAnalysisV015:
         candles: Iterable[Any],
         profile: str = "medium_term",
         instrument: Any | None = None,
+        force_recompute: bool = False,
     ) -> "CanonicalOpportunityAnalysisV015":
         del instrument
+        candle_tuple = tuple(candles)
+        cache_key = cls._cache_key(instrument_uid, ticker, profile, candle_tuple)
+        if not force_recompute:
+            cached = cls._cache.get(cache_key)
+            if cached is not None:
+                return cached
+
         analyses = AnalysisPathRuntimeServiceV012().analyze_paths(
             instrument_uid=instrument_uid,
             ticker=ticker,
-            candles=candles,
+            candles=candle_tuple,
             profile=profile,
         )
-        return cls.from_analyses(analyses)
+        result = cls.from_analyses(analyses)
+        cls._cache[cache_key] = result
+        return result
+
+    @classmethod
+    def clear_cache(cls) -> None:
+        cls._cache.clear()
+
+    @staticmethod
+    def _cache_key(
+        instrument_uid: str,
+        ticker: str,
+        profile: str,
+        candles: tuple[Any, ...],
+    ) -> tuple[str, str, str, str]:
+        digest = sha256()
+        for candle in candles:
+            digest.update(repr(candle).encode("utf-8", errors="replace"))
+            digest.update(b"\n")
+        return (
+            str(instrument_uid),
+            str(ticker),
+            str(profile),
+            digest.hexdigest(),
+        )
 
     @property
     def pipeline_result(self) -> TradingPathAnalysisV012 | None:
