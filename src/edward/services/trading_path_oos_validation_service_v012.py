@@ -29,11 +29,11 @@ class TradingPathOOSWindowV012:
 
 
 class TradingPathOOSValidationServiceV012:
-    """Temporal OOS validation for a concrete path.
+    """Temporal validation for a concrete path.
 
     Fixed and adaptive candidates share the same window, baseline, summary and
-    validation contract. Adaptive matching is delegated to the v0.8.14
-    point-in-time evaluator; no evaluation-partition thresholds are derived.
+    validation contract. An explicit evaluation range lets the canonical runtime
+    evaluate VALIDATION and final OOS without changing the candidate's history.
     """
 
     MIN_OOS_OBSERVATIONS = 3
@@ -88,24 +88,68 @@ class TradingPathOOSValidationServiceV012:
         )
 
     @classmethod
-    def validate(cls, candidate: TradingPathCandidate, candles: Sequence[Candle], *, windows=DEFAULT_WINDOWS, test_size=DEFAULT_TEST_SIZE, observations=None):
+    def validate(
+        cls,
+        candidate: TradingPathCandidate,
+        candles: Sequence[Candle],
+        *,
+        windows=DEFAULT_WINDOWS,
+        test_size=DEFAULT_TEST_SIZE,
+        observations=None,
+        evaluation_start: int | None = None,
+        evaluation_end: int | None = None,
+    ):
         ordered = tuple(sorted(candles, key=lambda item: item.timestamp))
         if windows < 1 or test_size < 1:
             raise ValueError("windows and test_size must be positive")
         required = windows * test_size
-        if len(ordered) < required:
-            logger.warning("[V012 PATH OOS] insufficient candles=%d required=%d ticker=%s", len(ordered), required, candidate.rule.ticker)
-            return ()
+
+        if evaluation_start is not None or evaluation_end is not None:
+            start = 0 if evaluation_start is None else evaluation_start
+            end = len(ordered) if evaluation_end is None else evaluation_end
+            if start < 0 or end < start or end > len(ordered):
+                raise ValueError("invalid evaluation range")
+            if end - start < required:
+                logger.warning(
+                    "[V012 PATH OOS] insufficient evaluation range=%d:%d required=%d ticker=%s",
+                    start, end, required, candidate.rule.ticker,
+                )
+                return ()
+            base = end - required
+        else:
+            if len(ordered) < required:
+                logger.warning("[V012 PATH OOS] insufficient candles=%d required=%d ticker=%s", len(ordered), required, candidate.rule.ticker)
+                return ()
+            base = len(ordered) - required
+
         canonical_observations = observations if observations is not None else EventObservationBuilderV086.build(ordered)
-        base = len(ordered) - required
         return tuple(
-            cls._evaluate_window(candidate, canonical_observations, ordered, base + offset * test_size, base + (offset + 1) * test_size, offset + 1)
+            cls._evaluate_window(
+                candidate, canonical_observations, ordered,
+                base + offset * test_size,
+                base + (offset + 1) * test_size,
+                offset + 1,
+            )
             for offset in range(windows)
         )
 
     @classmethod
-    def build_validation(cls, candidate, candles: Sequence[Candle], *, windows=DEFAULT_WINDOWS, test_size=DEFAULT_TEST_SIZE, observations=None):
-        result = cls.validate(candidate, candles, windows=windows, test_size=test_size, observations=observations)
+    def build_validation(
+        cls,
+        candidate,
+        candles: Sequence[Candle],
+        *,
+        windows=DEFAULT_WINDOWS,
+        test_size=DEFAULT_TEST_SIZE,
+        observations=None,
+        evaluation_start: int | None = None,
+        evaluation_end: int | None = None,
+    ):
+        result = cls.validate(
+            candidate, candles, windows=windows, test_size=test_size,
+            observations=observations, evaluation_start=evaluation_start,
+            evaluation_end=evaluation_end,
+        )
         positive_pct = sum(item.positive for item in result) / len(result) * 100.0 if result else None
         robustness = None
         if result:
