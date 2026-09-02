@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 from edward.domain import TradingPathCandidate, TradingPathEvidence, TradingPathRule
 from edward.services.analysis_service import Candle
@@ -139,14 +140,29 @@ def test_fixed_candidate_does_not_use_adaptive_evaluator(monkeypatch):
 
 
 def test_explicit_evaluation_range_does_not_cross_range_end():
-    result = TradingPathOOSValidationServiceV012.validate(
-        _cand(),
-        _candles(100),
-        windows=1,
-        test_size=20,
-        evaluation_start=60,
-        evaluation_end=80,
+    matching_event = SimpleNamespace(
+        index=79,
+        hypothesis="BREAKOUT_EXPANSION",
+        regime="RANGE",
+        volatility_bucket="Normal",
+        direction="Positive",
     )
+
+    monkeypatch_observations = lambda candles: (matching_event,)
+    original = TradingPathOOSValidationServiceV012._evaluate_window
+    try:
+        from edward.services.event_observation_v086 import EventObservationBuilderV086
+        EventObservationBuilderV086.build = staticmethod(monkeypatch_observations)
+        result = TradingPathOOSValidationServiceV012.validate(
+            _cand(),
+            _candles(100),
+            windows=1,
+            test_size=20,
+            evaluation_start=60,
+            evaluation_end=80,
+        )
+    finally:
+        EventObservationBuilderV086.build = staticmethod(original)
 
     assert len(result) == 1
     assert result[0].start == 60
