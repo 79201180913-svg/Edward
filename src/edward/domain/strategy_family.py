@@ -10,6 +10,7 @@ class StrategyFamily(StrEnum):
     MOMENTUM = "Momentum"
     BREAKOUT = "Breakout"
     MEAN_REVERSION = "Mean Reversion"
+    ADAPTIVE_DISCOVERY = "Adaptive Discovery"
 
     @classmethod
     def values(cls) -> tuple[str, ...]:
@@ -23,11 +24,15 @@ STRATEGY_FAMILY_BY_HYPOTHESIS: dict[str, StrategyFamily] = {
     "PULLBACK_RECLAIM": StrategyFamily.MEAN_REVERSION,
     "SHOCK_REVERSAL": StrategyFamily.MEAN_REVERSION,
     "GAP_REVERSAL": StrategyFamily.MEAN_REVERSION,
+    "ADAPTIVE_RULE": StrategyFamily.ADAPTIVE_DISCOVERY,
 }
 
 
 def strategy_family_for_hypothesis(hypothesis: str) -> StrategyFamily | None:
-    return STRATEGY_FAMILY_BY_HYPOTHESIS.get(hypothesis.upper())
+    key = hypothesis.upper()
+    if key.startswith("ADAPTIVE_RULE:"):
+        return StrategyFamily.ADAPTIVE_DISCOVERY
+    return STRATEGY_FAMILY_BY_HYPOTHESIS.get(key)
 
 
 __all__ = [
