@@ -13,11 +13,6 @@ class StrategyFamily(StrEnum):
 
     @classmethod
     def values(cls) -> tuple[str, ...]:
-        """Return the legacy fixed strategy families only.
-
-        Adaptive Discovery is resolved by strategy_family_for_hypothesis() but is
-        intentionally not added to the legacy enum contract used by v0.12 callers.
-        """
         return tuple(item.value for item in cls)
 
 
@@ -31,10 +26,14 @@ STRATEGY_FAMILY_BY_HYPOTHESIS: dict[str, StrategyFamily] = {
 }
 
 
-ADAPTIVE_DISCOVERY_FAMILY = "Adaptive Discovery"
+class _AdaptiveDiscoveryFamily(StrEnum):
+    ADAPTIVE_DISCOVERY = "Adaptive Discovery"
 
 
-def strategy_family_for_hypothesis(hypothesis: str) -> StrategyFamily | str | None:
+ADAPTIVE_DISCOVERY_FAMILY = _AdaptiveDiscoveryFamily.ADAPTIVE_DISCOVERY
+
+
+def strategy_family_for_hypothesis(hypothesis: str) -> StrategyFamily | _AdaptiveDiscoveryFamily | None:
     key = hypothesis.upper()
     if key.startswith("ADAPTIVE_RULE:"):
         return ADAPTIVE_DISCOVERY_FAMILY
