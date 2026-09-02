@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from hashlib import sha256
-from typing import Any, Iterable
+from typing import Any, ClassVar, Iterable
 
 from edward.domain import TradingPathAnalysisV012
 from edward.services.analysis_service import StrategyResult
@@ -23,7 +23,7 @@ class CanonicalOpportunityAnalysisV015:
 
     analyses: tuple[TradingPathAnalysisV012, ...]
 
-    _cache: dict[tuple[str, str, str, str], "CanonicalOpportunityAnalysisV015"] = {}
+    _cache: ClassVar[dict[tuple[str, str, str, str], "CanonicalOpportunityAnalysisV015"]] = {}
 
     @classmethod
     def analyze(
