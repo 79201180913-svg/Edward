@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 from edward.services.analysis_service import Candle
 from edward.services.trading_path_adaptive_discovery_service_v014 import TradingPathAdaptiveDiscoveryServiceV014
+from edward.services.trading_path_statistical_integrity_service_v014 import TradingPathStatisticalIntegrityServiceV014
 
 
 def make_candles(count: int = 140) -> list[Candle]:
@@ -52,3 +53,31 @@ def test_insufficient_history_returns_no_candidates():
     result = TradingPathAdaptiveDiscoveryServiceV014.run(make_candles(50))
     assert result.candidates == ()
     assert result.evaluated_rows == 0
+
+
+def test_oos_changes_do_not_change_train_discovery():
+    baseline_history = make_candles(120)
+    changed_oos_history = list(baseline_history)
+
+    for index in range(96, 120):
+        timestamp = changed_oos_history[index].timestamp
+        close = 250.0 - (index - 96) * 3.0
+        changed_oos_history[index] = Candle(
+            timestamp=timestamp,
+            open=close + 0.5,
+            high=close + 1.0,
+            low=close - 1.0,
+            close=close,
+            volume=5000.0 + index,
+        )
+
+    train_a, validation_a, oos_a = TradingPathStatisticalIntegrityServiceV014.partition_candles(baseline_history)
+    train_b, validation_b, oos_b = TradingPathStatisticalIntegrityServiceV014.partition_candles(changed_oos_history)
+
+    assert train_a == train_b
+    assert validation_a == validation_b
+    assert oos_a != oos_b
+
+    discovery_a = TradingPathAdaptiveDiscoveryServiceV014.run(train_a)
+    discovery_b = TradingPathAdaptiveDiscoveryServiceV014.run(train_b)
+    assert discovery_a == discovery_b
