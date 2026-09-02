@@ -130,15 +130,15 @@ class TradingPathFeatureServiceV014:
 
             values["sma10_sma20_spread"] = None
             values["sma20_sma50_spread"] = None
-            sma10 = cls._mean(closes[-10:])
-            sma20 = cls._mean(closes[-20:])
-            sma50 = cls._mean(closes[-50:])
+            sma10 = cls._mean(closes[-10:]) if len(closes) >= 10 else None
+            sma20 = cls._mean(closes[-20:]) if len(closes) >= 20 else None
+            sma50 = cls._mean(closes[-50:]) if len(closes) >= 50 else None
             if sma10 and sma20 and sma20 > 0:
                 values["sma10_sma20_spread"] = sma10 / sma20 - 1.0
             if sma20 and sma50 and sma50 > 0:
                 values["sma20_sma50_spread"] = sma20 / sma50 - 1.0
 
-            slope20 = cls._slope(closes[-20:])
+            slope20 = cls._slope(closes[-20:]) if len(closes) >= 20 else None
             values["sma20_slope"] = slope20 / current_close if slope20 is not None and current_close > 0 else None
             values["body_ratio"] = (
                 abs(current_close - current_open) / (current_high - current_low)
