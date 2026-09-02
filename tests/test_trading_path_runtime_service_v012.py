@@ -92,3 +92,113 @@ def test_runtime_runs_canonical_path_stages(monkeypatch):
     assert len(result) == 1
     assert result[0].decision == "buy"
     assert len(observation_builds) == 1
+
+
+def test_runtime_sends_adaptive_candidate_through_same_downstream_pipeline(monkeypatch):
+    adaptive_candidate = SimpleNamespace(
+        rule=SimpleNamespace(
+            instrument_uid="SBER", ticker="SBER",
+            hypothesis="ADAPTIVE_RULE:regime=RANGE AND return_5 >= 0.0",
+            regime="RANGE", volatility_bucket="Adaptive", direction="Positive", horizon=5,
+        )
+    )
+    analysis = SimpleNamespace(
+        instrument_uid="SBER", ticker="SBER", strategy_family="Adaptive Discovery",
+        hypothesis=adaptive_candidate.rule.hypothesis, regime="RANGE", volatility_bucket="Adaptive",
+        direction="Positive", horizon=5, evidence=SimpleNamespace(),
+        validation=SimpleNamespace(promotion_status="validated"), market_context=SimpleNamespace(),
+        opportunity=SimpleNamespace(), current_state=SimpleNamespace(), decision=SimpleNamespace(),
+        status=SimpleNamespace(), rank=1,
+    )
+    calls = {"oos": [], "ev": [], "risk": [], "opportunity": [], "decision": []}
+
+    monkeypatch.setattr(
+        "edward.services.conditional_discovery_service_v086.ConditionalDiscoveryServiceV086.run",
+        lambda candles: SimpleNamespace(evidence=()),
+    )
+    monkeypatch.setattr(
+        "edward.services.trading_path_candidate_service_v014.TradingPathCandidateServiceV014.from_fixed",
+        lambda discovery, **kwargs: (),
+    )
+    monkeypatch.setattr(
+        "edward.services.trading_path_adaptive_discovery_service_v014.TradingPathAdaptiveDiscoveryServiceV014.run",
+        lambda candles: SimpleNamespace(candidates=(SimpleNamespace(),)),
+    )
+    monkeypatch.setattr(
+        "edward.services.trading_path_candidate_service_v014.TradingPathCandidateServiceV014.from_adaptive",
+        lambda discovery, **kwargs: (adaptive_candidate,),
+    )
+    monkeypatch.setattr(
+        "edward.services.trading_path_candidate_pruning_service_v014.TradingPathCandidatePruningServiceV014.prune",
+        lambda candidates, **kwargs: tuple(candidates),
+    )
+    monkeypatch.setattr(
+        TradingPathAnalysisBuilderV012, "build", lambda candidates, candles, **kwargs: (analysis,)
+    )
+    monkeypatch.setattr(
+        "edward.services.event_observation_v086.EventObservationBuilderV086.build",
+        lambda candles: (),
+    )
+    monkeypatch.setattr(
+        "edward.services.trading_path_adaptive_oos_service_v014.TradingPathAdaptiveOOSServiceV014.returns_in_range",
+        lambda candidate, candles, *, start, end: (1.0, 2.0),
+    )
+
+    def fake_oos(candidate, candles, **kwargs):
+        calls["oos"].append(kwargs)
+        return ()
+
+    def fake_ev(candidate, candles, **kwargs):
+        calls["ev"].append(kwargs)
+        return SimpleNamespace(expected_value_pct=1.0, edge_reliability_pct=80.0)
+
+    def fake_risk(analysis_arg, **kwargs):
+        calls["risk"].append(kwargs)
+        return SimpleNamespace(risk=SimpleNamespace(score=80.0), path_eligible=True)
+
+    def fake_opportunity(analysis_arg, **kwargs):
+        calls["opportunity"].append(kwargs)
+        return analysis_arg
+
+    def fake_decision(analysis_arg):
+        calls["decision"].append(analysis_arg)
+        return SimpleNamespace(current_state="entry_ready", decision="buy", status="promotable", reasons=())
+
+    monkeypatch.setattr(
+        "edward.services.trading_path_oos_validation_service_v012.TradingPathOOSValidationServiceV012.validate",
+        fake_oos,
+    )
+    monkeypatch.setattr(
+        "edward.services.trading_path_expected_value_service_v012.TradingPathExpectedValueServiceV012.calculate",
+        fake_ev,
+    )
+    monkeypatch.setattr(
+        "edward.services.trading_path_risk_service_v012.TradingPathRiskServiceV012.evaluate",
+        fake_risk,
+    )
+    monkeypatch.setattr(
+        "edward.services.trading_path_opportunity_builder_v012.TradingPathOpportunityBuilderV012.build",
+        fake_opportunity,
+    )
+    monkeypatch.setattr(
+        "edward.services.trading_path_decision_service_v012.TradingPathDecisionServiceV012.decide",
+        fake_decision,
+    )
+
+    result = AnalysisPathRuntimeServiceV012().analyze_paths(
+        instrument_uid="SBER", ticker="SBER", candles=_candles()
+    )
+
+    assert len(result) == 1
+    assert result[0].hypothesis.startswith("ADAPTIVE_RULE:")
+    assert len(calls["oos"]) == 1
+    assert len(calls["ev"]) == 1
+    assert len(calls["risk"]) == 1
+    assert len(calls["opportunity"]) == 1
+    assert len(calls["decision"]) == 1
+    assert calls["oos"][0]["evaluation_start"] == 96
+    assert calls["oos"][0]["evaluation_end"] == 120
+    assert calls["ev"][0]["evaluation_start"] == 96
+    assert calls["ev"][0]["evaluation_end"] == 120
+    assert calls["risk"][0]["oos_windows"] == ()
+    assert calls["opportunity"][0]["oos_windows"] == ()
