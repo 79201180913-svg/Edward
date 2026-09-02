@@ -3,6 +3,9 @@ from edward.services.trading_path_candidate_pruning_service_v014 import (
     CandidatePruningConfigV014,
     TradingPathCandidatePruningServiceV014,
 )
+from edward.services.trading_path_statistical_integrity_service_v014 import (
+    StatisticalIntegrityResultV014,
+)
 
 
 def candidate(
@@ -28,6 +31,25 @@ def fixed_candidate() -> TradingPathCandidate:
         rule=TradingPathRule("uid", "TEST", "BREAKOUT_EXPANSION", "TREND_UP", "Normal", "Positive", 5),
         evidence=TradingPathEvidence(8, 1.0, 0.8, 60.0, 0.2, 0.8, True),
         source_version="fixed:0.8.6",
+    )
+
+
+def integrity(*, valid: bool) -> StatisticalIntegrityResultV014:
+    return StatisticalIntegrityResultV014(
+        observations=20,
+        effective_sample_size=4.0,
+        overlap_ratio_pct=80.0,
+        mean_return_pct=1.0,
+        baseline_return_pct=0.0,
+        excess_return_pct=1.0,
+        standard_error_pct=0.2,
+        z_score=5.0,
+        p_value_one_sided=0.000001,
+        hypotheses_tested=100,
+        adjusted_p_value=0.0001 if valid else 0.1,
+        multiple_testing_valid=valid,
+        overlap_valid=valid,
+        statistically_valid=valid,
     )
 
 
@@ -79,3 +101,36 @@ def test_pruning_does_not_use_oos_persistence():
     )
     result = TradingPathCandidatePruningServiceV014.prune([item])
     assert result == (item,)
+
+
+def test_statistical_gate_drops_invalid_adaptive_candidates():
+    item = candidate("ADAPTIVE_RULE:return_20 >= 0.05")
+    result = TradingPathCandidatePruningServiceV014.prune(
+        [item],
+        config=CandidatePruningConfigV014(require_statistical_integrity=True),
+        statistical_integrity={item: integrity(valid=False)},
+    )
+    assert result == ()
+
+
+def test_statistical_gate_keeps_valid_adaptive_candidates():
+    item = candidate("ADAPTIVE_RULE:return_20 >= 0.05")
+    result = TradingPathCandidatePruningServiceV014.prune(
+        [item],
+        config=CandidatePruningConfigV014(require_statistical_integrity=True),
+        statistical_integrity={item: integrity(valid=True)},
+    )
+    assert result == (item,)
+
+
+def test_statistical_gate_requires_integrity_map_when_enabled():
+    item = candidate("ADAPTIVE_RULE:return_20 >= 0.05")
+    try:
+        TradingPathCandidatePruningServiceV014.prune(
+            [item],
+            config=CandidatePruningConfigV014(require_statistical_integrity=True),
+        )
+    except ValueError as exc:
+        assert "statistical_integrity is required" in str(exc)
+    else:
+        raise AssertionError("expected statistical integrity map requirement")
