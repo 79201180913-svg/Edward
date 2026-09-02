@@ -118,7 +118,7 @@ def test_runtime_propagates_statistical_integrity_snapshot_to_final_analysis(mon
     )
     monkeypatch.setattr(
         "edward.services.trading_path_decision_service_v012.TradingPathDecisionServiceV012.decide",
-        lambda analysis: SimpleNamespace(current_state="wait", decision="wait", reasons=()),
+        lambda analysis: SimpleNamespace(current_state="wait", decision="wait", status="validated", reasons=()),
     )
 
     result = AnalysisPathRuntimeServiceV012().analyze_paths(
