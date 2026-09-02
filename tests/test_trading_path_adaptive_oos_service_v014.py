@@ -67,6 +67,31 @@ def test_fixed_candidate_is_not_evaluated_by_adaptive_service():
 def test_adaptive_rule_does_not_derive_new_thresholds_from_evaluation_data():
     sample = candles()
     candidate = adaptive_candidate(sample)
+    baseline_matches = TradingPathAdaptiveOOSServiceV014.matching_indices(candidate, sample)
+
+    changed = list(sample)
+    for index in range(96, len(changed)):
+        candle = changed[index]
+        changed[index] = Candle(
+            timestamp=candle.timestamp,
+            open=candle.open,
+            high=candle.high,
+            low=candle.low,
+            close=candle.close * 3.0,
+            volume=candle.volume,
+        )
+
+    changed_matches = TradingPathAdaptiveOOSServiceV014.matching_indices(candidate, changed)
+
+    baseline_evaluation_matches = tuple(index for index in baseline_matches if 72 <= index < 96)
+    changed_evaluation_matches = tuple(index for index in changed_matches if 72 <= index < 96)
+
+    assert changed_evaluation_matches == baseline_evaluation_matches
+
+
+def test_adaptive_rule_returns_reflect_realized_evaluation_data():
+    sample = candles()
+    candidate = adaptive_candidate(sample)
     baseline = TradingPathAdaptiveOOSServiceV014.returns_in_range(candidate, sample, start=72, end=96)
 
     changed = list(sample)
@@ -82,4 +107,5 @@ def test_adaptive_rule_does_not_derive_new_thresholds_from_evaluation_data():
         )
     repeated = TradingPathAdaptiveOOSServiceV014.returns_in_range(candidate, changed, start=72, end=96)
 
-    assert repeated == baseline
+    assert repeated != baseline
+    assert len(repeated) == len(baseline)
