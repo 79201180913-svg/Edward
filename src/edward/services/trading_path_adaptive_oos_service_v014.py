@@ -15,12 +15,11 @@ ADAPTIVE_OOS_VERSION = "0.8.14"
 
 
 class TradingPathAdaptiveOOSServiceV014:
-    """Point-in-time execution of an adaptive rule on validation/OOS candles.
+    """Point-in-time execution of a TRAIN-derived adaptive rule.
 
-    The rule and thresholds are immutable inputs produced by TRAIN discovery. This
-    service never derives thresholds, baselines or conditions from the evaluation
-    partition. It only evaluates whether each candle satisfies the supplied rule and
-    calculates realized forward returns for the rule horizon.
+    The rule and thresholds are immutable inputs produced by TRAIN discovery.
+    Evaluation ranges only determine which already-known rule matches are scored;
+    forward returns are never allowed to cross the end of the evaluation range.
     """
 
     VERSION = ADAPTIVE_OOS_VERSION
@@ -50,9 +49,7 @@ class TradingPathAdaptiveOOSServiceV014:
         if not cls.is_adaptive(candidate):
             return ()
         ordered = tuple(sorted(candles, key=lambda item: item.timestamp))
-        conditions = tuple(
-            cls._parse_conditions(candidate.rule.hypothesis)
-        )
+        conditions = tuple(cls._parse_conditions(candidate.rule.hypothesis))
         if not conditions:
             return ()
         features = TradingPathFeatureServiceV014.build(ordered)
@@ -64,10 +61,7 @@ class TradingPathAdaptiveOOSServiceV014:
                 continue
             if RegimeEngine.classify(ordered[: index + 1]).regime != candidate.rule.regime:
                 continue
-            if all(
-                condition.matches(feature_map.get((condition.feature, index)))
-                for condition in conditions
-            ):
+            if all(condition.matches(feature_map.get((condition.feature, index))) for condition in conditions):
                 result.append(index)
         return tuple(result)
 
@@ -104,15 +98,16 @@ class TradingPathAdaptiveOOSServiceV014:
         start: int,
         end: int,
     ) -> tuple[float, ...]:
-        """Evaluate a supplied adaptive rule inside one isolated evaluation range."""
+        """Evaluate a supplied adaptive rule inside an isolated range."""
         ordered = tuple(sorted(candles, key=lambda item: item.timestamp))
-        if start < 0 or end < start:
+        if start < 0 or end < start or end > len(ordered):
             raise ValueError("invalid evaluation range")
         matches = cls.matching_indices(candidate, ordered)
         values = tuple(
             value
             for index in matches
             if start <= index < end
+            if index + candidate.rule.horizon < end
             if (value := cls._forward_return(ordered, index, candidate.rule.horizon)) is not None
         )
         logger.warning(
