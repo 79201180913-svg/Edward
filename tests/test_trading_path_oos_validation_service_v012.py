@@ -1,7 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
 from edward.domain import TradingPathCandidate, TradingPathEvidence, TradingPathRule
-from edward.services.analysis_service import Candle
 from edward.services.trading_path_oos_validation_service_v012 import TradingPathOOSValidationServiceV012
 
 
@@ -136,3 +135,19 @@ def test_fixed_candidate_does_not_use_adaptive_evaluator(monkeypatch):
     )
 
     assert len(result) == 2
+
+
+def test_explicit_evaluation_range_does_not_cross_range_end():
+    result = TradingPathOOSValidationServiceV012.validate(
+        _cand(),
+        _candles(100),
+        windows=1,
+        test_size=20,
+        evaluation_start=60,
+        evaluation_end=80,
+    )
+
+    assert len(result) == 1
+    assert result[0].start == 60
+    assert result[0].end == 80
+    assert all(index + _cand().rule.horizon < 80 for index in range(60, 78))
