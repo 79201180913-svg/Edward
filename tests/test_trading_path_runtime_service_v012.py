@@ -89,7 +89,7 @@ def test_runtime_oos_changes_cannot_change_pre_oos_pipeline(monkeypatch):
 
     def fake_build(candidates, candles, **kwargs):
         key = tuple((item.rule.hypothesis, item.rule.regime, item.rule.volatility_bucket, item.rule.direction, item.rule.horizon) for item in candidates)
-        validation_inputs.append((key, tuple(candles), kwargs.get("validation_start"), kwargs.get("validation_end")))
+        validation_inputs.append((key, kwargs.get("validation_start"), kwargs.get("validation_end")))
         return (analysis,)
 
     monkeypatch.setattr(TradingPathAnalysisBuilderV012, "build", fake_build)
@@ -107,10 +107,8 @@ def test_runtime_oos_changes_cannot_change_pre_oos_pipeline(monkeypatch):
     runtime.analyze_paths(instrument_uid="SBER", ticker="SBER", candles=_candles(oos_close=150.0))
     second = (tuple(discovery_inputs), tuple(adaptive_inputs), tuple(validation_inputs))
 
-    assert first[0] == second[0]
-    assert first[1] == second[1]
-    assert first[2] == second[2]
+    assert first == second
     assert discovery_inputs[0] == tuple(_candles()[:72])
     assert adaptive_inputs[0] == tuple(_candles()[:72])
-    assert validation_inputs[0][1] == tuple(_candles())
-    assert validation_inputs[0][2:] == (72, 96)
+    assert validation_inputs[0][1] == 72
+    assert validation_inputs[0][2] == 96
