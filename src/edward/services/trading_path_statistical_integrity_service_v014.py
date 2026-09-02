@@ -155,9 +155,20 @@ class TradingPathStatisticalIntegrityServiceV014:
         event_mean = mean(values)
         excess = event_mean - float(baseline_return_pct)
         dispersion = pstdev(values) if observations > 1 else 0.0
-        standard_error = dispersion / sqrt(effective_n) if dispersion > 0 else 0.0
-        z_score = excess / standard_error if standard_error > 0 else (float("inf") if excess > 0 else 0.0)
-        p_value = 0.0 if z_score == float("inf") else cls._one_sided_normal_pvalue(z_score)
+
+        # Zero variance is not treated as infinite statistical evidence. With no
+        # observed dispersion, a normal-approximation p-value is undefined, so the
+        # integrity gate conservatively rejects the result rather than manufacturing
+        # significance from deterministic/synthetic outcomes.
+        if dispersion > 0.0:
+            standard_error = dispersion / sqrt(effective_n)
+            z_score = excess / standard_error
+            p_value = cls._one_sided_normal_pvalue(z_score)
+        else:
+            standard_error = 0.0
+            z_score = 0.0
+            p_value = 1.0
+
         adjusted = cls._bonferroni(p_value, hypotheses_tested)
         overlap_valid = effective_n >= 8.0
         multiple_testing_valid = adjusted < cls.ALPHA
