@@ -64,7 +64,7 @@ class AnalysisPathRuntimeServiceV012:
         risk_profile: str = "balanced",
     ) -> tuple[TradingPathAnalysisV012, ...]:
         ordered = tuple(sorted(candles, key=lambda item: item.timestamp))
-        train, validation, oos = TradingPathStatisticalIntegrityServiceV014.partition_candles(ordered)
+        train, validation_candles, oos = TradingPathStatisticalIntegrityServiceV014.partition_candles(ordered)
         split = TradingPathStatisticalIntegrityServiceV014.temporal_split(ordered)
 
         from edward.services.conditional_discovery_service_v086 import ConditionalDiscoveryServiceV086
@@ -191,17 +191,17 @@ class AnalysisPathRuntimeServiceV012:
             )
             result = TradingPathDecisionServiceV012.decide(with_opportunity)
 
-            validation = with_opportunity.validation
+            final_validation = with_opportunity.validation
             integrity = statistical_integrity.get(candidate)
             if integrity is not None:
-                validation = TradingPathValidationSummary(
-                    wf_persistence_pct=validation.wf_persistence_pct,
-                    robustness_score=validation.robustness_score,
-                    positive_oos_windows_pct=validation.positive_oos_windows_pct,
+                final_validation = TradingPathValidationSummary(
+                    wf_persistence_pct=final_validation.wf_persistence_pct,
+                    robustness_score=final_validation.robustness_score,
+                    positive_oos_windows_pct=final_validation.positive_oos_windows_pct,
                     statistical_valid=integrity.statistically_valid,
                     overlap_valid=integrity.overlap_valid,
                     multiple_testing_valid=integrity.multiple_testing_valid,
-                    promotion_status=validation.promotion_status,
+                    promotion_status=final_validation.promotion_status,
                     effective_sample_size=integrity.effective_sample_size,
                     overlap_ratio_pct=integrity.overlap_ratio_pct,
                     standard_error_pct=integrity.standard_error_pct,
@@ -221,7 +221,7 @@ class AnalysisPathRuntimeServiceV012:
                 direction=with_opportunity.direction,
                 horizon=with_opportunity.horizon,
                 evidence=with_opportunity.evidence,
-                validation=validation,
+                validation=final_validation,
                 market_context=with_opportunity.market_context,
                 opportunity=with_opportunity.opportunity,
                 current_state=result.current_state,
@@ -241,7 +241,7 @@ class AnalysisPathRuntimeServiceV012:
 
         logger.warning(
             "[V014 PATH RUNTIME] ticker=%s candles=%d train=%d validation=%d oos=%d discovered=%d selected=%d final=%d buy=%d wait=%d pass=%d",
-            ticker, len(ordered), len(train), len(validation), len(oos), len(combined), len(selected), len(finalized),
+            ticker, len(ordered), len(train), len(validation_candles), len(oos), len(combined), len(selected), len(finalized),
             sum(_value(item.decision) == "buy" for item in finalized),
             sum(_value(item.decision) == "wait" for item in finalized),
             sum(_value(item.decision) == "pass" for item in finalized),
