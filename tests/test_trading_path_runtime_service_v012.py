@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+from edward.domain import TradingPathCandidate, TradingPathEvidence, TradingPathRule
 from edward.services.analysis_service import Candle
 from edward.services.analysis_path_runtime_service_v012 import AnalysisPathRuntimeServiceV012
 from edward.services.trading_path_analysis_builder_v012 import TradingPathAnalysisBuilderV012
@@ -95,12 +96,22 @@ def test_runtime_runs_canonical_path_stages(monkeypatch):
 
 
 def test_runtime_sends_adaptive_candidate_through_same_downstream_pipeline(monkeypatch):
-    adaptive_candidate = SimpleNamespace(
-        rule=SimpleNamespace(
+    adaptive_candidate = TradingPathCandidate(
+        rule=TradingPathRule(
             instrument_uid="SBER", ticker="SBER",
             hypothesis="ADAPTIVE_RULE:regime=RANGE AND return_5 >= 0.0",
             regime="RANGE", volatility_bucket="Adaptive", direction="Positive", horizon=5,
-        )
+        ),
+        evidence=TradingPathEvidence(
+            observations=20,
+            mean_forward_return_pct=1.0,
+            median_forward_return_pct=1.0,
+            win_rate_pct=60.0,
+            baseline_mean_return_pct=0.0,
+            excess_return_pct=1.0,
+            sufficient_sample=True,
+        ),
+        source_version="0.8.14",
     )
     analysis = SimpleNamespace(
         instrument_uid="SBER", ticker="SBER", strategy_family="Adaptive Discovery",
