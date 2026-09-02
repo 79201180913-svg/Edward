@@ -35,6 +35,13 @@ class TradingPathValidationSummary:
     overlap_valid: bool | None = None
     multiple_testing_valid: bool | None = None
     promotion_status: str | None = None
+    effective_sample_size: float | None = None
+    overlap_ratio_pct: float | None = None
+    standard_error_pct: float | None = None
+    z_score: float | None = None
+    p_value_one_sided: float | None = None
+    adjusted_p_value: float | None = None
+    hypotheses_tested: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
