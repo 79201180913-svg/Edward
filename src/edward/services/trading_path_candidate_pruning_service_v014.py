@@ -3,8 +3,12 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from typing import Mapping
 
 from edward.domain import TradingPathCandidate
+from edward.services.trading_path_statistical_integrity_service_v014 import (
+    StatisticalIntegrityResultV014,
+)
 
 logger = logging.getLogger(__name__)
 CANDIDATE_PRUNING_VERSION = "0.8.14"
@@ -18,6 +22,7 @@ class CandidatePruningConfigV014:
     min_adaptive_excess_return_pct: float = 0.0
     max_adaptive_conditions: int = 3
     max_adaptive_per_context: int = 5
+    require_statistical_integrity: bool = True
 
 
 class TradingPathCandidatePruningServiceV014:
@@ -25,8 +30,9 @@ class TradingPathCandidatePruningServiceV014:
 
     Fixed candidates are never removed here. Adaptive pruning uses discovery evidence
     only; OOS returns, walk-forward persistence and quality-gate outputs are not
-    consulted. The service is therefore safe to run inside a TRAIN-only discovery
-    stage before nested OOS validation.
+    consulted. When statistical integrity results are supplied, every adaptive
+    candidate must also pass the shared TRAIN/VALIDATION family-wise statistical
+    control before it can continue downstream.
     """
 
     ADAPTIVE_PREFIX = "ADAPTIVE_RULE:"
@@ -70,6 +76,7 @@ class TradingPathCandidatePruningServiceV014:
         candidates: tuple[TradingPathCandidate, ...] | list[TradingPathCandidate],
         *,
         config: CandidatePruningConfigV014 | None = None,
+        statistical_integrity: Mapping[TradingPathCandidate, StatisticalIntegrityResultV014] | None = None,
     ) -> tuple[TradingPathCandidate, ...]:
         cfg = config or CandidatePruningConfigV014()
         if cfg.min_adaptive_observations < 1:
@@ -78,6 +85,8 @@ class TradingPathCandidatePruningServiceV014:
             raise ValueError("max_adaptive_conditions must be >= 1")
         if cfg.max_adaptive_per_context < 1:
             raise ValueError("max_adaptive_per_context must be >= 1")
+        if cfg.require_statistical_integrity and statistical_integrity is None:
+            raise ValueError("statistical_integrity is required when require_statistical_integrity=True")
 
         fixed = [candidate for candidate in candidates if not cls._is_adaptive(candidate)]
         adaptive = [candidate for candidate in candidates if cls._is_adaptive(candidate)]
@@ -87,6 +96,7 @@ class TradingPathCandidatePruningServiceV014:
         dropped_excess = 0
         dropped_complex = 0
         dropped_duplicate = 0
+        dropped_statistical = 0
 
         seen: set[tuple[str, str, int, str]] = set()
         eligible: list[TradingPathCandidate] = []
@@ -106,6 +116,11 @@ class TradingPathCandidatePruningServiceV014:
                 dropped_duplicate += 1
                 continue
             seen.add(key)
+            if cfg.require_statistical_integrity:
+                integrity = statistical_integrity.get(candidate)
+                if integrity is None or not integrity.statistically_valid:
+                    dropped_statistical += 1
+                    continue
             eligible.append(candidate)
 
         by_context: dict[tuple[str, str, int], list[TradingPathCandidate]] = {}
@@ -122,10 +137,10 @@ class TradingPathCandidatePruningServiceV014:
         logger.warning(
             "[V014 CANDIDATE PRUNING] input=%d fixed=%d adaptive=%d retained=%d "
             "dropped_insufficient=%d dropped_excess=%d dropped_complex=%d "
-            "dropped_duplicate=%d version=%s train_only=True",
+            "dropped_duplicate=%d dropped_statistical=%d statistical_gate=%s version=%s train_only=True",
             len(candidates), len(fixed), len(adaptive), len(result),
             dropped_insufficient, dropped_excess, dropped_complex, dropped_duplicate,
-            CANDIDATE_PRUNING_VERSION,
+            dropped_statistical, cfg.require_statistical_integrity, CANDIDATE_PRUNING_VERSION,
         )
         return result
 
