@@ -8,6 +8,7 @@ from edward.services.trading_path_adaptive_discovery_service_v014 import Adaptiv
 
 logger = logging.getLogger(__name__)
 TRADING_PATH_CANDIDATE_SERVICE_VERSION = "0.8.14"
+ADAPTIVE_DISCOVERY_VERSION = "0.8.14"
 
 
 class TradingPathCandidateServiceV014:
@@ -47,7 +48,7 @@ class TradingPathCandidateServiceV014:
                 excess_return_pct=cell.excess_return_pct,
                 sufficient_sample=cell.sufficient_sample,
             ),
-            source_version=cell.hypothesis,
+            source_version="fixed:0.8.6",
         )
 
     @classmethod
@@ -69,19 +70,13 @@ class TradingPathCandidateServiceV014:
                 win_rate_pct=item.win_rate_pct,
                 baseline_mean_return_pct=item.baseline_mean_return_pct,
                 excess_return_pct=item.excess_return_pct,
-                sufficient_sample=item.observations > 0,
+                sufficient_sample=item.observations >= 12,
             ),
             source_version=ADAPTIVE_DISCOVERY_VERSION,
         )
 
     @classmethod
-    def from_fixed(
-        cls,
-        result: ConditionalDiscoveryResult,
-        *,
-        instrument_uid: str,
-        ticker: str,
-    ) -> tuple[TradingPathCandidate, ...]:
+    def from_fixed(cls, result: ConditionalDiscoveryResult, *, instrument_uid: str, ticker: str) -> tuple[TradingPathCandidate, ...]:
         candidates = tuple(
             cls._fixed_candidate(cell, instrument_uid=instrument_uid, ticker=ticker)
             for evidence in result.evidence
@@ -95,13 +90,7 @@ class TradingPathCandidateServiceV014:
         return candidates
 
     @classmethod
-    def from_adaptive(
-        cls,
-        result: AdaptiveDiscoveryResultV014,
-        *,
-        instrument_uid: str,
-        ticker: str,
-    ) -> tuple[TradingPathCandidate, ...]:
+    def from_adaptive(cls, result: AdaptiveDiscoveryResultV014, *, instrument_uid: str, ticker: str) -> tuple[TradingPathCandidate, ...]:
         candidates = tuple(
             cls._adaptive_candidate(item, instrument_uid=instrument_uid, ticker=ticker)
             for item in result.candidates
@@ -127,7 +116,5 @@ class TradingPathCandidateServiceV014:
         )
         return combined
 
-
-ADAPTIVE_DISCOVERY_VERSION = "0.8.14"
 
 __all__ = ["ADAPTIVE_DISCOVERY_VERSION", "TRADING_PATH_CANDIDATE_SERVICE_VERSION", "TradingPathCandidateServiceV014"]
