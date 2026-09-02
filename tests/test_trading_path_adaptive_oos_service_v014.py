@@ -95,7 +95,7 @@ def test_adaptive_rule_returns_reflect_realized_evaluation_data():
     baseline_matches = tuple(
         index
         for index in TradingPathAdaptiveOOSServiceV014.matching_indices(candidate, sample)
-        if 72 <= index < 96 and index + candidate.rule.horizon >= 96
+        if 72 <= index < 96 and index + candidate.rule.horizon < 96
     )
     assert baseline_matches
 
