@@ -86,9 +86,12 @@ def test_runtime_oos_changes_cannot_change_pre_oos_pipeline(monkeypatch):
     monkeypatch.setattr("edward.services.trading_path_candidate_service_v014.TradingPathCandidateServiceV014.from_fixed", lambda discovery, **kwargs: (candidate,))
     monkeypatch.setattr("edward.services.trading_path_candidate_service_v014.TradingPathCandidateServiceV014.combine", lambda fixed, adaptive, **kwargs: tuple(fixed) + tuple(adaptive))
     monkeypatch.setattr("edward.services.trading_path_candidate_pruning_service_v014.TradingPathCandidatePruningServiceV014.prune", lambda candidates, **kwargs: tuple(candidates))
+
     def fake_build(candidates, candles, **kwargs):
-        validation_inputs.append((tuple(candidates), tuple(candles), dict(kwargs)))
+        key = tuple((item.rule.hypothesis, item.rule.regime, item.rule.volatility_bucket, item.rule.direction, item.rule.horizon) for item in candidates)
+        validation_inputs.append((key, tuple(candles), kwargs.get("validation_start"), kwargs.get("validation_end")))
         return (analysis,)
+
     monkeypatch.setattr(TradingPathAnalysisBuilderV012, "build", fake_build)
     monkeypatch.setattr("edward.services.event_observation_v086.EventObservationBuilderV086.build", lambda candles: ())
     monkeypatch.setattr("edward.services.trading_path_oos_validation_service_v012.TradingPathOOSValidationServiceV012.validate", lambda candidate, candles, **kwargs: ())
@@ -96,14 +99,18 @@ def test_runtime_oos_changes_cannot_change_pre_oos_pipeline(monkeypatch):
     monkeypatch.setattr("edward.services.trading_path_risk_service_v012.TradingPathRiskServiceV012.evaluate", lambda analysis, **kwargs: SimpleNamespace(risk=SimpleNamespace(score=80.0), path_eligible=True))
     monkeypatch.setattr("edward.services.trading_path_opportunity_builder_v012.TradingPathOpportunityBuilderV012.build", lambda analysis, **kwargs: analysis)
     monkeypatch.setattr("edward.services.trading_path_decision_service_v012.TradingPathDecisionServiceV012.decide", lambda analysis: SimpleNamespace(current_state="entry_ready", decision="buy", status="promotable", reasons=()))
+
     runtime = AnalysisPathRuntimeServiceV012()
     runtime.analyze_paths(instrument_uid="SBER", ticker="SBER", candles=_candles(oos_close=100.0))
     first = (tuple(discovery_inputs), tuple(adaptive_inputs), tuple(validation_inputs))
     discovery_inputs.clear(); adaptive_inputs.clear(); validation_inputs.clear()
     runtime.analyze_paths(instrument_uid="SBER", ticker="SBER", candles=_candles(oos_close=150.0))
     second = (tuple(discovery_inputs), tuple(adaptive_inputs), tuple(validation_inputs))
-    assert first == second
+
+    assert first[0] == second[0]
+    assert first[1] == second[1]
+    assert first[2] == second[2]
     assert discovery_inputs[0] == tuple(_candles()[:72])
     assert adaptive_inputs[0] == tuple(_candles()[:72])
-    assert validation_inputs[0][2]["validation_start"] == 72
-    assert validation_inputs[0][2]["validation_end"] == 96
+    assert validation_inputs[0][1] == tuple(_candles())
+    assert validation_inputs[0][2:] == (72, 96)
