@@ -20,6 +20,7 @@ from .models import (
     Position,
 )
 from .strategy_family import (
+    ADAPTIVE_DISCOVERY_FAMILY,
     STRATEGY_FAMILY_BY_HYPOTHESIS,
     StrategyFamily,
     strategy_family_for_hypothesis,
@@ -45,7 +46,6 @@ __all__ = [
     "ExecutionEvent",
     "ExecutionEventType",
     "ExecutionJournal",
-    "ExecutionJournalEntry",
     "ExecutionMode",
     "ExecutionRequest",
     "ExecutionResult",
@@ -58,6 +58,7 @@ __all__ = [
     "OrderStatus",
     "OrderType",
     "Position",
+    "ADAPTIVE_DISCOVERY_FAMILY",
     "STRATEGY_FAMILY_BY_HYPOTHESIS",
     "StrategyFamily",
     "strategy_family_for_hypothesis",
