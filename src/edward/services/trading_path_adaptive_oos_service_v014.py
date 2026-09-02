@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections import OrderedDict
 from statistics import mean
 from typing import Sequence
 
@@ -20,9 +21,15 @@ class TradingPathAdaptiveOOSServiceV014:
     The rule and thresholds are immutable inputs produced by TRAIN discovery.
     Evaluation ranges only determine which already-known rule matches are scored;
     forward returns are never allowed to cross the end of the evaluation range.
+
+    The point-in-time feature/regime context is cached by candle fingerprint so
+    evaluating many adaptive candidates does not rebuild the same context for
+    every candidate or evaluation window.
     """
 
     VERSION = ADAPTIVE_OOS_VERSION
+    _CONTEXT_CACHE_MAXSIZE = 8
+    _CONTEXT_CACHE: OrderedDict[tuple[tuple[object, float, float, float, float, float], ...], tuple[tuple[Candle, ...], dict[tuple[str, int], float], tuple[str, ...]]] = OrderedDict()
 
     @staticmethod
     def is_adaptive(candidate: TradingPathCandidate) -> bool:
@@ -40,6 +47,49 @@ class TradingPathAdaptiveOOSServiceV014:
         return (end / start - 1.0) * 100.0
 
     @classmethod
+    def _context_key(cls, candles: Sequence[Candle]) -> tuple[tuple[object, float, float, float, float, float], ...]:
+        return tuple(
+            (
+                item.timestamp,
+                float(item.open),
+                float(item.high),
+                float(item.low),
+                float(item.close),
+                float(item.volume),
+            )
+            for item in candles
+        )
+
+    @classmethod
+    def _prepared_context(
+        cls,
+        candles: Sequence[Candle],
+    ) -> tuple[tuple[Candle, ...], dict[tuple[str, int], float], tuple[str, ...]]:
+        ordered = tuple(sorted(candles, key=lambda item: item.timestamp))
+        key = cls._context_key(ordered)
+        cached = cls._CONTEXT_CACHE.get(key)
+        if cached is not None:
+            cls._CONTEXT_CACHE.move_to_end(key)
+            return cached
+
+        features = TradingPathFeatureServiceV014.build(ordered)
+        feature_map = {(item.name, item.index): item.value for item in features}
+        regimes = tuple(
+            RegimeEngine.classify(ordered[: index + 1]).regime
+            for index in range(len(ordered))
+        )
+        context = (ordered, feature_map, regimes)
+        cls._CONTEXT_CACHE[key] = context
+        cls._CONTEXT_CACHE.move_to_end(key)
+        while len(cls._CONTEXT_CACHE) > cls._CONTEXT_CACHE_MAXSIZE:
+            cls._CONTEXT_CACHE.popitem(last=False)
+        logger.warning(
+            "[V014 ADAPTIVE OOS CONTEXT] candles=%d features=%d cached=True",
+            len(ordered), len(features),
+        )
+        return context
+
+    @classmethod
     def matching_indices(
         cls,
         candidate: TradingPathCandidate,
@@ -48,18 +98,16 @@ class TradingPathAdaptiveOOSServiceV014:
         """Return point-in-time indices satisfying the candidate's adaptive rule."""
         if not cls.is_adaptive(candidate):
             return ()
-        ordered = tuple(sorted(candles, key=lambda item: item.timestamp))
+        ordered, feature_map, regimes = cls._prepared_context(candles)
         conditions = tuple(cls._parse_conditions(candidate.rule.hypothesis))
         if not conditions:
             return ()
-        features = TradingPathFeatureServiceV014.build(ordered)
-        feature_map = {(item.name, item.index): item.value for item in features}
         result: list[int] = []
         horizon = candidate.rule.horizon
         for index in range(len(ordered)):
             if index + horizon >= len(ordered):
                 continue
-            if RegimeEngine.classify(ordered[: index + 1]).regime != candidate.rule.regime:
+            if regimes[index] != candidate.rule.regime:
                 continue
             if all(condition.matches(feature_map.get((condition.feature, index))) for condition in conditions):
                 result.append(index)
@@ -99,7 +147,7 @@ class TradingPathAdaptiveOOSServiceV014:
         end: int,
     ) -> tuple[float, ...]:
         """Evaluate a supplied adaptive rule inside an isolated range."""
-        ordered = tuple(sorted(candles, key=lambda item: item.timestamp))
+        ordered, _, _ = cls._prepared_context(candles)
         if start < 0 or end < start or end > len(ordered):
             raise ValueError("invalid evaluation range")
         matches = cls.matching_indices(candidate, ordered)
