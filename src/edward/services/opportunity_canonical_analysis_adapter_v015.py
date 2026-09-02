@@ -5,6 +5,7 @@ from typing import Any, Iterable
 
 from edward.domain import TradingPathAnalysisV012
 from edward.services.analysis_service import StrategyResult
+from edward.services.analysis_path_runtime_service_v012 import AnalysisPathRuntimeServiceV012
 
 
 OPPORTUNITY_CANONICAL_ADAPTER_VERSION = "0.8.15"
@@ -14,11 +15,36 @@ OPPORTUNITY_CANONICAL_ADAPTER_VERSION = "0.8.15"
 class CanonicalOpportunityAnalysisV015:
     """Opportunity-facing view over canonical v0.8.14 path analyses.
 
-    The adapter does not calculate analysis. It only exposes the canonical path
-    result in the minimum shape currently consumed by Opportunity Search.
+    The adapter owns no analysis logic. It delegates calculation to the
+    canonical v0.8.14 path runtime and exposes the minimum shape consumed by
+    Opportunity Search.
     """
 
     analyses: tuple[TradingPathAnalysisV012, ...]
+
+    @classmethod
+    def analyze(
+        cls,
+        *,
+        instrument_uid: str,
+        ticker: str,
+        candles: Iterable[Any],
+        profile: str = "medium_term",
+        instrument: Any | None = None,
+    ) -> "CanonicalOpportunityAnalysisV015":
+        del instrument
+        analyses = AnalysisPathRuntimeServiceV012().analyze_paths(
+            instrument_uid=instrument_uid,
+            ticker=ticker,
+            candles=candles,
+            profile=profile,
+        )
+        return cls.from_analyses(analyses)
+
+    @property
+    def pipeline_result(self) -> TradingPathAnalysisV012 | None:
+        """Compatibility projection for the existing Opportunity engine."""
+        return self.best_analysis
 
     @property
     def market_regime(self) -> str | None:
