@@ -61,7 +61,10 @@ class TradingPathOOSValidationServiceV012:
             horizon = candidate.rule.horizon
             for item in path_events:
                 finish = item.index + horizon
-                if finish >= len(candles):
+                # The realized target must stay inside the same evaluation
+                # window. Otherwise VALIDATION/OOS can read into the next
+                # temporal partition.
+                if finish >= end or finish >= len(candles):
                     continue
                 start_close = float(candles[item.index].close)
                 finish_close = float(candles[finish].close)
