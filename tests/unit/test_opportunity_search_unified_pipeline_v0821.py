@@ -1,14 +1,12 @@
-from edward.services.opportunity_analysis_pipeline_v0821 import (
-    OpportunityAnalysisPipelineV0821,
-    UnifiedOpportunityEngineV0821,
-)
+from edward.services.opportunity_analysis_pipeline_v0821 import UnifiedOpportunityEngineV0821
+from edward.services.opportunity_canonical_analysis_adapter_v015 import CanonicalOpportunityAnalysisV015
 from edward.services.opportunity_search_service import OpportunitySearchService
 
 
-def test_opportunity_search_defaults_to_canonical_v0821_pipeline():
+def test_opportunity_search_defaults_to_canonical_v015_analysis():
     service = OpportunitySearchService(object())
 
-    assert isinstance(service.analysis, OpportunityAnalysisPipelineV0821)
+    assert service.analysis is CanonicalOpportunityAnalysisV015
     assert isinstance(service.opportunity_engine, UnifiedOpportunityEngineV0821)
 
 
