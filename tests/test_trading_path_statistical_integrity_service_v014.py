@@ -58,10 +58,12 @@ def test_overlap_ratio_reflects_horizon_overlap():
     assert service.overlap_ratio_pct(100, horizon=20) == pytest.approx(95.0)
 
 
-def test_multiple_testing_adjustment_rejects_false_positive_after_correction():
+def test_multiple_testing_adjustment_rejects_weak_effect_after_correction():
     service = TradingPathStatisticalIntegrityServiceV014
+    # Non-degenerate weak effect: before correction it is not compelling, and
+    # testing 1000 hypotheses must not turn it into a valid discovery.
     result = service.evaluate(
-        [0.1] * 100,
+        [0.1, -0.08] * 50,
         baseline_return_pct=0.0,
         horizon=5,
         hypotheses_tested=1000,
