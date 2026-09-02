@@ -11,8 +11,8 @@ from edward.domain import (
 from edward.services.analysis_path_runtime_service_v012 import AnalysisPathRuntimeServiceV012
 from edward.services.opportunity_analysis_pipeline_v0821 import UnifiedOpportunityEngineV0821
 from edward.services.opportunity_canonical_analysis_adapter_v015 import CanonicalOpportunityAnalysisV015
+from edward.services.opportunity_search_service import OpportunitySearchResult, OpportunitySearchService
 from edward.services.opportunity_engine import OpportunityEngine as LegacyOpportunityEngine
-from edward.services.opportunity_search_service import OpportunitySearchService
 
 
 def _analysis(*, decision: TradingPathDecision, hypothesis: str, source: str, rank: int = 1, statistical_valid: bool | None = True):
@@ -154,3 +154,46 @@ def test_empty_canonical_result_does_not_create_opportunity():
     assert view.pipeline_result is None
     assert view.opportunity is None
     assert view.strategies == ()
+
+
+def test_market_scope_scans_all_trade_available_instruments_and_ranks_results(monkeypatch):
+    service = OpportunitySearchService(client=object())
+    service._active_account = lambda: None
+    service.catalog = SimpleNamespace(
+        list=lambda kind, trade_available_only: [
+            SimpleNamespace(uid="A", ticker="AAA", buy_available=True, trading_available=True),
+            SimpleNamespace(uid="B", ticker="BBB", buy_available=True, trading_available=True),
+            SimpleNamespace(uid="C", ticker="CCC", buy_available=False, trading_available=True),
+            SimpleNamespace(uid="D", ticker="DDD", buy_available=True, trading_available=False),
+        ]
+    )
+
+    evaluated: list[str] = []
+
+    def fake_evaluate_instrument(*, instrument, **kwargs):
+        evaluated.append(instrument.uid)
+        score = {"A": 55.0, "B": 85.0}[instrument.uid]
+        decision = "BUY" if instrument.uid == "B" else "WAIT"
+        return OpportunitySearchResult(
+            instrument_uid=instrument.uid,
+            ticker=instrument.ticker,
+            name=instrument.ticker,
+            price=100.0,
+            market_regime="TREND",
+            strategy_name="Breakout",
+            strategy_score=score,
+            opportunity_score=score,
+            decision=decision,
+            status="VALID",
+            reason="TEST",
+            explanation="test",
+            quantity=0.0,
+        )
+
+    monkeypatch.setattr(service, "_evaluate_instrument", fake_evaluate_instrument)
+
+    results = service.scan(scope="MARKET", instrument_kind="SHARE")
+
+    assert evaluated == ["A", "B"]
+    assert [item.instrument_uid for item in results] == ["B", "A"]
+    assert [item.decision for item in results] == ["BUY", "WAIT"]
