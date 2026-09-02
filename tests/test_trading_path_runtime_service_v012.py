@@ -30,9 +30,9 @@ def test_runtime_runs_canonical_path_stages(monkeypatch):
     analysis = SimpleNamespace(
         instrument_uid="SBER", ticker="SBER", strategy_family="H1", hypothesis="H1",
         regime="RANGE", volatility_bucket="Normal", direction="Positive", horizon=5,
-        evidence=SimpleNamespace(), validation=SimpleNamespace(), market_context=SimpleNamespace(),
-        opportunity=SimpleNamespace(), current_state=SimpleNamespace(), decision=SimpleNamespace(),
-        status=SimpleNamespace(), rank=1,
+        evidence=SimpleNamespace(), validation=SimpleNamespace(promotion_status="validated"),
+        market_context=SimpleNamespace(), opportunity=SimpleNamespace(),
+        current_state=SimpleNamespace(), decision=SimpleNamespace(), status=SimpleNamespace(), rank=1,
     )
     observations = (SimpleNamespace(index=90, hypothesis="H1", regime="RANGE", volatility_bucket="Normal", direction="Positive"),)
     observation_builds = []
@@ -45,7 +45,21 @@ def test_runtime_runs_canonical_path_stages(monkeypatch):
         "edward.services.trading_path_candidate_service_v088.TradingPathCandidateServiceV088.promote",
         lambda result, **kwargs: (candidate,),
     )
-    monkeypatch.setattr(TradingPathAnalysisBuilderV012, "build", lambda candidates, candles: (analysis,))
+    monkeypatch.setattr(
+        "edward.services.trading_path_candidate_service_v014.TradingPathCandidateServiceV014.from_fixed",
+        lambda discovery, **kwargs: (candidate,),
+    )
+    monkeypatch.setattr(
+        "edward.services.trading_path_candidate_service_v014.TradingPathCandidateServiceV014.combine",
+        lambda fixed, adaptive, **kwargs: (candidate,),
+    )
+    monkeypatch.setattr(
+        "edward.services.trading_path_candidate_pruning_service_v014.TradingPathCandidatePruningServiceV014.prune",
+        lambda candidates, **kwargs: tuple(candidates),
+    )
+    monkeypatch.setattr(
+        TradingPathAnalysisBuilderV012, "build", lambda candidates, candles, **kwargs: (analysis,)
+    )
     monkeypatch.setattr(
         "edward.services.event_observation_v086.EventObservationBuilderV086.build",
         lambda candles: observation_builds.append(tuple(candles)) or observations,
