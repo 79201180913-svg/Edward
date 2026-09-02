@@ -74,8 +74,8 @@ def test_return_5_uses_only_current_and_prior_candles():
 def test_window_features_are_none_until_enough_history_exists():
     features = TradingPathFeatureServiceV014.build(make_candles())
 
-    assert feature(features, "return_20", 20).value is None
-    assert feature(features, "return_20", 21).value is not None
+    assert feature(features, "return_20", 19).value is None
+    assert feature(features, "return_20", 20).value is not None
     assert feature(features, "sma20_sma50_spread", 20).value is None
     assert feature(features, "sma20_sma50_spread", 50).value is not None
 
