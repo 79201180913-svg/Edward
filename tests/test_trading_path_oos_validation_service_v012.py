@@ -28,6 +28,30 @@ def _cand() -> TradingPathCandidate:
     )
 
 
+def _adaptive_cand() -> TradingPathCandidate:
+    return TradingPathCandidate(
+        rule=TradingPathRule(
+            instrument_uid="uid",
+            ticker="SBER",
+            hypothesis="ADAPTIVE_RULE:regime=RANGE AND return_5 >= 0.0",
+            regime="RANGE",
+            volatility_bucket="Adaptive",
+            direction="Positive",
+            horizon=2,
+        ),
+        evidence=TradingPathEvidence(
+            observations=20,
+            mean_forward_return_pct=1.0,
+            median_forward_return_pct=1.0,
+            win_rate_pct=60.0,
+            baseline_mean_return_pct=0.0,
+            excess_return_pct=1.0,
+            sufficient_sample=True,
+        ),
+        source_version="0.8.14",
+    )
+
+
 def _candles(n=80):
     return [
         Candle(
@@ -72,3 +96,43 @@ def test_oos_validation_returns_empty_when_not_enough_data():
     result = TradingPathOOSValidationServiceV012.validate(_cand(), _candles(20), windows=4, test_size=10)
 
     assert result == ()
+
+
+def test_adaptive_candidate_uses_same_oos_window_contract(monkeypatch):
+    calls = []
+
+    def fake_returns_in_range(candidate, candles, *, start, end):
+        calls.append((candidate.rule.hypothesis, start, end))
+        return (1.0, 2.0)
+
+    monkeypatch.setattr(
+        "edward.services.trading_path_adaptive_oos_service_v014.TradingPathAdaptiveOOSServiceV014.returns_in_range",
+        staticmethod(fake_returns_in_range),
+    )
+
+    result = TradingPathOOSValidationServiceV012.validate(
+        _adaptive_cand(), _candles(), windows=2, test_size=10
+    )
+
+    assert len(result) == 2
+    assert [item.observations for item in result] == [2, 2]
+    assert [item.index for item in result] == [1, 2]
+    assert [item.start for item in result] == [60, 70]
+    assert [item.end for item in result] == [70, 80]
+    assert len(calls) == 2
+
+
+def test_fixed_candidate_does_not_use_adaptive_evaluator(monkeypatch):
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("adaptive evaluator must not be used for fixed candidates")
+
+    monkeypatch.setattr(
+        "edward.services.trading_path_adaptive_oos_service_v014.TradingPathAdaptiveOOSServiceV014.returns_in_range",
+        staticmethod(fail_if_called),
+    )
+
+    result = TradingPathOOSValidationServiceV012.validate(
+        _cand(), _candles(), windows=2, test_size=10
+    )
+
+    assert len(result) == 2
