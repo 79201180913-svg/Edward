@@ -14,36 +14,58 @@ logger = logging.getLogger(__name__)
 
 
 class TradingPathExpectedValueServiceV012:
-    """Calculate EV from realized outcomes of one path on OOS windows."""
+    """Calculate EV from realized outcomes on an explicit evaluation range."""
 
     @classmethod
-    def outcomes(cls, candidate: TradingPathCandidate, candles: Sequence[Candle], *, windows: int = TradingPathOOSValidationServiceV012.DEFAULT_WINDOWS, test_size: int = TradingPathOOSValidationServiceV012.DEFAULT_TEST_SIZE, observations=None) -> tuple[float, ...]:
+    def outcomes(
+        cls,
+        candidate: TradingPathCandidate,
+        candles: Sequence[Candle],
+        *,
+        windows: int = TradingPathOOSValidationServiceV012.DEFAULT_WINDOWS,
+        test_size: int = TradingPathOOSValidationServiceV012.DEFAULT_TEST_SIZE,
+        observations=None,
+        evaluation_start: int | None = None,
+        evaluation_end: int | None = None,
+    ) -> tuple[float, ...]:
         ordered = tuple(sorted(candles, key=lambda item: item.timestamp))
-        required = windows * test_size
-        if windows < 1 or test_size < 1 or len(ordered) < required:
+        if windows < 1 or test_size < 1:
             return ()
+
+        if evaluation_start is not None or evaluation_end is not None:
+            start = 0 if evaluation_start is None else evaluation_start
+            end = len(ordered) if evaluation_end is None else evaluation_end
+            if start < 0 or end < start or end > len(ordered):
+                return ()
+            required = windows * test_size
+            if end - start < required:
+                return ()
+            base = end - required
+        else:
+            required = windows * test_size
+            if len(ordered) < required:
+                return ()
+            base = len(ordered) - required
 
         if TradingPathAdaptiveOOSServiceV014.is_adaptive(candidate):
             values: list[float] = []
-            base = len(ordered) - required
             for offset in range(windows):
-                start = base + offset * test_size
-                end = base + (offset + 1) * test_size
+                window_start = base + offset * test_size
+                window_end = base + (offset + 1) * test_size
                 values.extend(
                     TradingPathAdaptiveOOSServiceV014.returns_in_range(
-                        candidate, ordered, start=start, end=end
+                        candidate, ordered, start=window_start, end=window_end
                     )
                 )
             return tuple(values)
 
         canonical_observations = observations if observations is not None else EventObservationBuilderV086.build(ordered)
-        base = len(ordered) - required
         values: list[float] = []
         for offset in range(windows):
-            start = base + offset * test_size
-            end = base + (offset + 1) * test_size
+            window_start = base + offset * test_size
+            window_end = base + (offset + 1) * test_size
             for item in canonical_observations:
-                if not (start <= item.index < end):
+                if not (window_start <= item.index < window_end):
                     continue
                 if item.hypothesis != candidate.rule.hypothesis or item.regime != candidate.rule.regime or item.volatility_bucket != candidate.rule.volatility_bucket or item.direction != candidate.rule.direction:
                     continue
@@ -57,10 +79,29 @@ class TradingPathExpectedValueServiceV012:
         return tuple(values)
 
     @classmethod
-    def calculate(cls, candidate: TradingPathCandidate, candles: Sequence[Candle], *, windows: int = TradingPathOOSValidationServiceV012.DEFAULT_WINDOWS, test_size: int = TradingPathOOSValidationServiceV012.DEFAULT_TEST_SIZE, observations=None) -> ExpectedValueResult:
-        values = cls.outcomes(candidate, candles, windows=windows, test_size=test_size, observations=observations)
+    def calculate(
+        cls,
+        candidate: TradingPathCandidate,
+        candles: Sequence[Candle],
+        *,
+        windows: int = TradingPathOOSValidationServiceV012.DEFAULT_WINDOWS,
+        test_size: int = TradingPathOOSValidationServiceV012.DEFAULT_TEST_SIZE,
+        observations=None,
+        evaluation_start: int | None = None,
+        evaluation_end: int | None = None,
+    ) -> ExpectedValueResult:
+        values = cls.outcomes(
+            candidate, candles, windows=windows, test_size=test_size,
+            observations=observations, evaluation_start=evaluation_start,
+            evaluation_end=evaluation_end,
+        )
         result = ExpectedValueEngine.from_returns(values)
-        logger.warning("[V012 PATH EV] ticker=%s hypothesis=%s observations=%d ev=%s ci_low=%s ci_high=%s reliability=%s level=%s", candidate.rule.ticker, candidate.rule.hypothesis, result.observations, result.expected_value_pct, result.ev_ci_low_pct, result.ev_ci_high_pct, result.edge_reliability_pct, result.edge_reliability_level)
+        logger.warning(
+            "[V012 PATH EV] ticker=%s hypothesis=%s observations=%d ev=%s ci_low=%s ci_high=%s reliability=%s level=%s",
+            candidate.rule.ticker, candidate.rule.hypothesis, result.observations,
+            result.expected_value_pct, result.ev_ci_low_pct, result.ev_ci_high_pct,
+            result.edge_reliability_pct, result.edge_reliability_level,
+        )
         return result
 
 
