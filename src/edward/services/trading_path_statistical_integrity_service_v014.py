@@ -55,14 +55,14 @@ class StatisticalIntegrityResultV014:
 class TradingPathStatisticalIntegrityServiceV014:
     """TRAIN/VALIDATION statistical controls for adaptive path discovery.
 
-    The service is deliberately independent from the production runtime. It provides
-    deterministic temporal splitting, an effective sample-size estimate for
-    overlapping forward-return observations, and a conservative Bonferroni correction
-    for the number of hypotheses tested during discovery.
+    The service provides deterministic temporal splitting, explicit partitioning of
+    candles, an effective-sample-size estimate for overlapping forward-return
+    observations, and a conservative Bonferroni correction for discovery tests.
 
-    No OOS observations are accepted as an input to the statistical test. OOS remains
-    a final untouched evaluation set and cannot influence discovery thresholds,
-    candidate pruning, or multiple-testing correction.
+    Callers must perform discovery and threshold selection only on the returned TRAIN
+    partition. VALIDATION is for model/rule selection checks and OOS is a final
+    untouched evaluation partition. The statistical test itself accepts only the
+    supplied TRAIN/VALIDATION outcomes and has no OOS input.
     """
 
     VERSION = STATISTICAL_INTEGRITY_VERSION
@@ -99,6 +99,42 @@ class TradingPathStatisticalIntegrityServiceV014:
         )
         return split
 
+    @classmethod
+    def partition_candles(
+        cls,
+        candles: Sequence[Candle],
+        *,
+        train_ratio: float = 0.60,
+        validation_ratio: float = 0.20,
+        require_minimums: bool = True,
+    ) -> tuple[tuple[Candle, ...], tuple[Candle, ...], tuple[Candle, ...]]:
+        """Return isolated TRAIN, VALIDATION and OOS candle partitions.
+
+        The returned partitions are disjoint and preserve chronological order. When
+        require_minimums is enabled, too-short partitions fail closed instead of
+        silently allowing an invalid nested evaluation.
+        """
+        ordered = tuple(sorted(candles, key=lambda item: item.timestamp))
+        split = cls.temporal_split(ordered, train_ratio=train_ratio, validation_ratio=validation_ratio)
+        if require_minimums and (
+            split.train_size < cls.MIN_TRAIN_SIZE
+            or split.validation_size < cls.MIN_VALIDATION_SIZE
+            or split.oos_size < cls.MIN_OOS_SIZE
+        ):
+            raise ValueError(
+                "insufficient temporal partition sizes: "
+                f"train={split.train_size}, validation={split.validation_size}, oos={split.oos_size}"
+            )
+
+        train = ordered[split.train_start:split.train_end]
+        validation = ordered[split.validation_start:split.validation_end]
+        oos = ordered[split.oos_start:split.oos_end]
+        logger.warning(
+            "[V014 STAT PARTITION] train=%d validation=%d oos=%d disjoint=True",
+            len(train), len(validation), len(oos),
+        )
+        return train, validation, oos
+
     @staticmethod
     def _one_sided_normal_pvalue(z_score: float) -> float:
         cdf = 0.5 * (1.0 + erf(z_score / sqrt(2.0)))
@@ -111,8 +147,6 @@ class TradingPathStatisticalIntegrityServiceV014:
             return 0.0
         if horizon < 1:
             raise ValueError("horizon must be positive")
-        # A horizon-h forward return can share up to h-1 future candles with
-        # neighboring events. This is intentionally conservative and deterministic.
         return max(1.0, observations / float(horizon))
 
     @classmethod
@@ -137,7 +171,7 @@ class TradingPathStatisticalIntegrityServiceV014:
         horizon: int,
         hypotheses_tested: int,
     ) -> StatisticalIntegrityResultV014:
-        """Evaluate TRAIN/VALIDATION outcomes without touching OOS data."""
+        """Evaluate supplied TRAIN/VALIDATION outcomes without touching OOS data."""
         values = tuple(float(value) for value in returns_pct)
         observations = len(values)
         if observations == 0:
@@ -155,11 +189,6 @@ class TradingPathStatisticalIntegrityServiceV014:
         event_mean = mean(values)
         excess = event_mean - float(baseline_return_pct)
         dispersion = pstdev(values) if observations > 1 else 0.0
-
-        # Zero variance is not treated as infinite statistical evidence. With no
-        # observed dispersion, a normal-approximation p-value is undefined, so the
-        # integrity gate conservatively rejects the result rather than manufacturing
-        # significance from deterministic/synthetic outcomes.
         if dispersion > 0.0:
             standard_error = dispersion / sqrt(effective_n)
             z_score = excess / standard_error
