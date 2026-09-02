@@ -108,8 +108,8 @@ class TradingPathFeatureServiceV014:
                 high_window = highs[max(0, len(highs) - window):]
                 low_window = lows[max(0, len(lows) - window):]
                 values[f"return_{window}"] = (
-                    current_close / closes[-window] - 1.0
-                    if len(closes) > window and closes[-window] > 0
+                    current_close / closes[-window - 1] - 1.0
+                    if len(closes) > window and closes[-window - 1] > 0
                     else None
                 )
                 values[f"distance_to_high_{window}"] = (
