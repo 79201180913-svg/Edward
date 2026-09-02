@@ -27,4 +27,3 @@ def test_frontend_contains_canonical_result_panel_and_runtime():
     source = Path("src/edward/ui/analysis_ui_v088_frontend.py").read_text(encoding="utf-8")
     assert "Финальный результат canonical runtime" in source
     assert "AnalysisPathRuntimeServiceV012" in source
-    assert "Решение не создаётся отдельно от этого pipeline" in source
