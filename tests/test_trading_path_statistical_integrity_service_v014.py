@@ -74,7 +74,7 @@ def test_multiple_testing_adjustment_rejects_weak_effect_after_correction():
     assert result.statistically_valid is False
 
 
-def test_strong_effect_can_pass_statistical_integrity():
+def test_zero_variance_does_not_create_infinite_significance():
     service = TradingPathStatisticalIntegrityServiceV014
     result = service.evaluate(
         [1.0] * 100,
@@ -83,7 +83,22 @@ def test_strong_effect_can_pass_statistical_integrity():
         hypotheses_tested=1,
     )
 
-    assert result.excess_return_pct == 1.0
+    assert result.z_score == 0.0
+    assert result.p_value_one_sided == 1.0
+    assert result.multiple_testing_valid is False
+    assert result.statistically_valid is False
+
+
+def test_strong_non_degenerate_effect_can_pass_statistical_integrity():
+    service = TradingPathStatisticalIntegrityServiceV014
+    result = service.evaluate(
+        [1.0, 1.2, 0.8, 1.1, 0.9] * 20,
+        baseline_return_pct=0.0,
+        horizon=1,
+        hypotheses_tested=1,
+    )
+
+    assert result.excess_return_pct == pytest.approx(1.0)
     assert result.multiple_testing_valid is True
     assert result.overlap_valid is True
     assert result.statistically_valid is True
