@@ -20,13 +20,12 @@ def test_progress_installer_wraps_existing_analysis_entrypoint(monkeypatch):
     assert legacy._open_analysis is not original_open
 
 
-def test_progress_ui_contains_four_explicit_analysis_stages():
+def test_progress_ui_contains_canonical_analysis_flow():
     from pathlib import Path
 
     source = Path("src/edward/ui/analysis_ui_v088_progress.py").read_text(encoding="utf-8")
 
-    assert "Этап 1 из 4" in source
-    assert "Этап 2 из 4" in source
-    assert "Этап 3 из 4" in source
-    assert "Этап 4 из 4" in source
-    assert "Анализ завершён" in source
+    assert "v0.8.14 Adaptive Discovery · Canonical Path Runtime" in source
+    assert "TRAIN → VALIDATION → OOS → Quality Gate" in source
+    assert "Результаты будут показаны в окне canonical анализа." in source
+    assert "Анализ завершён" not in source
