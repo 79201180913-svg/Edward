@@ -32,9 +32,10 @@ def test_runtime_bridge_exposes_canonical_path_analysis(monkeypatch):
 def test_runtime_bridge_sorts_candles_before_discovery(monkeypatch):
     timestamps = [
         datetime(2025, 1, 1, tzinfo=timezone.utc) + timedelta(hours=i)
-        for i in (2, 0, 1)
+        for i in range(120)
     ]
-    candles = [Candle(ts, 100.0, 101.0, 99.0, 100.0, 1000.0) for ts in timestamps]
+    shuffled = [timestamps[i] for i in (2, 0, 1, *range(3, 120))]
+    candles = [Candle(ts, 100.0, 101.0, 99.0, 100.0, 1000.0) for ts in shuffled]
     captured = []
 
     monkeypatch.setattr(
