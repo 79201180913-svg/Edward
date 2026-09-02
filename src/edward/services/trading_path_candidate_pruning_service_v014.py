@@ -116,7 +116,9 @@ class TradingPathCandidatePruningServiceV014:
             ranked = sorted(by_context[context], key=cls._rank_key)
             retained.extend(ranked[: cfg.max_adaptive_per_context])
 
-        result = tuple(fixed) + tuple(sorted(retained, key=lambda c: (c.rule.ticker, c.rule.regime, c.rule.horizon, c.rule.hypothesis)))
+        # Preserve the quality-ranked order produced by pruning. Downstream consumers
+        # may rely on deterministic ranking; do not re-sort alphabetically here.
+        result = tuple(fixed) + tuple(retained)
         logger.warning(
             "[V014 CANDIDATE PRUNING] input=%d fixed=%d adaptive=%d retained=%d "
             "dropped_insufficient=%d dropped_excess=%d dropped_complex=%d "
