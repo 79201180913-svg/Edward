@@ -141,3 +141,32 @@ def test_statistical_integrity_uses_only_supplied_training_returns():
     assert result.observations == len(train_values)
     assert result.mean_return_pct == pytest.approx(0.2)
     assert result.excess_return_pct == pytest.approx(0.2)
+
+
+def test_candidate_family_uses_one_shared_multiple_testing_count():
+    service = TradingPathStatisticalIntegrityServiceV014
+    first = object()
+    second = object()
+    returns = {
+        first: [0.2, 0.3, 0.1] * 10,
+        second: [0.2, 0.3, 0.1] * 10,
+    }
+    results = service.evaluate_candidate_returns(
+        returns,
+        baseline_return_pct_by_horizon={1: 0.0},
+        horizon_by_candidate={first: 1, second: 1},
+    )
+
+    assert set(results) == {first, second}
+    assert all(item.hypotheses_tested == 2 for item in results.values())
+    assert all(item.adjusted_p_value >= item.p_value_one_sided for item in results.values())
+
+
+def test_candidate_family_is_empty_without_hypotheses():
+    result = TradingPathStatisticalIntegrityServiceV014.evaluate_candidate_returns(
+        {},
+        baseline_return_pct_by_horizon={},
+        horizon_by_candidate={},
+    )
+
+    assert result == {}
