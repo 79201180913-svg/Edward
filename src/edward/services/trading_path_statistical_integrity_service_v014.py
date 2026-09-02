@@ -4,7 +4,7 @@ import logging
 from dataclasses import dataclass
 from math import erf, sqrt
 from statistics import mean, pstdev
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from edward.services.analysis_service import Candle
 
@@ -108,12 +108,7 @@ class TradingPathStatisticalIntegrityServiceV014:
         validation_ratio: float = 0.20,
         require_minimums: bool = True,
     ) -> tuple[tuple[Candle, ...], tuple[Candle, ...], tuple[Candle, ...]]:
-        """Return isolated TRAIN, VALIDATION and OOS candle partitions.
-
-        The returned partitions are disjoint and preserve chronological order. When
-        require_minimums is enabled, too-short partitions fail closed instead of
-        silently allowing an invalid nested evaluation.
-        """
+        """Return isolated TRAIN, VALIDATION and OOS candle partitions."""
         ordered = tuple(sorted(candles, key=lambda item: item.timestamp))
         split = cls.temporal_split(ordered, train_ratio=train_ratio, validation_ratio=validation_ratio)
         if require_minimums and (
@@ -229,6 +224,40 @@ class TradingPathStatisticalIntegrityServiceV014:
             result.multiple_testing_valid, result.statistically_valid,
         )
         return result
+
+    @classmethod
+    def evaluate_candidate_returns(
+        cls,
+        returns_by_candidate: Mapping[object, Sequence[float]],
+        *,
+        baseline_return_pct_by_horizon: Mapping[int, float],
+        horizon_by_candidate: Mapping[object, int],
+    ) -> dict[object, StatisticalIntegrityResultV014]:
+        """Evaluate a discovered candidate family with one shared test count.
+
+        The number of hypotheses is the number of candidate rules supplied to this
+        call. Every candidate therefore receives the same family-wise correction,
+        preventing a caller from making significance easier by evaluating rules one
+        at a time. Inputs must contain TRAIN/VALIDATION outcomes only.
+        """
+        hypotheses_tested = len(returns_by_candidate)
+        if hypotheses_tested < 1:
+            return {}
+        results: dict[object, StatisticalIntegrityResultV014] = {}
+        for candidate, returns_pct in returns_by_candidate.items():
+            horizon = horizon_by_candidate[candidate]
+            baseline = baseline_return_pct_by_horizon[horizon]
+            results[candidate] = cls.evaluate(
+                returns_pct,
+                baseline_return_pct=baseline,
+                horizon=horizon,
+                hypotheses_tested=hypotheses_tested,
+            )
+        logger.warning(
+            "[V014 STAT FAMILY] candidates=%d correction=bonferroni train_validation_only=True",
+            hypotheses_tested,
+        )
+        return results
 
 
 __all__ = [
