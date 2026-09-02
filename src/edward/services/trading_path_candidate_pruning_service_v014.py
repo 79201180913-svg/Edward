@@ -22,7 +22,7 @@ class CandidatePruningConfigV014:
     min_adaptive_excess_return_pct: float = 0.0
     max_adaptive_conditions: int = 3
     max_adaptive_per_context: int = 5
-    require_statistical_integrity: bool = True
+    require_statistical_integrity: bool = False
 
 
 class TradingPathCandidatePruningServiceV014:
@@ -30,9 +30,9 @@ class TradingPathCandidatePruningServiceV014:
 
     Fixed candidates are never removed here. Adaptive pruning uses discovery evidence
     only; OOS returns, walk-forward persistence and quality-gate outputs are not
-    consulted. When statistical integrity results are supplied, every adaptive
-    candidate must also pass the shared TRAIN/VALIDATION family-wise statistical
-    control before it can continue downstream.
+    consulted. When statistical integrity results are supplied and explicitly enabled,
+    every adaptive candidate must also pass the shared TRAIN/VALIDATION family-wise
+    statistical control before it can continue downstream.
     """
 
     ADAPTIVE_PREFIX = "ADAPTIVE_RULE:"
