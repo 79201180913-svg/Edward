@@ -42,6 +42,32 @@ def test_temporal_split_rejects_invalid_ratios():
         TradingPathStatisticalIntegrityServiceV014.temporal_split(candles(), train_ratio=0.8, validation_ratio=0.2)
 
 
+def test_partition_candles_is_disjoint_and_chronological():
+    train, validation, oos = TradingPathStatisticalIntegrityServiceV014.partition_candles(candles(100))
+
+    assert len(train) == 60
+    assert len(validation) == 20
+    assert len(oos) == 20
+    assert train[-1].timestamp < validation[0].timestamp < oos[0].timestamp
+    assert set(item.timestamp for item in train).isdisjoint(item.timestamp for item in validation)
+    assert set(item.timestamp for item in validation).isdisjoint(item.timestamp for item in oos)
+
+
+def test_partition_candles_fails_closed_when_minimums_are_not_met():
+    with pytest.raises(ValueError, match="insufficient temporal partition sizes"):
+        TradingPathStatisticalIntegrityServiceV014.partition_candles(candles(50))
+
+
+def test_partition_candles_can_be_used_without_minimum_size_gate():
+    train, validation, oos = TradingPathStatisticalIntegrityServiceV014.partition_candles(
+        candles(50), require_minimums=False
+    )
+
+    assert len(train) == 30
+    assert len(validation) == 10
+    assert len(oos) == 10
+
+
 def test_effective_sample_size_accounts_for_forward_overlap():
     service = TradingPathStatisticalIntegrityServiceV014
 
@@ -60,8 +86,6 @@ def test_overlap_ratio_reflects_horizon_overlap():
 
 def test_multiple_testing_adjustment_rejects_weak_effect_after_correction():
     service = TradingPathStatisticalIntegrityServiceV014
-    # Non-degenerate weak effect: before correction it is not compelling, and
-    # testing 1000 hypotheses must not turn it into a valid discovery.
     result = service.evaluate(
         [0.1, -0.08] * 50,
         baseline_return_pct=0.0,
