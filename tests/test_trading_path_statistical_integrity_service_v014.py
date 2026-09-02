@@ -87,7 +87,7 @@ def test_strong_effect_can_pass_statistical_integrity():
     assert result.statistically_valid is True
 
 
-def test_statistical_integrity_is_not_based_on_oos_input():
+def test_statistical_integrity_uses_only_supplied_training_returns():
     service = TradingPathStatisticalIntegrityServiceV014
     train_values = [0.2] * 20
     result = service.evaluate(
@@ -98,4 +98,5 @@ def test_statistical_integrity_is_not_based_on_oos_input():
     )
 
     assert result.observations == len(train_values)
-    assert result.oos_start if False else True
+    assert result.mean_return_pct == pytest.approx(0.2)
+    assert result.excess_return_pct == pytest.approx(0.2)
