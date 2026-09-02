@@ -91,7 +91,9 @@ class CanonicalOpportunityAnalysisV015:
         stability = float(analysis.validation.robustness_score or 0.0)
         quality_gate = bool(
             analysis.validation.promotion_status in {"validated", "promotable", "promoted"}
-            and analysis.validation.statistical_valid is not False
+            and analysis.validation.statistical_valid is True
+            and analysis.validation.overlap_valid is not False
+            and analysis.validation.multiple_testing_valid is not False
         )
         return StrategyResult(
             strategy=analysis.strategy_family,
