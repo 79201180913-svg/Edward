@@ -5,11 +5,8 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from typing import Any
 
-from edward.services.analysis_service_v08 import AnalysisServiceV08
-from edward.services.analysis_trading_path_adapter_v088 import AnalysisTradingPathAdapterV088
+from edward.services.analysis_path_runtime_service_v012 import AnalysisPathRuntimeServiceV012
 from edward.services.market_context_runtime_service_v011 import MarketContextRuntimeServiceV011
-from edward.storage.sqlite_store import SQLiteStore
-from edward.config.application_settings import ApplicationSettingsStore
 
 logger = logging.getLogger(__name__)
 
@@ -19,9 +16,14 @@ def _parse_candles(response: Any) -> list[Any]:
     return _parse_candles(response)
 
 
-def _status_text(status: Any) -> str:
-    value = getattr(status, "value", status)
-    return {"promoted": "PROMOTED", "research_only": "RESEARCH ONLY", "rejected": "REJECTED"}.get(str(value), str(value).upper())
+def _field(value: Any, name: str, default: Any = None) -> Any:
+    if isinstance(value, dict):
+        return value.get(name, default)
+    return getattr(value, name, default)
+
+
+def _value(value: Any, default: Any = "N/A") -> Any:
+    return getattr(value, "value", value) if value is not None else default
 
 
 def _fmt_pct(value: Any) -> str:
@@ -31,11 +33,19 @@ def _fmt_pct(value: Any) -> str:
         return "N/A"
 
 
-def _fmt_ratio(value: Any) -> str:
+def _fmt_num(value: Any, digits: int = 2) -> str:
     try:
-        return f"{float(value) * 100:.0f}%"
+        return f"{float(value):.{digits}f}"
     except (TypeError, ValueError):
         return "N/A"
+
+
+def _fmt_bool(value: Any) -> str:
+    if value is True:
+        return "PASS"
+    if value is False:
+        return "FAIL"
+    return "N/A"
 
 
 def _unwrap_instrument(response: Any) -> Any:
@@ -45,16 +55,8 @@ def _unwrap_instrument(response: Any) -> Any:
         for key in ("instrument", "item", "instrument_info"):
             if response.get(key) is not None:
                 value = response[key]
-                if isinstance(value, (list, tuple)):
-                    return value[0] if value else {}
-                return value
+                return value[0] if isinstance(value, (list, tuple)) and value else value
     return response
-
-
-def _field(value: Any, name: str, default: Any = None) -> Any:
-    if isinstance(value, dict):
-        return value.get(name, default)
-    return getattr(value, name, default)
 
 
 def install(app_class: type[Any], client_class: type[Any]) -> None:
@@ -68,10 +70,11 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
         if not detail:
             return
 
-        window = tk.Toplevel(app)
         ticker = str(detail.get("ticker", ""))
-        window.title(f"Анализ акции v0.8.8 — {ticker}")
-        window.geometry("1350x1040")
+        uid = str(detail.get("instrument_uid", ""))
+        window = tk.Toplevel(app)
+        window.title(f"Канонический анализ v0.8.14 — {ticker}")
+        window.geometry("1400x1050")
         window.minsize(1180, 820)
         window.transient(app)
 
@@ -91,7 +94,7 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
         header = ttk.Frame(content)
         header.pack(fill="x", pady=(0, 12))
         ttk.Label(header, text=f"Анализ: {ticker}", style="Title.TLabel").pack(side="left")
-        ttk.Label(header, text="v0.8.8 Trading Paths + v0.8.11 Market Context", font=("TkDefaultFont", 12, "bold")).pack(side="left", padx=(14, 0))
+        ttk.Label(header, text="v0.8.14 Adaptive Discovery · Canonical Path Runtime", font=("TkDefaultFont", 12, "bold")).pack(side="left", padx=(14, 0))
         profile_var = tk.StringVar(value="medium_term")
         ttk.Label(header, text="Профиль:").pack(side="left", padx=(28, 6))
         ttk.Combobox(header, textvariable=profile_var, state="readonly", values=("long_term", "medium_term", "speculative"), width=16).pack(side="left")
@@ -100,198 +103,174 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
         run_button = ttk.Button(header, text="Запустить анализ")
         run_button.pack(side="right")
 
-        summary = ttk.LabelFrame(content, text="Итог анализа", padding=12)
+        summary = ttk.LabelFrame(content, text="Итог v0.8.14", padding=12)
         summary.pack(fill="x", pady=(0, 12))
-        for i in range(6):
+        for i in range(7):
             summary.columnconfigure(i, weight=1)
-        summary_vars = {k: tk.StringVar(value="—") for k in ("legacy", "candidates", "validated", "promoted", "research", "rejected")}
-        for col, (key, title) in enumerate((("legacy", "Legacy QG"), ("candidates", "Trading Paths"), ("validated", "Validated"), ("promoted", "Promoted"), ("research", "Research Only"), ("rejected", "Rejected"))):
+        summary_vars = {k: tk.StringVar(value="—") for k in ("paths", "adaptive", "validated", "buy", "hold", "rejected", "stat")}
+        summary_items = (("paths", "Final Paths"), ("adaptive", "Adaptive"), ("validated", "Validated"), ("buy", "BUY"), ("hold", "NO BUY"), ("rejected", "Rejected"), ("stat", "Stat Integrity"))
+        for col, (key, title) in enumerate(summary_items):
             cell = ttk.Frame(summary, padding=6)
             cell.grid(row=0, column=col, sticky="nsew")
             ttk.Label(cell, text=title).pack(anchor="w")
             ttk.Label(cell, textvariable=summary_vars[key], font=("TkDefaultFont", 15, "bold")).pack(anchor="w", pady=(4, 0))
 
-        decision_frame = ttk.LabelFrame(content, text="Финальное торговое решение по инструменту", padding=14)
+        decision_frame = ttk.LabelFrame(content, text="Финальный результат canonical runtime", padding=14)
         decision_frame.pack(fill="x", pady=(0, 12))
-        decision_var = tk.StringVar(value="Решение: —")
-        decision_detail_var = tk.StringVar(value="Ожидание завершения анализа")
-        decision_reason_var = tk.StringVar(value="")
-        ttk.Label(decision_frame, textvariable=decision_var, font=("TkDefaultFont", 18, "bold")).pack(anchor="w")
-        ttk.Label(decision_frame, textvariable=decision_detail_var, font=("TkDefaultFont", 10, "bold"), wraplength=1200).pack(anchor="w", pady=(5, 0))
-        ttk.Label(decision_frame, textvariable=decision_reason_var, wraplength=1200, justify="left").pack(anchor="w", pady=(5, 0))
+        decision_vars = {k: tk.StringVar(value="—") for k in ("decision", "state", "status", "ev", "risk", "score", "confidence", "reason")}
+        ttk.Label(decision_frame, textvariable=decision_vars["decision"], font=("TkDefaultFont", 20, "bold")).grid(row=0, column=0, columnspan=4, sticky="w")
+        for col, (key, title) in enumerate((("state", "State"), ("status", "Status"), ("ev", "Expected Value"), ("risk", "Risk"), ("score", "Opportunity Score"), ("confidence", "Confidence"))):
+            ttk.Label(decision_frame, text=title).grid(row=1, column=col * 2, sticky="w", padx=(0, 6), pady=(10, 3))
+            ttk.Label(decision_frame, textvariable=decision_vars[key], font=("TkDefaultFont", 10, "bold")).grid(row=1, column=col * 2 + 1, sticky="w", padx=(0, 18), pady=(10, 3))
+        ttk.Label(decision_frame, textvariable=decision_vars["reason"], wraplength=1250, justify="left").grid(row=2, column=0, columnspan=12, sticky="w", pady=(8, 0))
+        for col in range(12):
+            decision_frame.columnconfigure(col, weight=1)
 
-        context_frame = ttk.LabelFrame(content, text="v0.8.11 Market Context — point-in-time evidence", padding=10)
+        context_frame = ttk.LabelFrame(content, text="Market Context — point-in-time", padding=10)
         context_frame.pack(fill="x", pady=(0, 12))
-        for col in range(6):
-            context_frame.columnconfigure(col, weight=1)
         context_vars = {k: tk.StringVar(value="—") for k in ("status", "benchmark", "regime", "relative", "volatility", "as_of")}
         for col, (key, title) in enumerate((("status", "Context"), ("benchmark", "Benchmark"), ("regime", "Market Regime"), ("relative", "Relative Strength"), ("volatility", "Relative Volatility"), ("as_of", "As Of"))):
+            context_frame.columnconfigure(col, weight=1)
             cell = ttk.Frame(context_frame, padding=5)
             cell.grid(row=0, column=col, sticky="nsew")
             ttk.Label(cell, text=title).pack(anchor="w")
-            ttk.Label(cell, textvariable=context_vars[key], font=("TkDefaultFont", 10, "bold"), wraplength=190).pack(anchor="w", pady=(3, 0))
+            ttk.Label(cell, textvariable=context_vars[key], font=("TkDefaultFont", 10, "bold"), wraplength=200).pack(anchor="w", pady=(3, 0))
 
-        best_frame = ttk.LabelFrame(content, text="Лучший исследованный путь", padding=12)
-        best_frame.pack(fill="x", pady=(0, 12))
-        best_vars = {k: tk.StringVar(value="—") for k in ("path", "status", "net", "mean", "ci", "blocks", "overlap", "reason")}
-        ttk.Label(best_frame, textvariable=best_vars["path"], font=("TkDefaultFont", 12, "bold")).grid(row=0, column=0, columnspan=4, sticky="w")
-        for row, (key, label) in enumerate((("status", "Статус"), ("net", "Net Return"), ("mean", "Mean"), ("ci", "Adjusted CI"), ("blocks", "Temporal"), ("overlap", "Overlap"))):
-            r, c = divmod(row, 3)
-            ttk.Label(best_frame, text=label).grid(row=r + 1, column=c * 2, sticky="w", padx=(0, 6), pady=4)
-            ttk.Label(best_frame, textvariable=best_vars[key], font=("TkDefaultFont", 10, "bold")).grid(row=r + 1, column=c * 2 + 1, sticky="w", padx=(0, 18), pady=4)
-        ttk.Label(best_frame, textvariable=best_vars["reason"], wraplength=1200, justify="left").grid(row=3, column=0, columnspan=6, sticky="w", pady=(6, 0))
-        for c in range(6):
-            best_frame.columnconfigure(c, weight=1)
-
-        paths_frame = ttk.LabelFrame(content, text="Trading Paths — результат проверки", padding=8)
+        paths_frame = ttk.LabelFrame(content, text="Trading Paths — фактический результат v0.8.14", padding=8)
         paths_frame.pack(fill="both", expand=True, pady=(0, 12))
-        columns = ("rank", "path", "n", "net", "mean", "ci", "temporal", "event", "holding", "multiple", "status")
-        tree = ttk.Treeview(paths_frame, columns=columns, show="headings", height=14)
-        headings = (("rank", "#", 45), ("path", "Trading Path", 340), ("n", "N", 55), ("net", "Net %", 90), ("mean", "Mean %", 90), ("ci", "Adjusted CI95", 150), ("temporal", "Temporal", 80), ("event", "Event", 75), ("holding", "Holding", 75), ("multiple", "MT", 65), ("status", "Статус", 125))
+        columns = ("rank", "source", "path", "train", "excess", "stat", "overlap", "mt", "validation", "ev", "risk", "decision")
+        tree = ttk.Treeview(paths_frame, columns=columns, show="headings", height=15)
+        headings = (("rank", "#", 45), ("source", "Source", 80), ("path", "Trading Path", 430), ("train", "TRAIN N", 70), ("excess", "Excess", 85), ("stat", "Stat", 70), ("overlap", "Overlap", 80), ("mt", "MT", 60), ("validation", "Validation", 100), ("ev", "OOS EV", 85), ("risk", "Risk", 70), ("decision", "Decision", 90))
         for key, title, width in headings:
             tree.heading(key, text=title)
             tree.column(key, width=width, anchor="center" if key != "path" else "w")
         tree.pack(fill="both", expand=True)
 
-        detail_frame = ttk.LabelFrame(content, text="Детализация выбранного Trading Path", padding=10)
+        detail_frame = ttk.LabelFrame(content, text="Детализация выбранного пути", padding=10)
         detail_frame.pack(fill="x", pady=(0, 12))
-        detail_text = tk.Text(detail_frame, height=10, wrap="word")
+        detail_text = tk.Text(detail_frame, height=18, wrap="word")
         detail_text.pack(fill="x")
         detail_text.configure(state="disabled")
 
-        legacy_frame = ttk.LabelFrame(content, text="Legacy v0.8.7 — стратегии / Quality Gate", padding=8)
-        legacy_frame.pack(fill="x")
-        legacy_tree = ttk.Treeview(legacy_frame, columns=("strategy", "score", "return", "dd", "sharpe", "robust", "gate"), show="headings", height=4)
-        for key, title, width in (("strategy", "Стратегия", 190), ("score", "Score", 80), ("return", "OOS Return %", 110), ("dd", "OOS DD %", 100), ("sharpe", "Sharpe", 80), ("robust", "Robustness", 110), ("gate", "Quality Gate", 110)):
-            legacy_tree.heading(key, text=title)
-            legacy_tree.column(key, width=width, anchor="center")
-        legacy_tree.pack(fill="x")
-
-        state: dict[str, Any] = {"research": None, "market_context": None, "candles": [], "position": None}
+        state: dict[str, Any] = {"results": (), "market_context": None, "candles": []}
 
         def show_path(index: int) -> None:
-            research = state.get("research")
-            if research is None or index < 0 or index >= len(research.ranked_candidates):
+            results = state.get("results") or ()
+            if index < 0 or index >= len(results):
                 return
-            ranked = research.ranked_candidates[index]
-            validation = research.validation_results[index]
-            overlap = research.overlap_evidence[index]
-            multiple = research.multiple_testing_evidence[index]
-            promotion = research.promotion_results[index]
-            rule = ranked.candidate.rule
-            evidence = validation.statistical_evidence
-            temporal = validation.temporal_evidence
-            path = f"{rule.hypothesis} / {rule.regime} / {rule.volatility_bucket} / {rule.direction} / H={rule.horizon}"
-            temporal_text = f"{evidence.positive_temporal_blocks}/{len(evidence.temporal_blocks)} positive blocks"
-            reason_text = ", ".join(promotion.reasons) if promotion.reasons else "NONE — all promotion checks passed"
-            lines = (
-                f"Trading Path: {path}", f"Ranking score: {ranked.score:.6f}", f"Observations: {evidence.observations}",
-                f"Gross Return: {_fmt_pct(validation.gross_return_pct)} | Net Return: {_fmt_pct(validation.net_return_pct)}",
-                f"Mean: {_fmt_pct(evidence.mean_return_pct)} | Median: {_fmt_pct(evidence.median_return_pct)} | Win Rate: {evidence.win_rate_pct:.1f}%",
-                f"CI95: {_fmt_pct(evidence.ci95_low_pct)} → {_fmt_pct(evidence.ci95_high_pct)}",
-                f"Adjusted CI95: {_fmt_pct(multiple.adjusted_ci95_low_pct)} → {_fmt_pct(multiple.adjusted_ci95_high_pct)}",
-                f"Temporal: {temporal_text} | Stable: {'YES' if getattr(temporal, 'temporal_stable', False) else 'NO'}",
-                f"Overlap: event={_fmt_ratio(overlap.max_event_overlap_ratio)}, holding={_fmt_ratio(overlap.max_holding_overlap_ratio)}",
-                f"Multiple testing: {multiple.tests_count} tests | adjusted alpha={multiple.adjusted_alpha:.6f} | PASS={'YES' if multiple.passes else 'NO'}",
-                f"Promotion: {_status_text(promotion.status)}", f"Blocking reasons: {reason_text}",
-            )
+            item = results[index]
+            rule = item
+            evidence = item.evidence
+            validation = item.validation
+            opportunity = item.opportunity
+            source = "adaptive" if str(item.strategy_family) == "Adaptive Discovery" or str(item.hypothesis).startswith("ADAPTIVE_RULE:") else "fixed"
+            lines = [
+                f"Source: {source}",
+                f"Strategy Family: {_value(item.strategy_family)}",
+                f"Trading Path: {item.hypothesis}",
+                f"Regime: {item.regime} | Volatility: {item.volatility_bucket} | Direction: {item.direction} | Horizon: H={item.horizon}",
+                "",
+                "TRAIN / DISCOVERY EVIDENCE",
+                f"Observations: {_field(evidence, 'observations')}",
+                f"Mean: {_fmt_pct(_field(evidence, 'mean_forward_return_pct'))}",
+                f"Median: {_fmt_pct(_field(evidence, 'median_forward_return_pct'))}",
+                f"Win Rate: {_fmt_pct(_field(evidence, 'win_rate_pct'))}",
+                f"Baseline: {_fmt_pct(_field(evidence, 'baseline_mean_return_pct'))}",
+                f"Excess: {_fmt_pct(_field(evidence, 'excess_return_pct'))}",
+                "",
+                "STATISTICAL INTEGRITY",
+                f"Statistically valid: {_fmt_bool(_field(validation, 'statistical_valid'))}",
+                f"Overlap valid: {_fmt_bool(_field(validation, 'overlap_valid'))} | Overlap: {_fmt_pct(_field(validation, 'overlap_ratio_pct'))}",
+                f"Multiple testing valid: {_fmt_bool(_field(validation, 'multiple_testing_valid'))}",
+                f"Effective N: {_fmt_num(_field(validation, 'effective_sample_size'))}",
+                f"SE: {_fmt_pct(_field(validation, 'standard_error_pct'))} | Z: {_fmt_num(_field(validation, 'z_score'), 4)}",
+                f"p-value: {_fmt_num(_field(validation, 'p_value_one_sided'), 6)} | adjusted p: {_fmt_num(_field(validation, 'adjusted_p_value'), 6)}",
+                f"Hypotheses tested: {_field(validation, 'hypotheses_tested')}",
+                "",
+                "VALIDATION / OOS / DECISION",
+                f"Validation status: {_value(_field(validation, 'promotion_status'))}",
+                f"WF persistence: {_fmt_pct(_field(validation, 'wf_persistence_pct'))}",
+                f"Robustness: {_fmt_num(_field(validation, 'robustness_score'))}",
+                f"Positive OOS windows: {_fmt_pct(_field(validation, 'positive_oos_windows_pct'))}",
+                f"Expected Value: {_fmt_pct(_field(opportunity, 'expected_value_pct'))}",
+                f"Risk score: {_fmt_num(_field(opportunity, 'risk_score'))}",
+                f"Opportunity score: {_fmt_num(_field(opportunity, 'score'))}",
+                f"Confidence: {_fmt_pct(_field(opportunity, 'confidence'))}",
+                f"Current state: {_value(item.current_state)} | Decision: {_value(item.decision)} | Status: {_value(item.status)}",
+            ]
+            if source == "adaptive":
+                lines.insert(3, "Adaptive rule is shown exactly as produced by TRAIN discovery.")
             detail_text.configure(state="normal")
             detail_text.delete("1.0", "end")
             detail_text.insert("1.0", "\n".join(lines))
             detail_text.configure(state="disabled")
 
-        def apply_final_decision(research: Any) -> None:
-            candles = state.get("candles") or []
-            position = state.get("position")
-            if not candles or position is None:
-                return
-            try:
-                from edward.services.decision_engine import DecisionEngine
-                from edward.services.opportunity_engine import OpportunityEngine
-                from edward.ui.analysis_ui_v04 import _build_decision_request
-
-                winner = next((item for item in research.analysis.strategies if item.quality_gate), None)
-                opportunity = OpportunityEngine.evaluate(research.analysis, candles, winner)
-                request = _build_decision_request(app, detail, research.analysis, opportunity, winner, position, profile_var.get())
-                decision = DecisionEngine.evaluate(request)
-                action = getattr(decision.decision, "value", decision.decision) or "UNAVAILABLE"
-                decision_var.set(f"Решение: {str(action).upper()}")
-                decision_detail_var.set(
-                    f"Strategy Score: {decision.strategy_score:.1f}   |   Opportunity Score: {decision.opportunity_score:.1f}   |   Статус: {getattr(decision.status, 'value', decision.status)}"
-                )
-                reasons = ", ".join(decision.reason_codes) if decision.reason_codes else "нет"
-                decision_reason_var.set(f"Почему: {decision.explanation}   Коды: {reasons}")
-                logger.warning("[V012 UI DECISION] ticker=%s decision=%s status=%s strategy_score=%.4f opportunity_score=%.4f reasons=%s", ticker, action, getattr(decision.status, "value", decision.status), decision.strategy_score, decision.opportunity_score, reasons)
-            except Exception as exc:
-                decision_var.set("Решение: UNAVAILABLE")
-                decision_detail_var.set("Decision Engine не смог сформировать итоговое решение")
-                decision_reason_var.set(f"Ошибка: {exc}")
-                logger.exception("[V012 UI DECISION] ticker=%s decision evaluation failed", ticker)
-
-        def populate(research: Any) -> None:
-            state["research"] = research
+        def populate(results: tuple[Any, ...]) -> None:
+            state["results"] = results
             for item in tree.get_children():
                 tree.delete(item)
-            for item in legacy_tree.get_children():
-                legacy_tree.delete(item)
-            legacy_result = research.analysis
-            passed = sum(1 for item in legacy_result.strategies if item.quality_gate)
-            summary_vars["legacy"].set(f"{passed}/{len(legacy_result.strategies)} PASS")
-            summary_vars["candidates"].set(str(len(research.ranked_candidates)))
-            summary_vars["validated"].set(str(len(research.validation_results)))
-            statuses = [getattr(item.status, "value", item.status) for item in research.promotion_results]
-            summary_vars["promoted"].set(str(statuses.count("promoted")))
-            summary_vars["research"].set(str(statuses.count("research_only")))
-            summary_vars["rejected"].set(str(statuses.count("rejected")))
-            for idx, ranked in enumerate(research.ranked_candidates):
-                result = research.validation_results[idx]
-                overlap = research.overlap_evidence[idx]
-                multiple = research.multiple_testing_evidence[idx]
-                promotion = research.promotion_results[idx]
-                rule = ranked.candidate.rule
-                evidence = result.statistical_evidence
-                path = f"{rule.hypothesis} | {rule.regime} | {rule.volatility_bucket} | {rule.direction} | H={rule.horizon}"
-                ci = f"{multiple.adjusted_ci95_low_pct:+.2f}…{multiple.adjusted_ci95_high_pct:+.2f}%"
-                tree.insert("", "end", iid=str(idx), values=(idx + 1, path, evidence.observations, _fmt_pct(result.net_return_pct), _fmt_pct(evidence.mean_return_pct), ci, f"{evidence.positive_temporal_blocks}/{len(evidence.temporal_blocks)}", _fmt_ratio(overlap.max_event_overlap_ratio), _fmt_ratio(overlap.max_holding_overlap_ratio), "PASS" if multiple.passes else "FAIL", _status_text(promotion.status)))
-            for item in legacy_result.strategies:
-                legacy_tree.insert("", "end", values=(item.strategy, f"{item.score:.1f}", f"{item.return_pct:.2f}", f"{item.max_drawdown_pct:.2f}", f"{item.sharpe:.2f}", f"{item.stability:.1f}", "PASS" if item.quality_gate else "FAIL"))
-            if research.ranked_candidates:
+            buy_count = sum(str(_value(item.decision, "")).lower() == "buy" for item in results)
+            adaptive_count = sum(str(item.strategy_family) == "Adaptive Discovery" or str(item.hypothesis).startswith("ADAPTIVE_RULE:") for item in results)
+            stat_valid_count = sum(_field(item.validation, "statistical_valid") is True for item in results)
+            summary_vars["paths"].set(str(len(results)))
+            summary_vars["adaptive"].set(str(adaptive_count))
+            summary_vars["validated"].set(str(sum(_value(item.validation.promotion_status) == "validated" for item in results)))
+            summary_vars["buy"].set(str(buy_count))
+            summary_vars["hold"].set(str(len(results) - buy_count))
+            summary_vars["rejected"].set("0 — final only")
+            summary_vars["stat"].set(f"{stat_valid_count}/{len(results)} PASS" if results else "N/A")
+
+            for idx, item in enumerate(results):
+                evidence = item.evidence
+                validation = item.validation
+                opportunity = item.opportunity
+                source = "adaptive" if str(item.strategy_family) == "Adaptive Discovery" or str(item.hypothesis).startswith("ADAPTIVE_RULE:") else "fixed"
+                path = f"{item.hypothesis} | {item.regime} | {item.volatility_bucket} | {item.direction} | H={item.horizon}"
+                tree.insert("", "end", iid=str(idx), values=(
+                    item.rank,
+                    source,
+                    path,
+                    _field(evidence, "observations", "N/A"),
+                    _fmt_pct(_field(evidence, "excess_return_pct")),
+                    _fmt_bool(_field(validation, "statistical_valid")),
+                    _fmt_pct(_field(validation, "overlap_ratio_pct")),
+                    _fmt_bool(_field(validation, "multiple_testing_valid")),
+                    _value(_field(validation, "promotion_status")),
+                    _fmt_pct(_field(opportunity, "expected_value_pct")),
+                    _fmt_num(_field(opportunity, "risk_score")),
+                    str(_value(item.decision)),
+                ))
+
+            if results:
                 tree.selection_set("0")
                 tree.focus("0")
                 show_path(0)
-                ranked = research.ranked_candidates[0]
-                best_result = research.validation_results[0]
-                best_overlap = research.overlap_evidence[0]
-                best_multiple = research.multiple_testing_evidence[0]
-                best_promotion = research.promotion_results[0]
-                rule = ranked.candidate.rule
-                best_vars["path"].set(f"{rule.hypothesis} / {rule.regime} / {rule.volatility_bucket} / {rule.direction} / H={rule.horizon} | score {ranked.score:.4f}")
-                best_vars["status"].set(_status_text(best_promotion.status))
-                best_vars["net"].set(_fmt_pct(best_result.net_return_pct))
-                best_vars["mean"].set(_fmt_pct(best_result.statistical_evidence.mean_return_pct))
-                best_vars["ci"].set(f"{best_multiple.adjusted_ci95_low_pct:+.2f}% → {best_multiple.adjusted_ci95_high_pct:+.2f}%")
-                best_vars["blocks"].set(f"{best_result.statistical_evidence.positive_temporal_blocks}/{len(best_result.statistical_evidence.temporal_blocks)}")
-                best_vars["overlap"].set(f"E {_fmt_ratio(best_overlap.max_event_overlap_ratio)} / H {_fmt_ratio(best_overlap.max_holding_overlap_ratio)}")
-                best_vars["reason"].set("Причины: " + (", ".join(best_promotion.reasons) if best_promotion.reasons else "нет — все проверки пройдены"))
+                best = results[0]
+                opportunity = best.opportunity
+                decision_vars["decision"].set(f"Решение: {str(_value(best.decision)).upper()}")
+                decision_vars["state"].set(str(_value(best.current_state)))
+                decision_vars["status"].set(str(_value(best.status)))
+                decision_vars["ev"].set(_fmt_pct(_field(opportunity, "expected_value_pct")))
+                decision_vars["risk"].set(_fmt_num(_field(opportunity, "risk_score")))
+                decision_vars["score"].set(_fmt_num(_field(opportunity, "score")))
+                decision_vars["confidence"].set(_fmt_pct(_field(opportunity, "confidence")))
+                decision_vars["reason"].set("Итог сформирован canonical v0.8.14 runtime; решение не создаётся отдельно от этого pipeline.")
             else:
-                best_vars["path"].set("Trading Paths не найдены")
-                best_vars["status"].set("NO RESEARCH PATH")
-                best_vars["reason"].set("Conditional Discovery не предоставил кандидатов.")
-            apply_final_decision(research)
+                decision_vars["decision"].set("Решение: NO VALIDATED PATH")
+                decision_vars["reason"].set("После TRAIN discovery → validation → OOS → Quality Gate финальных путей нет.")
 
         def populate_market_context(benchmark: Any, snapshot: Any) -> None:
             state["market_context"] = snapshot
-            context_vars["status"].set(snapshot.context_status)
-            context_vars["benchmark"].set(f"{benchmark.benchmark_id} / {benchmark.benchmark_kind}")
-            regime_result = getattr(snapshot.market_regime, "result", None)
-            context_vars["regime"].set(str(getattr(regime_result, "regime", regime_result or "UNAVAILABLE")))
-            relative = snapshot.relative_strength
-            context_vars["relative"].set(f"{getattr(relative, 'classification', 'UNAVAILABLE')} ({_fmt_pct(getattr(relative, 'excess_return_pct', None))})")
-            volatility = snapshot.volatility
-            relative_vol = getattr(volatility, "relative_volatility", None)
-            context_vars["volatility"].set(f"{getattr(volatility, 'classification', 'UNAVAILABLE')} ({relative_vol:.2f}x)" if relative_vol is not None else "UNAVAILABLE")
-            context_vars["as_of"].set(str(snapshot.as_of))
-            logger.warning("[V011 MARKET CONTEXT] ticker=%s benchmark=%s status=%s regime=%s relative=%s excess=%s volatility=%s relative_volatility=%s as_of=%s", ticker, benchmark.benchmark_id, snapshot.context_status, getattr(regime_result, "regime", "UNAVAILABLE"), getattr(relative, "classification", "UNAVAILABLE"), getattr(relative, "excess_return_pct", None), getattr(volatility, "classification", "UNAVAILABLE"), relative_vol, snapshot.as_of)
+            context_vars["status"].set(_field(snapshot, "context_status", "UNAVAILABLE"))
+            context_vars["benchmark"].set(f"{_field(benchmark, 'benchmark_id', 'N/A')} / {_field(benchmark, 'benchmark_kind', 'N/A')}")
+            regime_result = _field(_field(snapshot, "market_regime"), "result")
+            context_vars["regime"].set(str(_field(regime_result, "regime", "UNAVAILABLE")))
+            relative = _field(snapshot, "relative_strength")
+            context_vars["relative"].set(f"{_field(relative, 'classification', 'UNAVAILABLE')} ({_fmt_pct(_field(relative, 'excess_return_pct'))})")
+            volatility = _field(snapshot, "volatility")
+            relative_vol = _field(volatility, "relative_volatility")
+            context_vars["volatility"].set(f"{_field(volatility, 'classification', 'UNAVAILABLE')} ({_fmt_num(relative_vol, 2)}x)" if relative_vol is not None else "UNAVAILABLE")
+            context_vars["as_of"].set(str(_field(snapshot, "as_of", "N/A")))
 
         def on_select(_event: Any) -> None:
             selected = tree.selection()
@@ -302,12 +281,11 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
 
         def set_running(value: bool) -> None:
             run_button.configure(state="disabled" if value else "normal")
-            status_var.set("Выполнение v0.8.11 + v0.8.8…" if value else "Готово")
+            status_var.set("Выполнение canonical v0.8.14…" if value else "Готово")
 
         def run() -> None:
             set_running(True)
             try:
-                uid = str(detail["instrument_uid"])
                 response = app.client.get_candles(uid, interval="CANDLE_INTERVAL_DAY", days=2400)
                 candles = _parse_candles(response)
                 if not candles:
@@ -315,36 +293,29 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
                 state["candles"] = candles
 
                 metadata = _unwrap_instrument(app.client.get_instrument(uid))
-                if not _field(metadata, "instrument_type", None):
+                if not _field(metadata, "instrument_type"):
                     metadata = dict(detail)
                     metadata["instrument_type"] = detail.get("instrument_kind", "SHARE")
-                if not _field(metadata, "instrument_uid", None) and isinstance(metadata, dict):
+                if not _field(metadata, "instrument_uid") and isinstance(metadata, dict):
                     metadata["instrument_uid"] = uid
 
-                market_service = MarketContextRuntimeServiceV011(fetcher=app.client.get_candles, indicatives_fetcher=app.client.get_indicatives, find_instrument_fetcher=app.client.find_instrument)
-                benchmark, snapshot = market_service.build(instrument_metadata=metadata, asset_candles=candles, as_of=max(candle.timestamp for candle in candles))
-                populate_market_context(benchmark, snapshot)
+                try:
+                    market_service = MarketContextRuntimeServiceV011(fetcher=app.client.get_candles, indicatives_fetcher=app.client.get_indicatives, find_instrument_fetcher=app.client.find_instrument)
+                    benchmark, snapshot = market_service.build(instrument_metadata=metadata, asset_candles=candles, as_of=max(candle.timestamp for candle in candles))
+                    populate_market_context(benchmark, snapshot)
+                except Exception as exc:
+                    logger.warning("[V014 UI] market context unavailable ticker=%s error=%s", ticker, exc)
+                    context_vars["status"].set("UNAVAILABLE — path analysis continues")
 
-                service = AnalysisServiceV08()
-                adapter = AnalysisTradingPathAdapterV088(service)
-                research = adapter.analyze(instrument_uid=uid, ticker=ticker, candles=candles, profile=profile_var.get())
-                try:
-                    settings = ApplicationSettingsStore().load()
-                    SQLiteStore(settings.storage_path)
-                except Exception:
-                    pass
-                try:
-                    from edward.ui.analysis_ui_v04 import _position_context
-                    state["position"] = _position_context(app, uid)
-                except Exception:
-                    state["position"] = None
-                populate(research)
-                status_var.set("v0.8.11 context + v0.8.8 анализ + Decision Engine завершены")
-                logger.warning("[V088 UI] ticker=%s candidates=%d validated=%d promoted=%d research_only=%d rejected=%d", ticker, len(research.ranked_candidates), len(research.validation_results), sum(getattr(x.status, 'value', x.status) == 'promoted' for x in research.promotion_results), sum(getattr(x.status, 'value', x.status) == 'research_only' for x in research.promotion_results), sum(getattr(x.status, 'value', x.status) == 'rejected' for x in research.promotion_results))
+                runtime = AnalysisPathRuntimeServiceV012()
+                results = runtime.analyze_paths(instrument_uid=uid, ticker=ticker, candles=candles, profile=profile_var.get())
+                populate(results)
+                status_var.set(f"v0.8.14 завершён: {len(results)} финальных Trading Paths")
+                logger.warning("[V014 UI] ticker=%s final_paths=%d adaptive=%d", ticker, len(results), sum(str(x.strategy_family) == "Adaptive Discovery" for x in results))
             except Exception as exc:
-                status_var.set("Ошибка анализа")
-                logger.exception("[V011 UI] ticker=%s market-context integration failed", ticker)
-                messagebox.showerror("Анализ v0.8.11", str(exc))
+                status_var.set("Ошибка canonical анализа")
+                logger.exception("[V014 UI] ticker=%s canonical runtime failed", ticker)
+                messagebox.showerror("Анализ v0.8.14", str(exc))
             finally:
                 set_running(False)
 
