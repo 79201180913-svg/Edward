@@ -7,13 +7,14 @@ from edward.domain import TradingPathCandidate
 from edward.services.analysis_service import Candle
 from edward.services.event_observation_v086 import EventObservationBuilderV086
 from edward.services.expected_value_engine_v08 import ExpectedValueEngine, ExpectedValueResult
+from edward.services.trading_path_adaptive_oos_service_v014 import TradingPathAdaptiveOOSServiceV014
 from edward.services.trading_path_oos_validation_service_v012 import TradingPathOOSValidationServiceV012
 
 logger = logging.getLogger(__name__)
 
 
 class TradingPathExpectedValueServiceV012:
-    """Calculate EV from realized outcomes of one fixed path on OOS windows."""
+    """Calculate EV from realized outcomes of one path on OOS windows."""
 
     @classmethod
     def outcomes(cls, candidate: TradingPathCandidate, candles: Sequence[Candle], *, windows: int = TradingPathOOSValidationServiceV012.DEFAULT_WINDOWS, test_size: int = TradingPathOOSValidationServiceV012.DEFAULT_TEST_SIZE, observations=None) -> tuple[float, ...]:
@@ -21,6 +22,20 @@ class TradingPathExpectedValueServiceV012:
         required = windows * test_size
         if windows < 1 or test_size < 1 or len(ordered) < required:
             return ()
+
+        if TradingPathAdaptiveOOSServiceV014.is_adaptive(candidate):
+            values: list[float] = []
+            base = len(ordered) - required
+            for offset in range(windows):
+                start = base + offset * test_size
+                end = base + (offset + 1) * test_size
+                values.extend(
+                    TradingPathAdaptiveOOSServiceV014.returns_in_range(
+                        candidate, ordered, start=start, end=end
+                    )
+                )
+            return tuple(values)
+
         canonical_observations = observations if observations is not None else EventObservationBuilderV086.build(ordered)
         base = len(ordered) - required
         values: list[float] = []
