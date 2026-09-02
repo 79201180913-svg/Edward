@@ -73,11 +73,7 @@ class TradingPathOpportunity:
 
 @dataclass(frozen=True, slots=True)
 class TradingPathAnalysisV012:
-    """Canonical v0.8.12 analysis contract.
-
-    A Trading Path is the primary unit of analysis. Strategy family identifies
-    the hypothesis family only; it is not itself a trading recommendation.
-    """
+    """Canonical v0.8.12 analysis contract."""
 
     instrument_uid: str
     ticker: str
