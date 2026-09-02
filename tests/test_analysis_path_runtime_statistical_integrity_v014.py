@@ -6,12 +6,16 @@ from edward.services.analysis_service import Candle
 from edward.services.analysis_path_runtime_service_v012 import AnalysisPathRuntimeServiceV012
 
 
+class HashableNamespace(SimpleNamespace):
+    __hash__ = object.__hash__
+
+
 def test_runtime_propagates_statistical_integrity_snapshot_to_final_analysis(monkeypatch):
     candles = [
         Candle(datetime(2025, 1, 1, tzinfo=timezone.utc) + timedelta(hours=i), 100.0, 101.0, 99.0, 100.0, 1000.0)
         for i in range(120)
     ]
-    candidate = SimpleNamespace(
+    candidate = HashableNamespace(
         rule=SimpleNamespace(
             instrument_uid="SBER",
             ticker="SBER",
