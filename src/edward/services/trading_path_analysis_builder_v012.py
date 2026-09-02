@@ -14,8 +14,8 @@ logger = logging.getLogger(__name__)
 class TradingPathAnalysisBuilderV012:
     """Build canonical path analysis from discovered candidates.
 
-    Discovery, ranking and validation remain separate stages. This builder only
-    composes the already implemented services and never produces a trade signal.
+    Validation may target an explicit temporal range so the runtime can keep
+    TRAIN discovery, VALIDATION selection and final OOS evaluation separate.
     """
 
     @classmethod
@@ -23,6 +23,11 @@ class TradingPathAnalysisBuilderV012:
         cls,
         candidates: Sequence[TradingPathCandidate],
         candles: Sequence[Candle],
+        *,
+        validation_windows: int = TradingPathOOSValidationServiceV012.DEFAULT_WINDOWS,
+        validation_test_size: int = TradingPathOOSValidationServiceV012.DEFAULT_TEST_SIZE,
+        validation_start: int | None = None,
+        validation_end: int | None = None,
     ) -> tuple[TradingPathAnalysisV012, ...]:
         ranked = TradingPathRankingServiceV012.rank(tuple(candidates))
         candidate_by_key = {
@@ -54,7 +59,14 @@ class TradingPathAnalysisBuilderV012:
                 logger.warning("[V012 PATH ANALYSIS] candidate lookup failed ticker=%s hypothesis=%s", path.ticker, path.hypothesis)
                 continue
 
-            validation = TradingPathOOSValidationServiceV012.build_validation(candidate, candles)
+            validation = TradingPathOOSValidationServiceV012.build_validation(
+                candidate,
+                candles,
+                windows=validation_windows,
+                test_size=validation_test_size,
+                evaluation_start=validation_start,
+                evaluation_end=validation_end,
+            )
             status = path.status
             if validation.validation.promotion_status == "validated":
                 status = type(path.status).VALIDATED
@@ -83,11 +95,11 @@ class TradingPathAnalysisBuilderV012:
             )
 
         logger.warning(
-            "[V012 PATH ANALYSIS] candidates=%d ranked=%d validated=%d rejected=%d",
-            len(candidates),
-            len(ranked),
+            "[V012 PATH ANALYSIS] candidates=%d ranked=%d validated=%d rejected=%d validation_range=%s:%s",
+            len(candidates), len(ranked),
             sum(item.status.value == "validated" for item in result),
             sum(item.status.value == "rejected" for item in result),
+            validation_start, validation_end,
         )
         return tuple(result)
 
