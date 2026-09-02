@@ -53,4 +53,6 @@ def test_runtime_bridge_sorts_candles_before_discovery(monkeypatch):
         candles=candles,
     )
 
-    assert captured == [tuple(sorted(timestamps))]
+    # v0.8.14 discovery is intentionally TRAIN-only; sorting must therefore
+    # be asserted against the chronologically ordered TRAIN partition.
+    assert captured == [tuple(sorted(timestamps))[:72]]
