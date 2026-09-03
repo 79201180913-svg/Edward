@@ -131,3 +131,81 @@ def test_nested_discovery_never_receives_validation_candles():
     TradingPathWalkForwardServiceV015.nested_validate(
         _candles(), discover=discover, windows=4, train_size=60, validation_size=30)
     assert max_seen == _candles()[149].timestamp
+
+
+def test_nested_aggregates_candidate_stability_across_all_folds():
+    candidate = _candidate()
+    calls = []
+
+    class FakeValidation:
+        counter = 0
+
+        @staticmethod
+        def validate(candidate, candles, **kwargs):
+            FakeValidation.counter += 1
+            calls.append((kwargs["evaluation_start"], kwargs["evaluation_end"]))
+            excess = (1.0, 0.8, 0.2, -0.1)[FakeValidation.counter - 1]
+            return (type("Window", (), {
+                "observations": 5,
+                "mean_return_pct": excess + 1.0,
+                "baseline_return_pct": 1.0,
+                "excess_return_pct": excess,
+                "win_rate_pct": 60.0,
+                "positive": excess > 0,
+            })(),)
+
+    result = TradingPathWalkForwardServiceV015.nested_validate(
+        _candles(),
+        discover=lambda train: (candidate,),
+        windows=4,
+        train_size=60,
+        validation_size=30,
+        evaluator=FakeValidation,
+    )
+
+    assert calls == [(60, 90), (90, 120), (120, 150), (150, 180)]
+    assert len(result.candidate_summaries) == 1
+    _, summary = result.candidate_summaries[0]
+    assert summary.wf_windows == 4
+    assert summary.positive_windows == 3
+    assert summary.persistence_pct == 75.0
+    assert summary.mean_excess_pct == 0.475
+    assert summary.median_excess_pct == 0.5
+    assert summary.worst_window_excess_pct == -0.1
+    assert summary.dispersion_pct > 0.0
+    assert summary.sign_consistency_pct == 75.0
+    assert summary.sample_sufficiency is True
+    assert summary.passed is False
+
+
+def test_nested_candidate_fails_stability_when_not_discovered_in_every_fold():
+    candidate = _candidate()
+    counter = 0
+
+    def discover(train):
+        nonlocal counter
+        counter += 1
+        return (candidate,) if counter != 2 else ()
+
+    class FakeValidation:
+        @staticmethod
+        def validate(candidate, candles, **kwargs):
+            return (type("Window", (), {
+                "observations": 5,
+                "mean_return_pct": 2.0,
+                "baseline_return_pct": 1.0,
+                "excess_return_pct": 1.0,
+                "win_rate_pct": 60.0,
+                "positive": True,
+            })(),)
+
+    result = TradingPathWalkForwardServiceV015.nested_validate(
+        _candles(), discover=discover, windows=4, train_size=60,
+        validation_size=30, evaluator=FakeValidation,
+    )
+    assert len(result.candidate_summaries) == 1
+    _, summary = result.candidate_summaries[0]
+    assert summary.wf_windows == 3
+    assert summary.persistence_pct == 100.0
+    assert summary.sample_sufficiency is False
+    assert summary.passed is False
