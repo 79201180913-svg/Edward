@@ -28,6 +28,19 @@ def _candles(count=120, *, oos_close=100.0):
     return candles
 
 
+def _passing_quality_gate():
+    return SimpleNamespace(
+        statistical_gate=True,
+        wf_gate=True,
+        oos_gate=True,
+        market_context_gate=True,
+        risk_gate=True,
+        current_state_gate=True,
+        passed=True,
+        reasons=(),
+    )
+
+
 def test_runtime_runs_canonical_path_stages(monkeypatch):
     candidate = HashableNamespace(rule=SimpleNamespace(instrument_uid="SBER", ticker="SBER", hypothesis="H1", regime="RANGE", volatility_bucket="Normal", direction="Positive", horizon=5))
     analysis = SimpleNamespace(instrument_uid="SBER", ticker="SBER", strategy_family="H1", hypothesis="H1", regime="RANGE", volatility_bucket="Normal", direction="Positive", horizon=5, evidence=SimpleNamespace(), validation=SimpleNamespace(promotion_status="validated", wf_persistence_pct=None, robustness_score=None, positive_oos_windows_pct=None), market_context=SimpleNamespace(), opportunity=SimpleNamespace(), current_state=SimpleNamespace(), decision=SimpleNamespace(), status=SimpleNamespace(), rank=1)
@@ -44,17 +57,18 @@ def test_runtime_runs_canonical_path_stages(monkeypatch):
     monkeypatch.setattr("edward.services.trading_path_expected_value_service_v012.TradingPathExpectedValueServiceV012.calculate", lambda candidate, candles, **kwargs: SimpleNamespace(expected_value_pct=1.0, edge_reliability_pct=80.0))
     monkeypatch.setattr("edward.services.trading_path_risk_service_v012.TradingPathRiskServiceV012.evaluate", lambda analysis, **kwargs: SimpleNamespace(risk=SimpleNamespace(score=80.0), path_eligible=True))
     monkeypatch.setattr("edward.services.trading_path_opportunity_builder_v012.TradingPathOpportunityBuilderV012.build", lambda analysis, **kwargs: SimpleNamespace(**analysis.__dict__) if hasattr(analysis, "__dict__") else analysis)
-    monkeypatch.setattr("edward.services.trading_path_decision_service_v012.TradingPathDecisionServiceV012.decide", lambda analysis: SimpleNamespace(current_state="entry_ready", decision="buy", status="promotable", reasons=()))
+    monkeypatch.setattr("edward.services.trading_path_quality_gate_service_v015.TradingPathQualityGateServiceV015.evaluate", lambda **kwargs: _passing_quality_gate())
     result = AnalysisPathRuntimeServiceV012().analyze_paths(instrument_uid="SBER", ticker="SBER", candles=_candles())
     assert len(result) == 1
     assert result[0].decision == "buy"
+    assert result[0].quality_gate.passed is True
     assert len(observation_builds) == 1
 
 
 def test_runtime_sends_adaptive_candidate_through_same_downstream_pipeline(monkeypatch):
     adaptive_candidate = TradingPathCandidate(rule=TradingPathRule(instrument_uid="SBER", ticker="SBER", hypothesis="ADAPTIVE_RULE:regime=RANGE AND return_5 >= 0.0", regime="RANGE", volatility_bucket="Adaptive", direction="Positive", horizon=5), evidence=TradingPathEvidence(observations=20, mean_forward_return_pct=1.0, median_forward_return_pct=1.0, win_rate_pct=60.0, baseline_mean_return_pct=0.0, excess_return_pct=1.0, sufficient_sample=True), source_version="0.8.14")
     analysis = SimpleNamespace(instrument_uid="SBER", ticker="SBER", strategy_family="Adaptive Discovery", hypothesis=adaptive_candidate.rule.hypothesis, regime="RANGE", volatility_bucket="Adaptive", direction="Positive", horizon=5, evidence=SimpleNamespace(), validation=SimpleNamespace(promotion_status="validated", wf_persistence_pct=None, robustness_score=None, positive_oos_windows_pct=None), market_context=SimpleNamespace(), opportunity=SimpleNamespace(), current_state=SimpleNamespace(), decision=SimpleNamespace(), status=SimpleNamespace(), rank=1)
-    calls = {"oos": [], "ev": [], "risk": [], "opportunity": [], "decision": []}
+    calls = {"oos": [], "ev": [], "risk": [], "opportunity": [], "quality_gate": []}
     monkeypatch.setattr("edward.services.conditional_discovery_service_v086.ConditionalDiscoveryServiceV086.run", lambda candles: SimpleNamespace(evidence=()))
     monkeypatch.setattr("edward.services.trading_path_candidate_service_v014.TradingPathCandidateServiceV014.from_fixed", lambda discovery, **kwargs: ())
     monkeypatch.setattr("edward.services.trading_path_adaptive_discovery_service_v014.TradingPathAdaptiveDiscoveryServiceV014.run", lambda candles: SimpleNamespace(candidates=(SimpleNamespace(),)))
@@ -68,11 +82,11 @@ def test_runtime_sends_adaptive_candidate_through_same_downstream_pipeline(monke
     monkeypatch.setattr("edward.services.trading_path_expected_value_service_v012.TradingPathExpectedValueServiceV012.calculate", lambda candidate, candles, **kwargs: calls["ev"].append(kwargs) or SimpleNamespace(expected_value_pct=1.0, edge_reliability_pct=80.0))
     monkeypatch.setattr("edward.services.trading_path_risk_service_v012.TradingPathRiskServiceV012.evaluate", lambda analysis_arg, **kwargs: calls["risk"].append(kwargs) or SimpleNamespace(risk=SimpleNamespace(score=80.0), path_eligible=True))
     monkeypatch.setattr("edward.services.trading_path_opportunity_builder_v012.TradingPathOpportunityBuilderV012.build", lambda analysis_arg, **kwargs: calls["opportunity"].append(kwargs) or analysis_arg)
-    monkeypatch.setattr("edward.services.trading_path_decision_service_v012.TradingPathDecisionServiceV012.decide", lambda analysis_arg: calls["decision"].append(analysis_arg) or SimpleNamespace(current_state="entry_ready", decision="buy", status="promotable", reasons=()))
+    monkeypatch.setattr("edward.services.trading_path_quality_gate_service_v015.TradingPathQualityGateServiceV015.evaluate", lambda **kwargs: calls["quality_gate"].append(kwargs) or _passing_quality_gate())
     result = AnalysisPathRuntimeServiceV012().analyze_paths(instrument_uid="SBER", ticker="SBER", candles=_candles())
     assert len(result) == 1
     assert result[0].hypothesis.startswith("ADAPTIVE_RULE:")
-    assert len(calls["oos"]) == len(calls["ev"]) == len(calls["risk"]) == len(calls["opportunity"]) == len(calls["decision"]) == 1
+    assert len(calls["oos"]) == len(calls["ev"]) == len(calls["risk"]) == len(calls["opportunity"]) == len(calls["quality_gate"]) == 1
     assert calls["oos"][0]["evaluation_start"] == 96
     assert calls["oos"][0]["evaluation_end"] == 120
     assert calls["ev"][0]["evaluation_start"] == 96
