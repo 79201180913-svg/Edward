@@ -78,17 +78,7 @@ class AnalysisPathRuntimeServiceV012:
             statistical_integrity = TradingPathStatisticalIntegrityServiceV014.evaluate_candidate_returns(returns_by_candidate, baseline_return_pct_by_horizon=baseline_by_horizon, horizon_by_candidate=horizons, observation_indices_by_candidate=observation_indices_by_candidate)
         return TradingPathCandidatePruningServiceV014.prune(combined, config=CandidatePruningConfigV014(require_statistical_integrity=True), statistical_integrity=statistical_integrity)
 
-    def analyze_paths(
-        self,
-        *,
-        instrument_uid: str,
-        ticker: str,
-        candles: Iterable[Candle],
-        profile: str = "medium_term",
-        risk_profile: str = "balanced",
-        benchmark_candles: Iterable[Candle] | None = None,
-        benchmark_id: str | None = None,
-    ) -> tuple[TradingPathAnalysisV012, ...]:
+    def analyze_paths(self, *, instrument_uid: str, ticker: str, candles: Iterable[Candle], profile: str = "medium_term", risk_profile: str = "balanced", benchmark_candles: Iterable[Candle] | None = None, benchmark_id: str | None = None) -> tuple[TradingPathAnalysisV012, ...]:
         ordered = tuple(sorted(candles, key=lambda item: item.timestamp))
         benchmark_ordered = tuple(sorted(benchmark_candles, key=lambda item: item.timestamp)) if benchmark_candles is not None else None
         train, validation_candles, oos = TradingPathStatisticalIntegrityServiceV014.partition_candles(ordered)
@@ -132,17 +122,18 @@ class AnalysisPathRuntimeServiceV012:
             if integrity is not None or wf_summary is not None:
                 final_validation = TradingPathValidationSummary(wf_persistence_pct=(wf_summary.persistence_pct if wf_summary is not None else final_validation.wf_persistence_pct), robustness_score=final_validation.robustness_score, positive_oos_windows_pct=final_validation.positive_oos_windows_pct, statistical_valid=(integrity.statistically_valid if integrity is not None else final_validation.statistical_valid), overlap_valid=(integrity.overlap_valid if integrity is not None else final_validation.overlap_valid), multiple_testing_valid=(integrity.multiple_testing_valid if integrity is not None else final_validation.multiple_testing_valid), promotion_status=final_validation.promotion_status, effective_sample_size=(integrity.effective_sample_size if integrity is not None else final_validation.effective_sample_size), overlap_ratio_pct=(integrity.overlap_ratio_pct if integrity is not None else final_validation.overlap_ratio_pct), standard_error_pct=(integrity.standard_error_pct if integrity is not None else final_validation.standard_error_pct), z_score=(integrity.z_score if integrity is not None else final_validation.z_score), p_value_one_sided=(integrity.p_value_one_sided if integrity is not None else final_validation.p_value_one_sided), adjusted_p_value=(integrity.adjusted_p_value if integrity is not None else final_validation.adjusted_p_value), hypotheses_tested=(integrity.hypotheses_tested if integrity is not None else final_validation.hypotheses_tested))
             market_context = TradingPathMarketContextServiceV015.build_from_oos(candidate=candidate, instrument_candles=ordered, benchmark_candles=benchmark_ordered, oos_windows=oos_results, benchmark_id=benchmark_id)
+            legacy_market_context = with_opportunity.market_context
             canonical_market_context = TradingPathMarketContext(
                 benchmark_id=market_context.benchmark_id,
-                baseline_rank=with_opportunity.market_context.baseline_rank,
-                context_rank=with_opportunity.market_context.context_rank,
-                rank_delta=with_opportunity.market_context.rank_delta,
-                baseline_score=with_opportunity.market_context.baseline_score,
-                context_adjusted_score=with_opportunity.market_context.context_adjusted_score,
-                score_delta=with_opportunity.market_context.score_delta,
-                regime_compatibility=with_opportunity.market_context.regime_compatibility,
-                relative_strength_component=with_opportunity.market_context.relative_strength_component,
-                volatility_component=with_opportunity.market_context.volatility_component,
+                baseline_rank=_field(legacy_market_context, "baseline_rank"),
+                context_rank=_field(legacy_market_context, "context_rank"),
+                rank_delta=_field(legacy_market_context, "rank_delta"),
+                baseline_score=_field(legacy_market_context, "baseline_score"),
+                context_adjusted_score=_field(legacy_market_context, "context_adjusted_score"),
+                score_delta=_field(legacy_market_context, "score_delta"),
+                regime_compatibility=_field(legacy_market_context, "regime_compatibility"),
+                relative_strength_component=_field(legacy_market_context, "relative_strength_component"),
+                volatility_component=_field(legacy_market_context, "volatility_component"),
                 instrument_return_pct=market_context.instrument_return_pct,
                 instrument_baseline_return_pct=market_context.instrument_baseline_return_pct,
                 regime_baseline_return_pct=market_context.regime_baseline_return_pct,
