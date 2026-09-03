@@ -161,6 +161,19 @@ def _find_label_frame(widget: Any, title_fragment: str) -> Any | None:
     return None
 
 
+def _find_text(widget: Any) -> Any | None:
+    try:
+        if _is_widget(widget, "Text"):
+            return widget
+        for child in widget.winfo_children():
+            found = _find_text(child)
+            if found is not None:
+                return found
+    except tk.TclError:
+        return None
+    return None
+
+
 def _replace_legacy_version_labels(widget: Any) -> None:
     try:
         if _is_widget(widget, "TLabel", "Label"):
@@ -197,6 +210,13 @@ def _render_projection(text: tk.Text, item: Any) -> None:
     text.configure(state="disabled")
 
 
+def _set_text(text: Any, value: str) -> None:
+    text.configure(state="normal")
+    text.delete("1.0", "end")
+    text.insert("1.0", value)
+    text.configure(state="disabled")
+
+
 def _attach_evidence_panel(window: Any, ticker: str) -> None:
     tree = _find_tree(window)
     content = _find_content(window)
@@ -213,50 +233,50 @@ def _attach_evidence_panel(window: Any, ticker: str) -> None:
     legacy_summary = _find_label_frame(window, "Итог v0.8.14")
     legacy_decision = _find_label_frame(window, "Финальный результат canonical runtime")
     legacy_paths = _find_label_frame(window, "Trading Paths — фактический результат v0.8.14")
+    context_frame = _find_label_frame(window, "Market Context — point-in-time")
+    detail_frame = _find_label_frame(window, "Детализация выбранного пути")
+    detail_text = _find_text(detail_frame) if detail_frame is not None else None
+
     if legacy_summary is not None:
         legacy_summary.pack_forget()
     if legacy_decision is not None:
         legacy_decision.pack_forget()
     if legacy_paths is not None:
         legacy_paths.configure(text="Trading Paths — Final canonical paths v0.8.15")
+    if detail_frame is not None:
+        detail_frame.configure(text="v0.8.15 — Canonical Evidence / Quality Gate")
 
-    pipeline_panel = ttk.LabelFrame(content, text="v0.8.15 — Canonical Pipeline", padding=10)
-    first_child = content.winfo_children()[0] if content.winfo_children() else None
-    if first_child is not None and first_child is not pipeline_panel:
-        pipeline_panel.pack(fill="x", pady=(0, 12), before=first_child)
-    else:
-        pipeline_panel.pack(fill="x", pady=(0, 12))
-    pipeline_text = tk.Text(pipeline_panel, height=9, wrap="word")
+    pipeline_panel = ttk.LabelFrame(content, text="v0.8.15 — Canonical Pipeline", padding=6)
+    pipeline_text = tk.Text(pipeline_panel, height=7, wrap="word")
     pipeline_text.pack(fill="x")
     pipeline_text.configure(state="disabled")
-
-    evidence_panel = ttk.LabelFrame(content, text="v0.8.15 — Canonical Evidence / Quality Gate", padding=10)
-    evidence_panel.pack(fill="x", pady=(0, 12))
-    evidence_text = tk.Text(evidence_panel, height=12, wrap="word")
-    evidence_text.pack(fill="x")
-    evidence_text.configure(state="disabled")
+    if context_frame is not None:
+        pipeline_panel.pack(fill="x", pady=(0, 12), before=context_frame)
+    else:
+        pipeline_panel.pack(fill="x", pady=(0, 12))
 
     def refresh(_event: Any = None) -> None:
         snapshot = _LATEST_PIPELINE.get(ticker)
         if snapshot is not None:
             _render_pipeline_summary(pipeline_text, snapshot)
+        if detail_text is None:
+            return
         results = _LATEST_RESULTS.get(ticker, ())
         if not results:
-            evidence_text.configure(state="normal")
-            evidence_text.delete("1.0", "end")
-            evidence_text.insert(
-                "1.0",
+            _set_text(
+                detail_text,
                 "No final canonical path reached the Evidence / Quality Gate stage.\n\n"
-                "See the pipeline summary above for the exact validation → Nested WF funnel.",
+                "Pipeline: Discovery → Statistical Validation → Nested Walk-Forward → Final promotion.\n"
+                "For this run, the canonical funnel ended before final path promotion.\n\n"
+                "Use the pipeline summary above to distinguish statistically validated candidates from paths that survived Nested Walk-Forward stability.",
             )
-            evidence_text.configure(state="disabled")
             return
         selected = tree.selection()
         index = int(selected[0]) if selected and str(selected[0]).isdigit() else 0
         if index >= len(results):
             index = 0
         try:
-            _render_projection(evidence_text, results[index])
+            _render_projection(detail_text, results[index])
         except Exception:
             logger.exception("[V815 UI] evidence projection render failed ticker=%s index=%s", ticker, index)
 
