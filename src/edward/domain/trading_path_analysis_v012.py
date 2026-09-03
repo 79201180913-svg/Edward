@@ -102,6 +102,7 @@ class TradingPathAnalysisV012:
     status: TradingPathAnalysisStatus = TradingPathAnalysisStatus.DISCOVERED
     rank: int | None = None
     independent_oos_evidence: object = None
+    quality_gate: object = None
 
 
 __all__ = [
