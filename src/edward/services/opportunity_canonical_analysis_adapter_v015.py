@@ -38,7 +38,16 @@ class CanonicalOpportunityAnalysisV015:
         benchmark_id: str | None = None,
         force_recompute: bool = False,
     ) -> "CanonicalOpportunityAnalysisV015":
-        del instrument
+        # Opportunity Search already supplies the instrument object. Preserve
+        # benchmark context carried by that object instead of silently dropping
+        # it before the canonical runtime is called.
+        if benchmark_candles is None:
+            benchmark_candles = _field(instrument, "benchmark_candles", None)
+        if benchmark_id is None:
+            benchmark_id = _field(instrument, "benchmark_id", None)
+            if benchmark_id is None:
+                benchmark_id = _field(instrument, "benchmark_instrument_uid", None)
+
         candle_tuple = tuple(candles)
         benchmark_tuple = tuple(benchmark_candles) if benchmark_candles is not None else None
         cache_key = cls._cache_key(instrument_uid, ticker, profile, candle_tuple, benchmark_tuple, benchmark_id)
@@ -184,6 +193,14 @@ class CanonicalOpportunityAnalysisV015:
     @classmethod
     def from_analyses(cls, analyses: Iterable[TradingPathAnalysisV012]) -> "CanonicalOpportunityAnalysisV015":
         return cls(tuple(analyses))
+
+
+def _field(value: object | None, name: str, default: object | None = None) -> object | None:
+    if value is None:
+        return default
+    if isinstance(value, dict):
+        return value.get(name, default)
+    return getattr(value, name, default)
 
 
 __all__ = ["OPPORTUNITY_CANONICAL_ADAPTER_VERSION", "CanonicalOpportunityAnalysisV015"]
