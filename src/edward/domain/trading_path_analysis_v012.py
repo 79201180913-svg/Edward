@@ -97,11 +97,11 @@ class TradingPathAnalysisV012:
     validation: TradingPathValidationSummary = TradingPathValidationSummary()
     market_context: TradingPathMarketContext = TradingPathMarketContext()
     opportunity: TradingPathOpportunity = TradingPathOpportunity()
-    independent_oos_evidence: object = None
     current_state: TradingPathCurrentState = TradingPathCurrentState.WAIT
     decision: TradingPathDecision = TradingPathDecision.WAIT
     status: TradingPathAnalysisStatus = TradingPathAnalysisStatus.DISCOVERED
     rank: int | None = None
+    independent_oos_evidence: object = None
 
 
 __all__ = [
