@@ -148,6 +148,18 @@ def _find_label_frame(widget: Any, title_fragment: str) -> Any | None:
     return None
 
 
+def _replace_legacy_version_labels(widget: Any) -> None:
+    try:
+        if isinstance(widget, ttk.Label):
+            text = str(widget.cget("text"))
+            if "v0.8.14 Adaptive Discovery" in text:
+                widget.configure(text="v0.8.15 Robust Walk-Forward · Canonical Path Runtime")
+        for child in widget.winfo_children():
+            _replace_legacy_version_labels(child)
+    except tk.TclError:
+        return
+
+
 def _render_projection(text: tk.Text, item: Any) -> None:
     projection = TradingPathUIEvidenceProjectionServiceV015.build(item)
     reasons = ", ".join(projection.quality_gate_reasons) if projection.quality_gate_reasons else "—"
@@ -178,6 +190,12 @@ def _attach_evidence_panel(window: Any, ticker: str) -> None:
     if tree is None or content is None:
         logger.warning("[V815 UI] canonical widgets not found ticker=%s", ticker)
         return
+
+    _replace_legacy_version_labels(window)
+    try:
+        window.title(f"Канонический анализ v0.8.15 — {ticker}")
+    except tk.TclError:
+        pass
 
     legacy_summary = _find_label_frame(window, "Итог v0.8.14")
     legacy_decision = _find_label_frame(window, "Финальный результат canonical runtime")
