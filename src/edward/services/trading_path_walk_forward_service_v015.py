@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from statistics import mean, median, pstdev
 from typing import Callable, Sequence
 
@@ -63,7 +64,7 @@ class TradingPathWalkForwardServiceV015:
 
     For nested execution, discovery is rerun independently inside every TRAIN
     fold. Validation candles are never supplied to the discovery callback.
-    Candidate stability is aggregated across all sequential validation folds.
+    Candidate stability is aggregated across sequential validation folds.
     """
 
     VERSION = "0.8.15"
@@ -89,12 +90,9 @@ class TradingPathWalkForwardServiceV015:
             return ()
         first_train_end = len(ordered) - windows * validation_size
         return tuple(
-            (
-                0,
-                first_train_end + offset * validation_size,
-                first_train_end + offset * validation_size,
-                first_train_end + (offset + 1) * validation_size,
-            )
+            (0, first_train_end + offset * validation_size,
+             first_train_end + offset * validation_size,
+             first_train_end + (offset + 1) * validation_size)
             for offset in range(windows)
         )
 
@@ -102,13 +100,8 @@ class TradingPathWalkForwardServiceV015:
     def _candidate_key(candidate: TradingPathCandidate) -> tuple[object, ...]:
         rule = candidate.rule
         return (
-            rule.instrument_uid,
-            rule.ticker,
-            rule.hypothesis,
-            rule.regime,
-            rule.volatility_bucket,
-            rule.direction,
-            rule.horizon,
+            rule.instrument_uid, rule.ticker, rule.hypothesis,
+            rule.regime, rule.volatility_bucket, rule.direction, rule.horizon,
         )
 
     @classmethod
@@ -161,19 +154,9 @@ class TradingPathWalkForwardServiceV015:
         validation_size: int = DEFAULT_VALIDATION_SIZE,
         evaluator: Callable[..., object] | None = None,
     ) -> NestedWalkForwardResultV015:
-        """Run discovery independently in each expanding TRAIN fold.
-
-        The discovery callback receives only candles before validation_start.
-        Candidates are evaluated only inside that fold's validation range and
-        then aggregated by canonical candidate identity across folds.
-        """
+        """Run discovery independently in each expanding TRAIN fold."""
         ordered = tuple(sorted(candles, key=lambda item: item.timestamp))
-        ranges = cls.build_windows(
-            ordered,
-            windows=windows,
-            train_size=train_size,
-            validation_size=validation_size,
-        )
+        ranges = cls.build_windows(ordered, windows=windows, train_size=train_size, validation_size=validation_size)
         if not ranges:
             return NestedWalkForwardResultV015(folds=(), candidate_summaries=())
 
@@ -184,35 +167,22 @@ class TradingPathWalkForwardServiceV015:
         for fold_index, (_, train_end, validation_start, validation_end) in enumerate(ranges, 1):
             train_candles = ordered[:train_end]
             discovered = tuple(discover(train_candles))
-            folds.append(
-                NestedWalkForwardFoldV015(
-                    index=fold_index,
-                    train_start=0,
-                    train_end=train_end,
-                    validation_start=validation_start,
-                    validation_end=validation_end,
-                    discovered_candidates=len(discovered),
-                    evaluated_candidates=len(discovered),
-                )
-            )
+            folds.append(NestedWalkForwardFoldV015(
+                index=fold_index, train_start=0, train_end=train_end,
+                validation_start=validation_start, validation_end=validation_end,
+                discovered_candidates=len(discovered), evaluated_candidates=len(discovered),
+            ))
             for candidate in discovered:
                 result = validation_service.validate(
-                    candidate,
-                    ordered,
-                    windows=1,
-                    test_size=validation_size,
-                    evaluation_start=validation_start,
-                    evaluation_end=validation_end,
+                    candidate, ordered, windows=1, test_size=validation_size,
+                    evaluation_start=validation_start, evaluation_end=validation_end,
                 )
                 if not result:
                     continue
                 item = result[0]
                 window = WalkForwardWindowV015(
-                    index=fold_index,
-                    train_start=0,
-                    train_end=train_end,
-                    validation_start=validation_start,
-                    validation_end=validation_end,
+                    index=fold_index, train_start=0, train_end=train_end,
+                    validation_start=validation_start, validation_end=validation_end,
                     candidate_observations=item.observations,
                     mean_return_pct=item.mean_return_pct,
                     baseline_return_pct=item.baseline_return_pct,
@@ -221,9 +191,7 @@ class TradingPathWalkForwardServiceV015:
                     positive=item.positive and item.observations >= cls.MIN_VALIDATION_OBSERVATIONS,
                 )
                 evaluated.append((candidate, WalkForwardSummaryV015(
-                    windows=(window,),
-                    wf_windows=1,
-                    positive_windows=int(window.positive),
+                    windows=(window,), wf_windows=1, positive_windows=int(window.positive),
                     persistence_pct=100.0 if window.positive else 0.0,
                     mean_excess_pct=window.excess_return_pct,
                     median_excess_pct=window.excess_return_pct,
@@ -237,8 +205,7 @@ class TradingPathWalkForwardServiceV015:
         candidate_summaries = cls._aggregate_summaries(evaluated, expected_windows=windows)
         logger.warning(
             "[V015 NESTED WALK FORWARD] folds=%d discovered=%d evaluated=%d stable_candidates=%d",
-            len(folds),
-            sum(item.discovered_candidates for item in folds),
+            len(folds), sum(item.discovered_candidates for item in folds),
             sum(item.evaluated_candidates for item in folds),
             sum(summary.passed for _, summary in candidate_summaries),
         )
@@ -311,9 +278,6 @@ class TradingPathWalkForwardServiceV015:
 
 
 __all__ = [
-    "TradingPathWalkForwardServiceV015",
-    "WalkForwardSummaryV015",
-    "WalkForwardWindowV015",
-    "NestedWalkForwardFoldV015",
-    "NestedWalkForwardResultV015",
+    "TradingPathWalkForwardServiceV015", "WalkForwardSummaryV015", "WalkForwardWindowV015",
+    "NestedWalkForwardFoldV015", "NestedWalkForwardResultV015",
 ]
