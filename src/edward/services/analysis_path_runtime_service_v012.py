@@ -4,7 +4,7 @@ import logging
 from statistics import mean
 from typing import Iterable, Sequence
 
-from edward.domain import TradingPathAnalysisV012, TradingPathValidationSummary
+from edward.domain import TradingPathAnalysisV012, TradingPathValidationSummary, TradingPathMarketContext
 from edward.services.analysis_service import Candle
 from edward.services.event_observation_v086 import EventObservationBuilderV086
 from edward.services.trading_path_adaptive_discovery_service_v014 import TradingPathAdaptiveDiscoveryServiceV014
@@ -19,6 +19,7 @@ from edward.services.trading_path_opportunity_builder_v012 import TradingPathOpp
 from edward.services.trading_path_risk_service_v012 import TradingPathRiskServiceV012
 from edward.services.trading_path_statistical_integrity_service_v014 import TradingPathStatisticalIntegrityServiceV014
 from edward.services.trading_path_walk_forward_service_v015 import TradingPathWalkForwardServiceV015
+from edward.services.trading_path_market_context_service_v015 import TradingPathMarketContextServiceV015
 
 logger = logging.getLogger(__name__)
 
@@ -77,8 +78,19 @@ class AnalysisPathRuntimeServiceV012:
             statistical_integrity = TradingPathStatisticalIntegrityServiceV014.evaluate_candidate_returns(returns_by_candidate, baseline_return_pct_by_horizon=baseline_by_horizon, horizon_by_candidate=horizons, observation_indices_by_candidate=observation_indices_by_candidate)
         return TradingPathCandidatePruningServiceV014.prune(combined, config=CandidatePruningConfigV014(require_statistical_integrity=True), statistical_integrity=statistical_integrity)
 
-    def analyze_paths(self, *, instrument_uid: str, ticker: str, candles: Iterable[Candle], profile: str = "medium_term", risk_profile: str = "balanced") -> tuple[TradingPathAnalysisV012, ...]:
+    def analyze_paths(
+        self,
+        *,
+        instrument_uid: str,
+        ticker: str,
+        candles: Iterable[Candle],
+        profile: str = "medium_term",
+        risk_profile: str = "balanced",
+        benchmark_candles: Iterable[Candle] | None = None,
+        benchmark_id: str | None = None,
+    ) -> tuple[TradingPathAnalysisV012, ...]:
         ordered = tuple(sorted(candles, key=lambda item: item.timestamp))
+        benchmark_ordered = tuple(sorted(benchmark_candles, key=lambda item: item.timestamp)) if benchmark_candles is not None else None
         train, validation_candles, oos = TradingPathStatisticalIntegrityServiceV014.partition_candles(ordered)
         split = TradingPathStatisticalIntegrityServiceV014.temporal_split(ordered)
         nested = TradingPathWalkForwardServiceV015.nested_validate(ordered, discover=lambda fold_train: self._discover_train_candidates(fold_train, instrument_uid=instrument_uid, ticker=ticker), windows=TradingPathWalkForwardServiceV015.DEFAULT_WINDOWS, train_size=TradingPathWalkForwardServiceV015.DEFAULT_TRAIN_SIZE, validation_size=TradingPathWalkForwardServiceV015.DEFAULT_VALIDATION_SIZE)
@@ -119,10 +131,33 @@ class AnalysisPathRuntimeServiceV012:
             wf_summary = nested_by_key.get(key)
             if integrity is not None or wf_summary is not None:
                 final_validation = TradingPathValidationSummary(wf_persistence_pct=(wf_summary.persistence_pct if wf_summary is not None else final_validation.wf_persistence_pct), robustness_score=final_validation.robustness_score, positive_oos_windows_pct=final_validation.positive_oos_windows_pct, statistical_valid=(integrity.statistically_valid if integrity is not None else final_validation.statistical_valid), overlap_valid=(integrity.overlap_valid if integrity is not None else final_validation.overlap_valid), multiple_testing_valid=(integrity.multiple_testing_valid if integrity is not None else final_validation.multiple_testing_valid), promotion_status=final_validation.promotion_status, effective_sample_size=(integrity.effective_sample_size if integrity is not None else final_validation.effective_sample_size), overlap_ratio_pct=(integrity.overlap_ratio_pct if integrity is not None else final_validation.overlap_ratio_pct), standard_error_pct=(integrity.standard_error_pct if integrity is not None else final_validation.standard_error_pct), z_score=(integrity.z_score if integrity is not None else final_validation.z_score), p_value_one_sided=(integrity.p_value_one_sided if integrity is not None else final_validation.p_value_one_sided), adjusted_p_value=(integrity.adjusted_p_value if integrity is not None else final_validation.adjusted_p_value), hypotheses_tested=(integrity.hypotheses_tested if integrity is not None else final_validation.hypotheses_tested))
-            final = TradingPathAnalysisV012(instrument_uid=with_opportunity.instrument_uid, ticker=with_opportunity.ticker, strategy_family=with_opportunity.strategy_family, hypothesis=with_opportunity.hypothesis, regime=with_opportunity.regime, volatility_bucket=with_opportunity.volatility_bucket, direction=with_opportunity.direction, horizon=with_opportunity.horizon, evidence=with_opportunity.evidence, validation=final_validation, market_context=with_opportunity.market_context, opportunity=with_opportunity.opportunity, current_state=result.current_state, decision=result.decision, status=result.status, rank=with_opportunity.rank)
+            market_context = TradingPathMarketContextServiceV015.build_from_oos(candidate=candidate, instrument_candles=ordered, benchmark_candles=benchmark_ordered, oos_windows=oos_results, benchmark_id=benchmark_id)
+            canonical_market_context = TradingPathMarketContext(
+                benchmark_id=market_context.benchmark_id,
+                baseline_rank=with_opportunity.market_context.baseline_rank,
+                context_rank=with_opportunity.market_context.context_rank,
+                rank_delta=with_opportunity.market_context.rank_delta,
+                baseline_score=with_opportunity.market_context.baseline_score,
+                context_adjusted_score=with_opportunity.market_context.context_adjusted_score,
+                score_delta=with_opportunity.market_context.score_delta,
+                regime_compatibility=with_opportunity.market_context.regime_compatibility,
+                relative_strength_component=with_opportunity.market_context.relative_strength_component,
+                volatility_component=with_opportunity.market_context.volatility_component,
+                instrument_return_pct=market_context.instrument_return_pct,
+                instrument_baseline_return_pct=market_context.instrument_baseline_return_pct,
+                regime_baseline_return_pct=market_context.regime_baseline_return_pct,
+                market_return_pct=market_context.market_return_pct,
+                instrument_excess_pct=market_context.instrument_excess_pct,
+                regime_excess_pct=market_context.regime_excess_pct,
+                market_excess_pct=market_context.market_excess_pct,
+                relative_strength_pct=market_context.relative_strength_pct,
+                context_status=market_context.context_status,
+                context_version=market_context.version,
+            )
+            final = TradingPathAnalysisV012(instrument_uid=with_opportunity.instrument_uid, ticker=with_opportunity.ticker, strategy_family=with_opportunity.strategy_family, hypothesis=with_opportunity.hypothesis, regime=with_opportunity.regime, volatility_bucket=with_opportunity.volatility_bucket, direction=with_opportunity.direction, horizon=with_opportunity.horizon, evidence=with_opportunity.evidence, validation=final_validation, market_context=canonical_market_context, opportunity=with_opportunity.opportunity, current_state=result.current_state, decision=result.decision, status=result.status, rank=with_opportunity.rank)
             finalized.append(final)
             opportunity = final.opportunity
-            logger.warning("[V015 PATH DECISION] ticker=%s hypothesis=%s regime=%s volatility=%s direction=%s horizon=%d rank=%s validation=%s ev=%s risk=%s opportunity=%s confidence=%s decision=%s state=%s reason=%s wf_persistence=%s", ticker, final.hypothesis, final.regime, final.volatility_bucket, final.direction, final.horizon, final.rank, _value(final.status), _field(opportunity, "expected_value_pct"), _field(opportunity, "risk_score"), _field(opportunity, "score"), _field(opportunity, "confidence"), _value(final.decision), _value(final.current_state), ",".join(result.reasons) or "READY", _field(final.validation, "wf_persistence_pct"))
+            logger.warning("[V015 PATH DECISION] ticker=%s hypothesis=%s regime=%s volatility=%s direction=%s horizon=%d rank=%s validation=%s ev=%s risk=%s opportunity=%s confidence=%s decision=%s state=%s reason=%s wf_persistence=%s market_context=%s", ticker, final.hypothesis, final.regime, final.volatility_bucket, final.direction, final.horizon, final.rank, _value(final.status), _field(opportunity, "expected_value_pct"), _field(opportunity, "risk_score"), _field(opportunity, "score"), _field(opportunity, "confidence"), _value(final.decision), _value(final.current_state), ",".join(result.reasons) or "READY", _field(final.validation, "wf_persistence_pct"), final.market_context.context_status)
         logger.warning("[V015 PATH RUNTIME] ticker=%s candles=%d train=%d validation=%d oos=%d discovered=%d selected=%d final=%d buy=%d wait=%d pass=%d nested_folds=%d nested_candidates=%d", ticker, len(ordered), len(train), len(validation_candles), len(oos), len(candidates), len(selected), len(finalized), sum(_value(item.decision) == "buy" for item in finalized), sum(_value(item.decision) == "wait" for item in finalized), sum(_value(item.decision) == "pass" for item in finalized), len(nested.folds), len(nested.candidate_summaries))
         return tuple(finalized)
 
