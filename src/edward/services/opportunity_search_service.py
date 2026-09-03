@@ -167,10 +167,6 @@ class OpportunitySearchService:
 
     def _benchmark_context(self, instrument: Any, candles: list[Candle]) -> tuple[list[Candle] | None, str | None]:
         """Build the existing v0.11 point-in-time benchmark context and return its market candles."""
-        # Some unit tests construct the service with __new__ and inject only the
-        # collaborators needed for decision-branch testing. Benchmark context is
-        # optional there, so a missing runtime must behave exactly like an
-        # unsupported client rather than turning the analysis into an error.
         runtime = getattr(self, "market_context_runtime", None)
         if runtime is None:
             return None, None
@@ -208,8 +204,7 @@ class OpportunitySearchService:
             else:
                 estimated_trade_value = max(0.0, portfolio_data.available_cash * 0.10) if not position_data.is_open and portfolio_data.available_cash is not None and price is not None else None; opportunity_engine = getattr(self, "opportunity_engine", None) or UnifiedOpportunityEngineV0821(); opportunity = opportunity_engine.evaluate(analysis, candles, selected, position_weight_pct=position_data.portfolio_weight_pct or portfolio_data.current_weight_pct, target_weight_pct=position_data.target_weight_pct or portfolio_data.target_weight_pct, max_position_weight_pct=portfolio_data.max_position_weight_pct, portfolio_available=portfolio_data.available, available_cash=portfolio_data.available_cash, estimated_trade_value=estimated_trade_value); opportunity_context = opportunity.context; risk = getattr(opportunity, "risk", None); risk_score = float(getattr(risk, "score", 0.0) or 0.0); strategy_context = StrategyContextData(strategy_name=selected.strategy, strategy_score=selected.score, walk_forward_score=selected.test_score, stability_score=selected.stability, confidence=analysis.confidence, quality_gate=selected.quality_gate, entry_signal=bool(selected.quality_gate and opportunity_context.entry_ok), quality_degraded=not selected.quality_gate, available=True)
             risk_context = RiskContextData(risk_gate=opportunity_context.risk_ok, critical_risk=opportunity_context.critical_risk, risk_score=risk_score, max_drawdown_pct=selected.max_drawdown_pct if selected else None, available=True); self._notify(progress_callback, f"Decision Engine: {ticker}", progress_base + progress_span * 0.72, current, total)
-            scenario = Scenario.SINGLE_INSTRUMENT if position_data.is_open else Scenario.OPPORTUNITY_SEARCH
-            request = DecisionRequest(scenario=scenario, instrument=instrument_data, strategy=strategy_context, market=market, position=PositionContextData(quantity=position_data.quantity, average_price=position_data.average_price, current_value=position_data.current_value, unrealized_pnl=position_data.unrealized_pnl, portfolio_weight_pct=position_data.portfolio_weight_pct, target_weight_pct=position_data.target_weight_pct, is_open=position_data.is_open), risk=risk_context, opportunity=opportunity_context, portfolio=portfolio_data)
+            request = DecisionRequest(scenario=Scenario.SINGLE_INSTRUMENT if position_data.is_open else Scenario.OPPORTUNITY_SEARCH, instrument=instrument_data, strategy=strategy_context, market=market, position=position_data, risk=risk_context, opportunity=opportunity_context, portfolio=portfolio_data)
             decision_result = DecisionEngine.evaluate(request)
             quantity = position_data.quantity
             if decision_result.decision in {Decision.BUY, Decision.ADD}: quantity = self._recommended_quantity(price, portfolio_data.available_cash, position_data)
@@ -273,7 +268,7 @@ def _held_positions(positions: Any) -> list[Any]:
     return list(getattr(positions, "securities", None) or getattr(positions, "positions", None) or [])
 
 def _empty_portfolio() -> Any:
-    return type("EmptyPortfolio", (), {"portfolio": PortfolioContextData(portfolio_value=None, available_cash=None, blocked_cash=None, current_weight_pct=0.0, target_weight_pct=None, max_position_weight_pct=None, allows_buy=True, allows_add=False, available=True), "position": PositionContextData(quantity=0.0, average_price=None, current_value=0.0, unrealized_pnl=0.0, portfolio_weight_pct=0.0, target_weight_pct=None, is_open=False)})()
+    return type("EmptyPortfolio", (), {"portfolio": PortfolioContextData(), "position": PositionContextData()})()
 
 def account_id_or_none(positions: Any, portfolio: Any) -> bool:
     return positions is not None or portfolio is not None
