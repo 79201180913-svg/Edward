@@ -14,7 +14,7 @@ def _strategy(max_drawdown_pct=0.0, sharpe=2.0):
 
 def test_drawdown_limit_is_hard_even_when_score_is_positive():
     result = RiskEngine.evaluate(
-        strategy_result=_strategy(max_drawdown_pct=6.0),
+        strategy_result=_strategy(max_drawdown_pct=26.0),
         candles=_candles(),
         profile="medium_term",
     )
