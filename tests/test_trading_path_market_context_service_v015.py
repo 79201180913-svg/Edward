@@ -99,8 +99,17 @@ def _candles(values: list[float]) -> tuple[Candle, ...]:
     )
 
 
+def _trend_up_values(count: int) -> list[float]:
+    """Create deterministic history that MarketRegimeEngineV08 classifies as TREND_UP."""
+    values = [100.0]
+    for index in range(count - 1):
+        step = 0.005 if index % 2 == 0 else 0.025
+        values.append(values[-1] * (1.0 + step))
+    return values
+
+
 def test_market_context_from_oos_uses_same_time_range_and_point_in_time_regime_baseline():
-    instrument = _candles([100.0 + index * 0.2 for index in range(120)])
+    instrument = _candles(_trend_up_values(120))
     benchmark = _candles([100.0 + index * 0.5 for index in range(120)])
     candidate = SimpleNamespace(rule=SimpleNamespace(regime="TREND_UP", horizon=5))
     windows = (SimpleNamespace(start=90, end=120, mean_return_pct=4.0, baseline_return_pct=1.0),)
