@@ -60,11 +60,11 @@ class TradingPathIndependentOOSEvidenceServiceV015:
             return None, None, False
         normalized = tuple(item for item in bounds if item is not None)
         ordered = tuple(sorted(normalized))
-        contiguous_non_overlapping = all(
+        non_overlapping = all(
             ordered[index][1] <= ordered[index + 1][0]
             for index in range(len(ordered) - 1)
         )
-        return ordered[0][0], ordered[-1][1], contiguous_non_overlapping
+        return ordered[0][0], ordered[-1][1], non_overlapping
 
     @classmethod
     def _validate_temporal_independence(
@@ -133,8 +133,10 @@ class TradingPathIndependentOOSEvidenceServiceV015:
         """Aggregate locked OOS windows without applying a decision threshold."""
         windows = tuple(oos_windows)
         derived_oos_start, derived_oos_end, windows_valid = cls._provenance_bounds(windows)
-        effective_oos_start = oos_start if oos_start is not None else derived_oos_start
-        effective_oos_end = oos_end if oos_end is not None else derived_oos_end
+        requested_oos_start = oos_start
+        requested_oos_end = oos_end
+        effective_oos_start = requested_oos_start if requested_oos_start is not None else derived_oos_start
+        effective_oos_end = requested_oos_end if requested_oos_end is not None else derived_oos_end
 
         if not windows:
             return cls._empty_result(
@@ -153,11 +155,11 @@ class TradingPathIndependentOOSEvidenceServiceV015:
             validation_start=validation_start,
             validation_end=validation_end,
         )
-        if oos_start is not None and derived_oos_start != oos_start:
+        if requested_oos_start is not None and requested_oos_start != derived_oos_start:
             provenance_valid = False
-        if oos_end is not None and derived_oos_end != oos_end:
+        if requested_oos_end is not None and requested_oos_end != derived_oos_end:
             provenance_valid = False
-        if validation_end is not None and effective_oos_start is not None and effective_oos_start < validation_end:
+        if validation_end is not None and derived_oos_start is not None and derived_oos_start < validation_end:
             provenance_valid = False
 
         if not provenance_valid:
