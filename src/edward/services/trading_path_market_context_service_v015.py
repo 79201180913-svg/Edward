@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from statistics import mean
+from typing import Sequence
+
+from edward.services.analysis_service import Candle
+from edward.services.market_regime_engine_v08 import MarketRegimeEngineV08
 
 
 MARKET_CONTEXT_VERSION_V015 = "0.8.15"
@@ -11,8 +16,8 @@ class TradingPathMarketContextV015:
     """Return-relative market context evidence for one trading path.
 
     The service is deliberately decision-independent. It measures the path
-    against the instrument baseline, the same-regime baseline and the market
-    benchmark. It does not apply a BUY/WAIT/PASS threshold.
+    against the instrument baseline, the same-regime benchmark baseline and
+    the market benchmark. It does not apply a BUY/WAIT/PASS threshold.
     """
 
     benchmark_id: str | None
@@ -29,13 +34,82 @@ class TradingPathMarketContextV015:
 
 
 class TradingPathMarketContextServiceV015:
-    """Build market-context evidence without changing canonical decisions."""
+    """Build point-in-time market-context evidence for a validated path."""
 
     @staticmethod
     def _excess(value: float | None, baseline: float | None) -> float | None:
         if value is None or baseline is None:
             return None
         return round(float(value) - float(baseline), 10)
+
+    @staticmethod
+    def _forward_returns(
+        candles: Sequence[Candle],
+        *,
+        horizon: int,
+        start: int = 0,
+        end: int | None = None,
+    ) -> tuple[float, ...]:
+        ordered = tuple(sorted(candles, key=lambda item: item.timestamp))
+        finish_end = len(ordered) if end is None else min(end, len(ordered))
+        values: list[float] = []
+        last_start = finish_end - horizon
+        for index in range(max(0, start), max(0, last_start)):
+            first = float(ordered[index].close)
+            finish = float(ordered[index + horizon].close)
+            if first > 0.0 and finish > 0.0:
+                values.append((finish / first - 1.0) * 100.0)
+        return tuple(values)
+
+    @classmethod
+    def _market_returns_for_window(
+        cls,
+        benchmark_candles: Sequence[Candle],
+        *,
+        start_timestamp,
+        end_timestamp,
+        horizon: int,
+    ) -> tuple[float, ...]:
+        ordered = tuple(sorted(benchmark_candles, key=lambda item: item.timestamp))
+        values: list[float] = []
+        for index in range(max(0, len(ordered) - horizon)):
+            start = ordered[index]
+            finish = ordered[index + horizon]
+            if not (start_timestamp <= start.timestamp < end_timestamp):
+                continue
+            if finish.timestamp > end_timestamp:
+                continue
+            first = float(start.close)
+            last = float(finish.close)
+            if first > 0.0 and last > 0.0:
+                values.append((last / first - 1.0) * 100.0)
+        return tuple(values)
+
+    @classmethod
+    def _same_regime_baseline(
+        cls,
+        benchmark_candles: Sequence[Candle],
+        *,
+        regime: str,
+        horizon: int,
+        before_timestamp,
+    ) -> float | None:
+        ordered = tuple(sorted(benchmark_candles, key=lambda item: item.timestamp))
+        values: list[float] = []
+        for index in range(max(0, len(ordered) - horizon)):
+            anchor = ordered[index]
+            finish = ordered[index + horizon]
+            if finish.timestamp >= before_timestamp:
+                continue
+            prefix = ordered[: index + 1]
+            classified = MarketRegimeEngineV08.classify(prefix)
+            if classified.regime != regime:
+                continue
+            first = float(anchor.close)
+            last = float(finish.close)
+            if first > 0.0 and last > 0.0:
+                values.append((last / first - 1.0) * 100.0)
+        return mean(values) if values else None
 
     @classmethod
     def build(
@@ -70,6 +144,67 @@ class TradingPathMarketContextServiceV015:
             market_excess_pct=market_excess,
             relative_strength_pct=market_excess,
             context_status=status,
+        )
+
+    @classmethod
+    def build_from_oos(
+        cls,
+        *,
+        candidate,
+        instrument_candles: Sequence[Candle],
+        benchmark_candles: Sequence[Candle] | None,
+        oos_windows: Sequence[object],
+        benchmark_id: str | None = None,
+    ) -> TradingPathMarketContextV015:
+        ordered = tuple(sorted(instrument_candles, key=lambda item: item.timestamp))
+        instrument_returns = tuple(float(item.mean_return_pct) for item in oos_windows)
+        instrument_baselines = tuple(float(item.baseline_return_pct) for item in oos_windows)
+        instrument_return = mean(instrument_returns) if instrument_returns else None
+        instrument_baseline = mean(instrument_baselines) if instrument_baselines else None
+
+        if not benchmark_candles or not oos_windows:
+            return cls.build(
+                instrument_return_pct=instrument_return,
+                instrument_baseline_return_pct=instrument_baseline,
+                regime_baseline_return_pct=None,
+                market_return_pct=None,
+                benchmark_id=benchmark_id,
+            )
+
+        horizon = int(candidate.rule.horizon)
+        market_window_returns: list[float] = []
+        for window in oos_windows:
+            if window.start >= len(ordered) or window.end <= window.start:
+                continue
+            start_timestamp = ordered[window.start].timestamp
+            end_timestamp = ordered[min(window.end - 1, len(ordered) - 1)].timestamp
+            values = cls._market_returns_for_window(
+                benchmark_candles,
+                start_timestamp=start_timestamp,
+                end_timestamp=end_timestamp,
+                horizon=horizon,
+            )
+            if values:
+                market_window_returns.append(mean(values))
+
+        market_return = mean(market_window_returns) if market_window_returns else None
+        first_oos_start = ordered[oos_windows[0].start].timestamp if oos_windows and oos_windows[0].start < len(ordered) else None
+        regime_baseline = (
+            cls._same_regime_baseline(
+                benchmark_candles,
+                regime=str(candidate.rule.regime),
+                horizon=horizon,
+                before_timestamp=first_oos_start,
+            )
+            if first_oos_start is not None
+            else None
+        )
+        return cls.build(
+            instrument_return_pct=instrument_return,
+            instrument_baseline_return_pct=instrument_baseline,
+            regime_baseline_return_pct=regime_baseline,
+            market_return_pct=market_return,
+            benchmark_id=benchmark_id,
         )
 
 
