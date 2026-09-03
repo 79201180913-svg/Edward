@@ -44,12 +44,28 @@ class WalkForwardSummaryV015:
     passed: bool
 
 
-class TradingPathWalkForwardServiceV015:
-    """Sequential walk-forward validation for an already discovered path.
+@dataclass(frozen=True, slots=True)
+class NestedWalkForwardFoldV015:
+    index: int
+    train_start: int
+    train_end: int
+    validation_start: int
+    validation_end: int
+    discovered_candidates: int
+    evaluated_candidates: int
 
-    Discovery is deliberately supplied as a callback. The service never uses
-    future validation data to construct or modify a candidate. Each fold owns a
-    historical TRAIN range followed immediately by an unseen VALIDATION range.
+
+@dataclass(frozen=True, slots=True)
+class NestedWalkForwardResultV015:
+    folds: tuple[NestedWalkForwardFoldV015, ...]
+    candidate_summaries: tuple[tuple[TradingPathCandidate, WalkForwardSummaryV015], ...]
+
+
+class TradingPathWalkForwardServiceV015:
+    """Sequential and nested walk-forward validation.
+
+    For nested execution, discovery is rerun independently inside every TRAIN
+    fold. Validation candles are never supplied to the discovery callback.
     """
 
     VERSION = "0.8.15"
@@ -73,29 +89,105 @@ class TradingPathWalkForwardServiceV015:
         required = train_size + windows * validation_size
         if len(ordered) < required:
             return ()
-
         first_train_end = len(ordered) - windows * validation_size
         return tuple(
-            (
-                first_train_end,
-                first_train_end + offset * validation_size,
-                first_train_end + (offset + 1) * validation_size,
-                train_size,
-            )
+            (0, first_train_end + offset * validation_size,
+             first_train_end + offset * validation_size,
+             first_train_end + (offset + 1) * validation_size)
             for offset in range(windows)
         )
 
     @classmethod
-    def _fold_train_range(
+    def nested_validate(
         cls,
-        fold_index: int,
+        candles: Sequence[Candle],
         *,
-        first_train_end: int,
-        validation_size: int,
-    ) -> tuple[int, int, int, int]:
-        validation_start = first_train_end + fold_index * validation_size
-        validation_end = validation_start + validation_size
-        return (0, validation_start, validation_start, validation_end)
+        discover: Callable[[Sequence[Candle]], Sequence[TradingPathCandidate]],
+        windows: int = DEFAULT_WINDOWS,
+        train_size: int = DEFAULT_TRAIN_SIZE,
+        validation_size: int = DEFAULT_VALIDATION_SIZE,
+        evaluator: Callable[..., object] | None = None,
+    ) -> NestedWalkForwardResultV015:
+        """Run discovery independently in each expanding TRAIN fold.
+
+        The discovery callback receives only candles before validation_start.
+        Candidates are then evaluated only inside that fold's validation range.
+        """
+        ordered = tuple(sorted(candles, key=lambda item: item.timestamp))
+        ranges = cls.build_windows(
+            ordered,
+            windows=windows,
+            train_size=train_size,
+            validation_size=validation_size,
+        )
+        if not ranges:
+            return NestedWalkForwardResultV015(folds=(), candidate_summaries=())
+
+        validation_service = evaluator or TradingPathOOSValidationServiceV012
+        folds: list[NestedWalkForwardFoldV015] = []
+        evaluated: list[tuple[TradingPathCandidate, WalkForwardSummaryV015]] = []
+
+        for fold_index, (_, train_end, validation_start, validation_end) in enumerate(ranges, 1):
+            train_candles = ordered[:train_end]
+            discovered = tuple(discover(train_candles))
+            folds.append(
+                NestedWalkForwardFoldV015(
+                    index=fold_index,
+                    train_start=0,
+                    train_end=train_end,
+                    validation_start=validation_start,
+                    validation_end=validation_end,
+                    discovered_candidates=len(discovered),
+                    evaluated_candidates=len(discovered),
+                )
+            )
+            for candidate in discovered:
+                result = validation_service.validate(
+                    candidate,
+                    ordered,
+                    windows=1,
+                    test_size=validation_size,
+                    evaluation_start=validation_start,
+                    evaluation_end=validation_end,
+                )
+                if not result:
+                    continue
+                item = result[0]
+                window = WalkForwardWindowV015(
+                    index=fold_index,
+                    train_start=0,
+                    train_end=train_end,
+                    validation_start=validation_start,
+                    validation_end=validation_end,
+                    candidate_observations=item.observations,
+                    mean_return_pct=item.mean_return_pct,
+                    baseline_return_pct=item.baseline_return_pct,
+                    excess_return_pct=item.excess_return_pct,
+                    win_rate_pct=item.win_rate_pct,
+                    positive=item.positive and item.observations >= cls.MIN_VALIDATION_OBSERVATIONS,
+                )
+                summary = WalkForwardSummaryV015(
+                    windows=(window,),
+                    wf_windows=1,
+                    positive_windows=int(window.positive),
+                    persistence_pct=100.0 if window.positive else 0.0,
+                    mean_excess_pct=window.excess_return_pct,
+                    median_excess_pct=window.excess_return_pct,
+                    worst_window_excess_pct=window.excess_return_pct,
+                    dispersion_pct=0.0,
+                    sign_consistency_pct=100.0 if window.excess_return_pct > 0 else 0.0,
+                    sample_sufficiency=window.candidate_observations >= cls.MIN_VALIDATION_OBSERVATIONS,
+                    passed=window.positive,
+                )
+                evaluated.append((candidate, summary))
+
+        logger.warning(
+            "[V015 NESTED WALK FORWARD] folds=%d discovered=%d evaluated=%d",
+            len(folds),
+            sum(item.discovered_candidates for item in folds),
+            sum(item.evaluated_candidates for item in folds),
+        )
+        return NestedWalkForwardResultV015(tuple(folds), tuple(evaluated))
 
     @classmethod
     def validate_candidate(
@@ -108,138 +200,65 @@ class TradingPathWalkForwardServiceV015:
         validation_size: int = DEFAULT_VALIDATION_SIZE,
         evaluator: Callable[..., object] | None = None,
     ) -> WalkForwardSummaryV015:
-        """Evaluate one fixed candidate across sequential unseen validation folds.
-
-        The candidate is an explicit output of prior TRAIN discovery. This first
-        implementation therefore validates candidate persistence without silently
-        rerunning discovery against the full history. Nested discovery integration
-        is added by the runtime in the next step, while the fold contract remains
-        reusable and independently testable.
-        """
         ordered = tuple(sorted(candles, key=lambda item: item.timestamp))
         if len(ordered) < train_size + windows * validation_size:
             return cls._empty_summary()
-
         first_train_end = len(ordered) - windows * validation_size
         fold_results: list[WalkForwardWindowV015] = []
         validation_service = evaluator or TradingPathOOSValidationServiceV012
-
         for fold in range(windows):
             validation_start = first_train_end + fold * validation_size
             validation_end = validation_start + validation_size
             result = validation_service.validate(
-                candidate,
-                ordered,
-                windows=1,
-                test_size=validation_size,
-                evaluation_start=validation_start,
-                evaluation_end=validation_end,
+                candidate, ordered, windows=1, test_size=validation_size,
+                evaluation_start=validation_start, evaluation_end=validation_end,
             )
             if not result:
-                fold_results.append(
-                    WalkForwardWindowV015(
-                        index=fold + 1,
-                        train_start=0,
-                        train_end=validation_start,
-                        validation_start=validation_start,
-                        validation_end=validation_end,
-                        candidate_observations=0,
-                        mean_return_pct=0.0,
-                        baseline_return_pct=0.0,
-                        excess_return_pct=0.0,
-                        win_rate_pct=0.0,
-                        positive=False,
-                    )
-                )
                 continue
             item = result[0]
-            fold_results.append(
-                WalkForwardWindowV015(
-                    index=fold + 1,
-                    train_start=0,
-                    train_end=validation_start,
-                    validation_start=validation_start,
-                    validation_end=validation_end,
-                    candidate_observations=item.observations,
-                    mean_return_pct=item.mean_return_pct,
-                    baseline_return_pct=item.baseline_return_pct,
-                    excess_return_pct=item.excess_return_pct,
-                    win_rate_pct=item.win_rate_pct,
-                    positive=item.positive and item.observations >= cls.MIN_VALIDATION_OBSERVATIONS,
-                )
-            )
-
-        sufficient = bool(fold_results) and all(
-            item.candidate_observations >= cls.MIN_VALIDATION_OBSERVATIONS
-            for item in fold_results
-        )
+            fold_results.append(WalkForwardWindowV015(
+                index=fold + 1, train_start=0, train_end=validation_start,
+                validation_start=validation_start, validation_end=validation_end,
+                candidate_observations=item.observations,
+                mean_return_pct=item.mean_return_pct,
+                baseline_return_pct=item.baseline_return_pct,
+                excess_return_pct=item.excess_return_pct,
+                win_rate_pct=item.win_rate_pct,
+                positive=item.positive and item.observations >= cls.MIN_VALIDATION_OBSERVATIONS,
+            ))
+        if not fold_results:
+            return cls._empty_summary()
+        sufficient = all(item.candidate_observations >= cls.MIN_VALIDATION_OBSERVATIONS for item in fold_results)
         positive = sum(item.positive for item in fold_results)
         excess = tuple(item.excess_return_pct for item in fold_results)
-        persistence = positive / len(fold_results) * 100.0 if fold_results else None
-        mean_excess = mean(excess) if excess else None
-        median_excess = median(excess) if excess else None
-        worst = min(excess) if excess else None
-        dispersion = pstdev(excess) if len(excess) > 1 else 0.0 if excess else None
-        sign_consistency = (
-            sum(value > 0.0 for value in excess) / len(excess) * 100.0
-            if excess else None
-        )
-        passed = (
-            sufficient
-            and persistence is not None
-            and persistence >= 75.0
-            and worst is not None
-            and worst > 0.0
-        )
-
+        persistence = positive / len(fold_results) * 100.0
         summary = WalkForwardSummaryV015(
-            windows=tuple(fold_results),
-            wf_windows=len(fold_results),
-            positive_windows=positive,
-            persistence_pct=persistence,
-            mean_excess_pct=mean_excess,
-            median_excess_pct=median_excess,
-            worst_window_excess_pct=worst,
-            dispersion_pct=dispersion,
-            sign_consistency_pct=sign_consistency,
+            windows=tuple(fold_results), wf_windows=len(fold_results), positive_windows=positive,
+            persistence_pct=persistence, mean_excess_pct=mean(excess), median_excess_pct=median(excess),
+            worst_window_excess_pct=min(excess),
+            dispersion_pct=pstdev(excess) if len(excess) > 1 else 0.0,
+            sign_consistency_pct=sum(value > 0 for value in excess) / len(excess) * 100.0,
             sample_sufficiency=sufficient,
-            passed=passed,
+            passed=sufficient and persistence >= 75.0 and min(excess) > 0.0,
         )
         logger.warning(
             "[V015 WALK FORWARD] ticker=%s hypothesis=%s windows=%d positive=%d persistence=%s mean_excess=%s median_excess=%s worst_window=%s dispersion=%s sample_sufficiency=%s passed=%s",
-            candidate.rule.ticker,
-            candidate.rule.hypothesis,
-            summary.wf_windows,
-            summary.positive_windows,
-            summary.persistence_pct,
-            summary.mean_excess_pct,
-            summary.median_excess_pct,
-            summary.worst_window_excess_pct,
-            summary.dispersion_pct,
-            summary.sample_sufficiency,
-            summary.passed,
+            candidate.rule.ticker, candidate.rule.hypothesis, summary.wf_windows,
+            summary.positive_windows, summary.persistence_pct, summary.mean_excess_pct,
+            summary.median_excess_pct, summary.worst_window_excess_pct,
+            summary.dispersion_pct, summary.sample_sufficiency, summary.passed,
         )
         return summary
 
     @staticmethod
     def _empty_summary() -> WalkForwardSummaryV015:
-        return WalkForwardSummaryV015(
-            windows=(),
-            wf_windows=0,
-            positive_windows=0,
-            persistence_pct=None,
-            mean_excess_pct=None,
-            median_excess_pct=None,
-            worst_window_excess_pct=None,
-            dispersion_pct=None,
-            sign_consistency_pct=None,
-            sample_sufficiency=False,
-            passed=False,
-        )
+        return WalkForwardSummaryV015((), 0, 0, None, None, None, None, None, None, False, False)
 
 
 __all__ = [
     "TradingPathWalkForwardServiceV015",
     "WalkForwardSummaryV015",
     "WalkForwardWindowV015",
+    "NestedWalkForwardFoldV015",
+    "NestedWalkForwardResultV015",
 ]
