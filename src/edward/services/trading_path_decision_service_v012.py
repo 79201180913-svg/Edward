@@ -68,10 +68,26 @@ class TradingPathDecisionServiceV012:
             context_status = getattr(market_context, "context_status", None)
             regime_excess = getattr(market_context, "regime_excess_pct", None)
             market_excess = getattr(market_context, "market_excess_pct", None)
-            if context_status != "FULL" or regime_excess is None or market_excess is None:
-                reasons.append("MARKET_CONTEXT_UNAVAILABLE")
-            elif regime_excess <= 0.0 or market_excess <= 0.0:
-                reasons.append("MARKET_CONTEXT_UNFAVORABLE")
+            has_context_data = any(
+                value is not None
+                for value in (
+                    getattr(market_context, "benchmark_id", None),
+                    getattr(market_context, "instrument_return_pct", None),
+                    getattr(market_context, "instrument_baseline_return_pct", None),
+                    getattr(market_context, "regime_baseline_return_pct", None),
+                    getattr(market_context, "market_return_pct", None),
+                    getattr(market_context, "instrument_excess_pct", None),
+                    regime_excess,
+                    market_excess,
+                    getattr(market_context, "relative_strength_pct", None),
+                    context_status,
+                )
+            )
+            if has_context_data:
+                if context_status != "FULL" or regime_excess is None or market_excess is None:
+                    reasons.append("MARKET_CONTEXT_UNAVAILABLE")
+                elif regime_excess <= 0.0 or market_excess <= 0.0:
+                    reasons.append("MARKET_CONTEXT_UNFAVORABLE")
         hard_failures = {"RISK_GATE_FAILED", "PATH_VALIDATION_REJECTED"}
         if any(reason in hard_failures for reason in reasons):
             decision = TradingPathDecisionV012.PASS
