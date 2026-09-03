@@ -11,6 +11,7 @@ from edward.services.decision_engine import DecisionEngine, DecisionRequest, Opp
 from edward.services.forecast_model_selection_service import ForecastModelSelectionService
 from edward.services.instrument_catalog_service import InstrumentCatalogService
 from edward.services.instrument_decision_context_service import InstrumentDecisionContextService
+from edward.services.market_benchmark_resolver_v011 import MarketBenchmarkResolverV011
 from edward.services.market_decision_context_service import MarketDecisionContextService
 from edward.services.opportunity_canonical_analysis_adapter_v015 import CanonicalOpportunityAnalysisV015
 from edward.services.opportunity_analysis_pipeline_v0821 import UnifiedOpportunityEngineV0821
@@ -65,6 +66,24 @@ class OpportunitySearchService:
         self.instrument_context = InstrumentDecisionContextService()
         self.market_context = MarketDecisionContextService()
         self.portfolio_context = PortfolioDecisionContextService()
+        self.market_context_runtime = self._build_market_context_runtime()
+
+    def _build_market_context_runtime(self) -> Any | None:
+        """Reuse the existing v0.11 benchmark/context runtime when supported by the client."""
+        get_candles = getattr(self.client, "get_candles", None)
+        get_indicatives = getattr(self.client, "get_indicatives", None)
+        if not callable(get_candles) or not callable(get_indicatives):
+            return None
+        try:
+            from edward.services.market_context_runtime_service_v011 import MarketContextRuntimeServiceV011
+            return MarketContextRuntimeServiceV011(
+                fetcher=get_candles,
+                indicatives_fetcher=get_indicatives,
+                find_instrument_fetcher=getattr(self.client, "find_instrument", None),
+            )
+        except Exception:
+            logger.exception("[V015 MARKET CONTEXT] failed to initialize existing v0.11 runtime")
+            return None
 
     @staticmethod
     def _notify(progress_callback: ProgressCallback | None, stage: str, percent: float, current: int, total: int) -> None:
@@ -146,6 +165,24 @@ class OpportunitySearchService:
         points = tuple(result.forecast.points)
         return (tuple((p.horizon_days, p.expected_price) for p in points), tuple((p.horizon_days, p.probability_up) for p in points), tuple((p.horizon_days, p.probability_down) for p in points), tuple((p.horizon_days, p.downside_price) for p in points), tuple((p.horizon_days, p.upside_price) for p in points))
 
+    def _benchmark_context(self, instrument: Any, candles: list[Candle]) -> tuple[list[Candle] | None, str | None]:
+        """Build the existing v0.11 point-in-time benchmark context and return its market candles."""
+        runtime = self.market_context_runtime
+        if runtime is None:
+            return None, None
+        try:
+            benchmark, snapshot = runtime.build(instrument_metadata=instrument, asset_candles=candles, as_of=max(item.timestamp for item in candles))
+            benchmark_candles = tuple(getattr(runtime, "last_built_market_candles", ()) or ())
+            benchmark_id = str(getattr(benchmark, "benchmark_id", None) or "") or None
+            if not benchmark_candles:
+                logger.info("[V015 MARKET CONTEXT] ticker=%s benchmark=%s status=%s candles=0", _field(instrument, "ticker", ""), benchmark_id, getattr(snapshot, "context_status", "UNAVAILABLE"))
+                return None, benchmark_id
+            logger.info("[V015 MARKET CONTEXT] ticker=%s benchmark=%s status=%s candles=%d", _field(instrument, "ticker", ""), benchmark_id, getattr(snapshot, "context_status", "UNAVAILABLE"), len(benchmark_candles))
+            return list(benchmark_candles), benchmark_id
+        except Exception:
+            logger.exception("[V015 MARKET CONTEXT] ticker=%s failed", _field(instrument, "ticker", ""))
+            return None, None
+
     def _evaluate_instrument(self, *, instrument: Any, profile: str, positions: Any, portfolio: Any, progress_callback: ProgressCallback | None = None, progress_base: float = 15.0, progress_span: float = 80.0, current: int = 0, total: int = 0) -> OpportunitySearchResult:
         uid = str(_field(instrument, "uid", _field(instrument, "instrument_uid", ""))); ticker = str(_field(instrument, "ticker", "")); name = str(_field(instrument, "name", "")); price = _float_or_none(_field(instrument, "last_price", None))
         position_context = self.portfolio_context.build(positions=positions, portfolio=portfolio, instrument_uid=uid) if positions is not None else _empty_portfolio()
@@ -154,7 +191,8 @@ class OpportunitySearchService:
         try:
             instrument_data = self.instrument_context.build(instrument, _field(instrument, "trading_status", None)); self._notify(progress_callback, f"Market Data: candles {ticker}", progress_base + progress_span * 0.08, current, total); candles = self._get_candles(uid)
             if len(candles) < 150: return self._unavailable(instrument, price, position_data.quantity, f"Недостаточно исторических данных: получено {len(candles)} свечей, требуется не менее 150.")
-            self._notify(progress_callback, f"Анализ стратегий: {ticker}", progress_base + progress_span * 0.28, current, total); analysis = self.analysis.analyze(instrument_uid=uid, ticker=ticker, candles=candles, profile=profile, instrument=instrument); selected = self._best_strategy(analysis.strategies); market = self.market_context.build(last_price=_field(instrument, "last_price", None), candles=candles, market_regime=analysis.market_regime)
+            benchmark_candles, benchmark_id = self._benchmark_context(instrument, candles)
+            self._notify(progress_callback, f"Анализ стратегий: {ticker}", progress_base + progress_span * 0.28, current, total); analysis = self.analysis.analyze(instrument_uid=uid, ticker=ticker, candles=candles, profile=profile, instrument=instrument, benchmark_candles=benchmark_candles, benchmark_id=benchmark_id); selected = self._best_strategy(analysis.strategies); market = self.market_context.build(last_price=_field(instrument, "last_price", None), candles=candles, market_regime=analysis.market_regime)
             forecast = None; forecast_prices = forecast_up = forecast_down = forecast_low = forecast_high = (); self._notify(progress_callback, f"Прогноз цены: {ticker}", progress_base + progress_span * 0.44, current, total)
             if candles and all(isinstance(item, Candle) for item in candles):
                 try:
