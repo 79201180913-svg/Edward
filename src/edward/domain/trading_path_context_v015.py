@@ -22,6 +22,20 @@ class TradingPathContextV015:
     insider: object | None = None
     risk_metadata: object | None = None
     session: object | None = None
+    order_book: object | None = None
+    trades: object | None = None
+    current_signal: object | None = None
+    historical_signals: object | None = None
+    historical_gaps_pct: object | None = None
+    historical_event_vol_pct: object | None = None
+    session_name: str | None = None
+    session_execution_allowed: bool = True
+    current_price: float | None = None
+    current_weight_pct: float = 0.0
+    marginal_risk_pct: float = 0.0
+    diversification_benefit_pct: float = 0.0
+    expected_return_impact_pct: float = 0.0
+    max_position_weight_pct: float | None = None
 
 
 __all__ = ["TradingPathContextV015"]
