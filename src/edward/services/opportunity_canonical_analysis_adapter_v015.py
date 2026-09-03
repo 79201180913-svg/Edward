@@ -39,9 +39,6 @@ class CanonicalOpportunityAnalysisV015:
         context: TradingPathContextV015 | None = None,
         force_recompute: bool = False,
     ) -> "CanonicalOpportunityAnalysisV015":
-        # Opportunity Search already supplies the instrument object. Preserve
-        # benchmark context carried by that object instead of silently dropping
-        # it before the canonical runtime is called.
         if benchmark_candles is None:
             benchmark_candles = _field(instrument, "benchmark_candles", None)
         if benchmark_id is None:
@@ -67,6 +64,7 @@ class CanonicalOpportunityAnalysisV015:
             profile=profile,
             benchmark_candles=benchmark_tuple,
             benchmark_id=benchmark_id,
+            context=context,
         )
         if context is not None:
             analyses = tuple(_attach_context(analysis, context) for analysis in analyses)
@@ -108,7 +106,6 @@ class CanonicalOpportunityAnalysisV015:
 
     @property
     def pipeline_result(self) -> TradingPathAnalysisV012 | None:
-        """Compatibility projection for the existing Opportunity engine."""
         return self.best_analysis
 
     @property
@@ -130,7 +127,6 @@ class CanonicalOpportunityAnalysisV015:
     def best_analysis(self) -> TradingPathAnalysisV012 | None:
         if not self.analyses:
             return None
-
         decision_priority = {"buy": 0, "wait": 1, "pass": 2}
         return min(
             self.analyses,
@@ -168,7 +164,6 @@ class CanonicalOpportunityAnalysisV015:
             )
         else:
             quality_gate = bool(quality_gate_result)
-
         oos_windows = tuple(getattr(independent_oos, "windows", ()) or ()) if independent_oos is not None else ()
         positive_windows_pct = float(getattr(independent_oos, "positive_windows_pct", 0.0) or 0.0)
         positive_return_windows = round(len(oos_windows) * positive_windows_pct / 100.0) if oos_windows else 0
@@ -220,8 +215,6 @@ def _context_from_instrument(instrument: object | None) -> TradingPathContextV01
         return None
     names = TradingPathContextV015.__dataclass_fields__
     values = {name: _field(instrument, name, None) for name in names}
-    # instrument_metadata is always the original source object. Other fields
-    # are copied only when the instrument object explicitly exposes them.
     values["instrument_metadata"] = instrument
     if not any(values[name] is not None for name in names):
         return None
@@ -229,12 +222,6 @@ def _context_from_instrument(instrument: object | None) -> TradingPathContextV01
 
 
 def _attach_context(analysis: object, context: TradingPathContextV015) -> object:
-    """Attach context to canonical dataclasses without breaking test doubles.
-
-    Runtime contracts use the frozen TradingPathAnalysisV012 dataclass, while
-    compatibility tests and downstream adapters may return lightweight objects.
-    Preserve those objects unchanged rather than requiring dataclass semantics.
-    """
     if is_dataclass(analysis) and not isinstance(analysis, type):
         return replace(analysis, context=context)
     return analysis
