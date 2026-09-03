@@ -26,8 +26,6 @@ class TradingPathDecision(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class TradingPathValidationSummary:
-    """Decision-independent validation snapshot for one trading path."""
-
     wf_persistence_pct: float | None = None
     robustness_score: float | None = None
     positive_oos_windows_pct: float | None = None
@@ -47,8 +45,6 @@ class TradingPathValidationSummary:
 
 @dataclass(frozen=True, slots=True)
 class TradingPathMarketContext:
-    """Market-context snapshot used for path ranking."""
-
     benchmark_id: str | None = None
     baseline_rank: int | None = None
     context_rank: int | None = None
@@ -73,8 +69,6 @@ class TradingPathMarketContext:
 
 @dataclass(frozen=True, slots=True)
 class TradingPathOpportunity:
-    """Opportunity snapshot for one concrete trading path."""
-
     score: float | None = None
     confidence: float | None = None
     expected_value_pct: float | None = None
@@ -106,6 +100,7 @@ class TradingPathAnalysisV012:
     quality_gate: object = None
     ev_evidence: object = None
     context: object = None
+    context_evidence: object = None
 
 
 __all__ = [
