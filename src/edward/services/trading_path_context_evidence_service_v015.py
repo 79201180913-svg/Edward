@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import is_dataclass, replace
 from typing import Iterable, Any
 
-from edward.domain import TradingPathContextV015
+from edward.domain import TradingPathAnalysisV012, TradingPathContextV015
 from edward.services.multifactor_analysis_service_v081 import MultiFactorAnalysisServiceV081, MultiFactorResult
 
 
@@ -18,11 +19,7 @@ class TradingPathContextEvidenceServiceV015:
     """
 
     @staticmethod
-    def analyze(
-        *,
-        context: TradingPathContextV015,
-        candles: Iterable[Any] = (),
-    ) -> MultiFactorResult:
+    def analyze(*, context: TradingPathContextV015, candles: Iterable[Any] = ()) -> MultiFactorResult:
         return MultiFactorAnalysisServiceV081.analyze(
             fundamentals=context.fundamentals,
             order_book=context.order_book,
@@ -45,6 +42,20 @@ class TradingPathContextEvidenceServiceV015:
             max_position_weight_pct=context.max_position_weight_pct,
             current_price=context.current_price,
         )
+
+    @classmethod
+    def enrich(
+        cls,
+        analysis: TradingPathAnalysisV012,
+        *,
+        context: TradingPathContextV015 | None,
+        candles: Iterable[Any] = (),
+    ) -> TradingPathAnalysisV012:
+        """Attach consumed contextual evidence to one canonical analysis."""
+        if context is None or not is_dataclass(analysis):
+            return analysis
+        evidence = cls.analyze(context=context, candles=candles)
+        return replace(analysis, context=context, context_evidence=evidence)
 
 
 __all__ = ["CONTEXT_EVIDENCE_VERSION", "TradingPathContextEvidenceServiceV015"]
