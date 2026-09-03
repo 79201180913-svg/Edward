@@ -22,6 +22,8 @@ class TradingPathDecisionReasonV012(StrEnum):
     LOW_SCORE = "OPPORTUNITY_SCORE_BELOW_THRESHOLD"
     LOW_CONFIDENCE = "CONFIDENCE_BELOW_THRESHOLD"
     EVIDENCE_UNAVAILABLE = "EVIDENCE_UNAVAILABLE"
+    MARKET_CONTEXT_UNAVAILABLE = "MARKET_CONTEXT_UNAVAILABLE"
+    MARKET_CONTEXT_UNFAVORABLE = "MARKET_CONTEXT_UNFAVORABLE"
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +40,7 @@ class TradingPathDecisionServiceV012:
         reasons: list[str] = []
         opportunity = analysis.opportunity
         validation = analysis.validation
+        market_context = analysis.market_context
         if analysis.evidence is None:
             reasons.append("EVIDENCE_UNAVAILABLE")
         if validation is None:
@@ -61,6 +64,16 @@ class TradingPathDecisionServiceV012:
                 reasons.append("CONFIDENCE_UNAVAILABLE")
             elif opportunity.confidence < minimum_confidence:
                 reasons.append("CONFIDENCE_BELOW_THRESHOLD")
+        if market_context is None:
+            reasons.append("MARKET_CONTEXT_UNAVAILABLE")
+        else:
+            context_status = getattr(market_context, "context_status", None)
+            regime_excess = getattr(market_context, "regime_excess_pct", None)
+            market_excess = getattr(market_context, "market_excess_pct", None)
+            if context_status != "FULL" or regime_excess is None or market_excess is None:
+                reasons.append("MARKET_CONTEXT_UNAVAILABLE")
+            elif regime_excess <= 0.0 or market_excess <= 0.0:
+                reasons.append("MARKET_CONTEXT_UNFAVORABLE")
         hard_failures = {"RISK_GATE_FAILED", "PATH_VALIDATION_REJECTED"}
         if any(reason in hard_failures for reason in reasons):
             decision = TradingPathDecisionV012.PASS
