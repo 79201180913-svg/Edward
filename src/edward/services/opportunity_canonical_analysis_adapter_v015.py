@@ -14,11 +14,11 @@ OPPORTUNITY_CANONICAL_ADAPTER_VERSION = "0.8.15"
 
 @dataclass(frozen=True, slots=True)
 class CanonicalOpportunityAnalysisV015:
-    """Opportunity-facing view over canonical v0.8.14 path analyses.
+    """Opportunity-facing view over canonical v0.8.15 path analyses.
 
-    The adapter owns no analysis logic. It delegates calculation to the
-    canonical v0.8.14 path runtime and exposes the minimum shape consumed by
-    Opportunity Search.
+    The adapter owns no analysis logic. It preserves the complete canonical
+    result set and exposes a compatibility shape for the existing Opportunity
+    Search consumer without inventing validation evidence.
     """
 
     analyses: tuple[TradingPathAnalysisV012, ...]
@@ -34,11 +34,14 @@ class CanonicalOpportunityAnalysisV015:
         candles: Iterable[Any],
         profile: str = "medium_term",
         instrument: Any | None = None,
+        benchmark_candles: Iterable[Any] | None = None,
+        benchmark_id: str | None = None,
         force_recompute: bool = False,
     ) -> "CanonicalOpportunityAnalysisV015":
         del instrument
         candle_tuple = tuple(candles)
-        cache_key = cls._cache_key(instrument_uid, ticker, profile, candle_tuple)
+        benchmark_tuple = tuple(benchmark_candles) if benchmark_candles is not None else None
+        cache_key = cls._cache_key(instrument_uid, ticker, profile, candle_tuple, benchmark_tuple, benchmark_id)
         if not force_recompute:
             cached = cls._cache.get(cache_key)
             if cached is not None:
@@ -49,6 +52,8 @@ class CanonicalOpportunityAnalysisV015:
             ticker=ticker,
             candles=candle_tuple,
             profile=profile,
+            benchmark_candles=benchmark_tuple,
+            benchmark_id=benchmark_id,
         )
         result = cls.from_analyses(analyses)
         cls._cache[cache_key] = result
@@ -64,11 +69,15 @@ class CanonicalOpportunityAnalysisV015:
         ticker: str,
         profile: str,
         candles: tuple[Any, ...],
+        benchmark_candles: tuple[Any, ...] | None = None,
+        benchmark_id: str | None = None,
     ) -> tuple[str, str, str, str]:
         digest = sha256()
-        for candle in candles:
-            digest.update(repr(candle).encode("utf-8", errors="replace"))
-            digest.update(b"\n")
+        for sequence in (candles, benchmark_candles or ()):
+            for candle in sequence:
+                digest.update(repr(candle).encode("utf-8", errors="replace"))
+                digest.update(b"\n")
+        digest.update(str(benchmark_id or "").encode("utf-8", errors="replace"))
         return (
             str(instrument_uid),
             str(ticker),
@@ -100,9 +109,12 @@ class CanonicalOpportunityAnalysisV015:
     def best_analysis(self) -> TradingPathAnalysisV012 | None:
         if not self.analyses:
             return None
+
+        decision_priority = {"buy": 0, "wait": 1, "pass": 2}
         return min(
             self.analyses,
             key=lambda item: (
+                decision_priority.get(str(getattr(item.decision, "value", item.decision)).lower(), 3),
                 item.rank is None,
                 item.rank if item.rank is not None else 10**9,
                 -(float(item.opportunity.score) if item.opportunity.score is not None else 0.0),
@@ -120,16 +132,27 @@ class CanonicalOpportunityAnalysisV015:
     @staticmethod
     def _strategy_result(analysis: TradingPathAnalysisV012) -> StrategyResult:
         evidence = analysis.evidence
+        independent_oos = analysis.independent_oos_evidence
         return_pct = float(getattr(evidence, "mean_forward_return_pct", 0.0) or 0.0)
         max_drawdown = float(getattr(evidence, "max_drawdown_pct", 0.0) or 0.0)
         score = float(analysis.opportunity.score or 0.0)
         stability = float(analysis.validation.robustness_score or 0.0)
-        quality_gate = bool(
-            analysis.validation.promotion_status in {"validated", "promotable", "promoted"}
-            and analysis.validation.statistical_valid is True
-            and analysis.validation.overlap_valid is not False
-            and analysis.validation.multiple_testing_valid is not False
-        )
+        quality_gate_result = getattr(analysis.quality_gate, "passed", None)
+        if quality_gate_result is None:
+            quality_gate = bool(
+                analysis.validation.promotion_status in {"validated", "promotable", "promoted"}
+                and analysis.validation.statistical_valid is True
+                and analysis.validation.overlap_valid is not False
+                and analysis.validation.multiple_testing_valid is not False
+            )
+        else:
+            quality_gate = bool(quality_gate_result)
+
+        oos_windows = tuple(getattr(independent_oos, "windows", ()) or ()) if independent_oos is not None else ()
+        positive_windows_pct = float(getattr(independent_oos, "positive_windows_pct", 0.0) or 0.0)
+        positive_return_windows = round(len(oos_windows) * positive_windows_pct / 100.0) if oos_windows else 0
+        wf_persistence = float(analysis.validation.wf_persistence_pct or 0.0)
+        risk_gate = bool(analysis.opportunity.risk_gate)
         return StrategyResult(
             strategy=analysis.strategy_family,
             parameters={
@@ -148,12 +171,12 @@ class CanonicalOpportunityAnalysisV015:
             quality_gate=quality_gate,
             score=score,
             train_score=return_pct,
-            test_score=float(analysis.validation.positive_oos_windows_pct or 0.0),
-            wf_windows=1,
-            positive_return_windows=1 if (analysis.validation.positive_oos_windows_pct or 0.0) > 0.0 else 0,
-            risk_ok_windows=1 if analysis.opportunity.risk_gate else 0,
+            test_score=float(getattr(independent_oos, "excess_return_pct", 0.0) or 0.0),
+            wf_windows=len(oos_windows) if oos_windows else 0,
+            positive_return_windows=positive_return_windows,
+            risk_ok_windows=len(oos_windows) if oos_windows and risk_gate else 0,
             positive_sharpe_windows=0,
-            return_consistency=stability,
+            return_consistency=wf_persistence,
             risk_consistency=float(analysis.opportunity.risk_score or 0.0),
             sharpe_consistency=0.0,
         )
