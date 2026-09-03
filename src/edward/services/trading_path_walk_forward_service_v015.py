@@ -132,8 +132,8 @@ class TradingPathWalkForwardServiceV015:
                 wf_windows=len(windows),
                 positive_windows=positive,
                 persistence_pct=persistence,
-                mean_excess_pct=mean(excess),
-                median_excess_pct=median(excess),
+                mean_excess_pct=round(mean(excess), 10),
+                median_excess_pct=round(median(excess), 10),
                 worst_window_excess_pct=min(excess),
                 dispersion_pct=pstdev(excess) if len(excess) > 1 else 0.0,
                 sign_consistency_pct=sum(value > 0 for value in excess) / len(excess) * 100.0,
@@ -256,7 +256,8 @@ class TradingPathWalkForwardServiceV015:
         persistence = positive / len(fold_results) * 100.0
         summary = WalkForwardSummaryV015(
             windows=tuple(fold_results), wf_windows=len(fold_results), positive_windows=positive,
-            persistence_pct=persistence, mean_excess_pct=mean(excess), median_excess_pct=median(excess),
+            persistence_pct=persistence, mean_excess_pct=round(mean(excess), 10),
+            median_excess_pct=round(median(excess), 10),
             worst_window_excess_pct=min(excess),
             dispersion_pct=pstdev(excess) if len(excess) > 1 else 0.0,
             sign_consistency_pct=sum(value > 0 for value in excess) / len(excess) * 100.0,
