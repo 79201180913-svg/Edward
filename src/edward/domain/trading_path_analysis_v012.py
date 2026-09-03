@@ -105,6 +105,7 @@ class TradingPathAnalysisV012:
     independent_oos_evidence: object = None
     quality_gate: object = None
     ev_evidence: object = None
+    context: object = None
 
 
 __all__ = [
