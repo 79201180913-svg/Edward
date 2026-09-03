@@ -118,7 +118,7 @@ class TradingPathWalkForwardServiceV015:
         result: list[tuple[TradingPathCandidate, WalkForwardSummaryV015]] = []
         for key in sorted(grouped, key=str):
             items = grouped[key]
-            windows = tuple(item.windows[0] for item in items if item.windows)
+            windows = tuple(summary.windows[0] for _, summary in items if summary.windows)
             if not windows:
                 continue
             positive = sum(item.positive for item in windows)
