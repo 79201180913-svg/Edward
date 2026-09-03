@@ -53,6 +53,7 @@ from edward.ui.tk_thread_safety_v06 import install_thread_safe_tk_after
 from edward.ui.tick_runtime_guard_v06 import install_tick_runtime_guard
 from edward.ui.autonomous_ui_v07 import install_autonomous_ui
 from edward.ui.analysis_ui_v088_progress import install as install_analysis_ui_v088_progress
+from edward.ui.analysis_ui_v0815 import install as install_analysis_ui_v0815
 from edward.ui.market_context_diagnostic_ui_v011 import install as install_market_context_diagnostic_v011
 from edward.config.settings import Environment
 
@@ -121,6 +122,7 @@ install_thread_safe_tk_after(EdwardApp)
 install_tick_runtime_guard(EdwardApp)
 install_autonomous_ui(EdwardApp)
 install_analysis_ui_v088_progress(EdwardApp, TInvestAdapterClient)
+install_analysis_ui_v0815(EdwardApp, TInvestAdapterClient)
 install_market_context_diagnostic_v011()
 
 
