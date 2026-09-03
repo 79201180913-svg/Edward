@@ -46,7 +46,7 @@ class TradingPathValidationSummary:
 
 @dataclass(frozen=True, slots=True)
 class TradingPathMarketContext:
-    """Market-context snapshot used for path ranking and evidence display."""
+    """Market-context snapshot used for path ranking."""
 
     benchmark_id: str | None = None
     baseline_rank: int | None = None
