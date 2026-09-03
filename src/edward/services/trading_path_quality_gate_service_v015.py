@@ -13,6 +13,7 @@ class TradingPathQualityGateResultV015:
     statistical_gate: bool
     wf_gate: bool
     oos_gate: bool
+    ev_gate: bool
     market_context_gate: bool
     risk_gate: bool
     current_state_gate: bool
@@ -33,6 +34,7 @@ class TradingPathQualityGateServiceV015:
         market_context: object,
         risk_gate: bool | None,
         current_state: object,
+        ev_evidence: object | None = None,
     ) -> TradingPathQualityGateResultV015:
         reasons: list[str] = []
         statistical_gate = (
@@ -55,6 +57,16 @@ class TradingPathQualityGateServiceV015:
         )
         if not oos_gate:
             reasons.append("OOS_GATE_FAILED")
+        if ev_evidence is None:
+            ev_gate = True
+        else:
+            ev_gate = (
+                getattr(ev_evidence, "status", None) == "READY"
+                and getattr(ev_evidence, "positive_ev", False) is True
+                and getattr(ev_evidence, "statistically_positive_ev", False) is True
+            )
+        if not ev_gate:
+            reasons.append("EV_GATE_FAILED")
         market_context_gate = (
             getattr(market_context, "context_status", None) == "FULL"
             and getattr(market_context, "regime_excess_pct", None) is not None
@@ -74,10 +86,11 @@ class TradingPathQualityGateServiceV015:
             statistical_gate=statistical_gate,
             wf_gate=wf_gate,
             oos_gate=oos_gate,
+            ev_gate=ev_gate,
             market_context_gate=market_context_gate,
             risk_gate=risk_gate_result,
             current_state_gate=current_state_gate,
-            passed=all((statistical_gate, wf_gate, oos_gate, market_context_gate, risk_gate_result, current_state_gate)),
+            passed=all((statistical_gate, wf_gate, oos_gate, ev_gate, market_context_gate, risk_gate_result, current_state_gate)),
             reasons=tuple(reasons),
         )
 
