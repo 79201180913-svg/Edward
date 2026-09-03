@@ -113,7 +113,7 @@ class AnalysisPathRuntimeServiceV012:
             if candidate is None:
                 continue
             oos_results = TradingPathOOSValidationServiceV012.validate(candidate, ordered, windows=oos_windows, test_size=oos_test_size, observations=observations, evaluation_start=split.oos_start, evaluation_end=split.oos_end)
-            independent_oos_evidence = TradingPathIndependentOOSEvidenceServiceV015.build(candidate_key=key, oos_windows=oos_results, validation_start=split.validation_start, validation_end=split.validation_end)
+            independent_oos_evidence = TradingPathIndependentOOSEvidenceServiceV015.build(candidate_key=key, oos_windows=oos_results, validation_start=split.validation_start, validation_end=split.validation_end, oos_start=split.oos_start, oos_end=split.oos_end)
             expected_value = TradingPathExpectedValueServiceV012.calculate(candidate, ordered, windows=oos_windows, test_size=oos_test_size, observations=observations, evaluation_start=split.oos_start, evaluation_end=split.oos_end)
             risk_result = TradingPathRiskServiceV012.evaluate(analysis, candles=ordered, profile=profile, oos_windows=oos_results)
             with_opportunity = TradingPathOpportunityBuilderV012.build(analysis, expected_value=expected_value, risk_score=risk_result.risk.score, risk_gate=risk_result.path_eligible, oos_windows=oos_results)
@@ -125,28 +125,7 @@ class AnalysisPathRuntimeServiceV012:
                 final_validation = TradingPathValidationSummary(wf_persistence_pct=(wf_summary.persistence_pct if wf_summary is not None else final_validation.wf_persistence_pct), robustness_score=final_validation.robustness_score, positive_oos_windows_pct=final_validation.positive_oos_windows_pct, statistical_valid=(integrity.statistically_valid if integrity is not None else final_validation.statistical_valid), overlap_valid=(integrity.overlap_valid if integrity is not None else final_validation.overlap_valid), multiple_testing_valid=(integrity.multiple_testing_valid if integrity is not None else final_validation.multiple_testing_valid), promotion_status=final_validation.promotion_status, effective_sample_size=(integrity.effective_sample_size if integrity is not None else final_validation.effective_sample_size), overlap_ratio_pct=(integrity.overlap_ratio_pct if integrity is not None else final_validation.overlap_ratio_pct), standard_error_pct=(integrity.standard_error_pct if integrity is not None else final_validation.standard_error_pct), z_score=(integrity.z_score if integrity is not None else final_validation.z_score), p_value_one_sided=(integrity.p_value_one_sided if integrity is not None else final_validation.p_value_one_sided), adjusted_p_value=(integrity.adjusted_p_value if integrity is not None else final_validation.adjusted_p_value), hypotheses_tested=(integrity.hypotheses_tested if integrity is not None else final_validation.hypotheses_tested))
             market_context = TradingPathMarketContextServiceV015.build_from_oos(candidate=candidate, instrument_candles=ordered, benchmark_candles=benchmark_ordered, oos_windows=oos_results, benchmark_id=benchmark_id)
             legacy_market_context = with_opportunity.market_context
-            canonical_market_context = TradingPathMarketContext(
-                benchmark_id=market_context.benchmark_id,
-                baseline_rank=_field(legacy_market_context, "baseline_rank"),
-                context_rank=_field(legacy_market_context, "context_rank"),
-                rank_delta=_field(legacy_market_context, "rank_delta"),
-                baseline_score=_field(legacy_market_context, "baseline_score"),
-                context_adjusted_score=_field(legacy_market_context, "context_adjusted_score"),
-                score_delta=_field(legacy_market_context, "score_delta"),
-                regime_compatibility=_field(legacy_market_context, "regime_compatibility"),
-                relative_strength_component=_field(legacy_market_context, "relative_strength_component"),
-                volatility_component=_field(legacy_market_context, "volatility_component"),
-                instrument_return_pct=market_context.instrument_return_pct,
-                instrument_baseline_return_pct=market_context.instrument_baseline_return_pct,
-                regime_baseline_return_pct=market_context.regime_baseline_return_pct,
-                market_return_pct=market_context.market_return_pct,
-                instrument_excess_pct=market_context.instrument_excess_pct,
-                regime_excess_pct=market_context.regime_excess_pct,
-                market_excess_pct=market_context.market_excess_pct,
-                relative_strength_pct=market_context.relative_strength_pct,
-                context_status=market_context.context_status,
-                context_version=market_context.version,
-            )
+            canonical_market_context = TradingPathMarketContext(benchmark_id=market_context.benchmark_id, baseline_rank=_field(legacy_market_context, "baseline_rank"), context_rank=_field(legacy_market_context, "context_rank"), rank_delta=_field(legacy_market_context, "rank_delta"), baseline_score=_field(legacy_market_context, "baseline_score"), context_adjusted_score=_field(legacy_market_context, "context_adjusted_score"), score_delta=_field(legacy_market_context, "score_delta"), regime_compatibility=_field(legacy_market_context, "regime_compatibility"), relative_strength_component=_field(legacy_market_context, "relative_strength_component"), volatility_component=_field(legacy_market_context, "volatility_component"), instrument_return_pct=market_context.instrument_return_pct, instrument_baseline_return_pct=market_context.instrument_baseline_return_pct, regime_baseline_return_pct=market_context.regime_baseline_return_pct, market_return_pct=market_context.market_return_pct, instrument_excess_pct=market_context.instrument_excess_pct, regime_excess_pct=market_context.regime_excess_pct, market_excess_pct=market_context.market_excess_pct, relative_strength_pct=market_context.relative_strength_pct, context_status=market_context.context_status, context_version=market_context.version)
             final = TradingPathAnalysisV012(instrument_uid=with_opportunity.instrument_uid, ticker=with_opportunity.ticker, strategy_family=with_opportunity.strategy_family, hypothesis=with_opportunity.hypothesis, regime=with_opportunity.regime, volatility_bucket=with_opportunity.volatility_bucket, direction=with_opportunity.direction, horizon=with_opportunity.horizon, evidence=with_opportunity.evidence, validation=final_validation, market_context=canonical_market_context, opportunity=with_opportunity.opportunity, current_state=result.current_state, decision=result.decision, status=_field(result, "status"), rank=with_opportunity.rank, independent_oos_evidence=independent_oos_evidence)
             finalized.append(final)
             opportunity = final.opportunity
