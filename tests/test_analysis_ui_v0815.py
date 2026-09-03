@@ -25,6 +25,7 @@ def _analysis():
             overlap_valid=True,
             multiple_testing_valid=True,
             wf_persistence_pct=75.0,
+            wf_worst_window_excess_pct=1.8,
         ),
         independent_oos_evidence=SimpleNamespace(
             excess_return_pct=3.4,
