@@ -64,9 +64,7 @@ class TradingPathDecisionServiceV012:
                 reasons.append("CONFIDENCE_UNAVAILABLE")
             elif opportunity.confidence < minimum_confidence:
                 reasons.append("CONFIDENCE_BELOW_THRESHOLD")
-        if market_context is None:
-            reasons.append("MARKET_CONTEXT_UNAVAILABLE")
-        else:
+        if market_context is not None:
             context_status = getattr(market_context, "context_status", None)
             regime_excess = getattr(market_context, "regime_excess_pct", None)
             market_excess = getattr(market_context, "market_excess_pct", None)
