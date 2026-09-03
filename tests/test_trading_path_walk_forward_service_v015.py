@@ -121,13 +121,13 @@ def test_nested_discovery_receives_only_expanding_train_data():
 
 
 def test_nested_discovery_never_receives_validation_candles():
-    max_seen = -1
+    max_seen = None
 
     def discover(train_candles):
         nonlocal max_seen
-        max_seen = max(max_seen, train_candles[-1].timestamp.hour)
+        max_seen = train_candles[-1].timestamp
         return ()
 
     TradingPathWalkForwardServiceV015.nested_validate(
         _candles(), discover=discover, windows=4, train_size=60, validation_size=30)
-    assert max_seen == _candles()[149].timestamp.hour
+    assert max_seen == _candles()[149].timestamp
