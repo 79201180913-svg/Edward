@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from edward.ui.analysis_ui_v0815 import _render_projection
+from edward.ui.analysis_ui_v0815 import _pipeline_snapshot, _render_pipeline_summary, _render_projection
 
 
 class _TextStub:
@@ -20,12 +20,21 @@ class _TextStub:
 
 def _analysis():
     return SimpleNamespace(
+        instrument_uid="uid",
+        ticker="SBER",
+        hypothesis="ADAPTIVE_RULE:test",
+        regime="TREND_UP",
+        volatility_bucket="Adaptive",
+        direction="Positive",
+        horizon=20,
+        strategy_family="Adaptive Discovery",
         validation=SimpleNamespace(
             statistical_valid=True,
             overlap_valid=True,
             multiple_testing_valid=True,
             wf_persistence_pct=75.0,
             wf_worst_window_excess_pct=1.8,
+            promotion_status="validated",
         ),
         independent_oos_evidence=SimpleNamespace(
             excess_return_pct=3.4,
@@ -105,3 +114,57 @@ def test_canonical_ui_does_not_display_opportunity_as_authoritative_ev():
     assert "EV: +2.70%" in text.value
     assert "EV: +99.00%" not in text.value
     assert "legacy confidence are diagnostic only" in text.value
+
+
+def test_canonical_pipeline_snapshot_separates_validation_from_wf_stability():
+    validated = _analysis()
+    rejected = SimpleNamespace(
+        instrument_uid="uid",
+        ticker="SBER",
+        hypothesis="FIXED:test",
+        regime="TREND_UP",
+        volatility_bucket="Normal",
+        direction="Positive",
+        horizon=10,
+        strategy_family="Fixed",
+        validation=SimpleNamespace(promotion_status="rejected"),
+    )
+    nested = SimpleNamespace(
+        folds=(1, 2, 3, 4),
+        candidate_summaries=((validated, SimpleNamespace(passed=False)),),
+    )
+
+    snapshot = _pipeline_snapshot((validated, rejected), nested, ())
+
+    assert snapshot["discovered"] == 2
+    assert snapshot["validated"] == 1
+    assert snapshot["adaptive"] == 1
+    assert snapshot["wf_stable"] == 0
+    assert snapshot["nested_folds"] == 4
+    assert snapshot["nested_candidates"] == 1
+    assert snapshot["final"] == 0
+
+
+def test_canonical_pipeline_summary_explains_zero_final_paths():
+    snapshot = {
+        "discovered": 26,
+        "validated": 9,
+        "adaptive": 18,
+        "wf_stable": 0,
+        "nested_folds": 4,
+        "nested_candidates": 31,
+        "final": 0,
+        "buy": 0,
+        "wait": 0,
+        "pass": 0,
+    }
+    text = _TextStub()
+
+    _render_pipeline_summary(text, snapshot)
+
+    assert "Discovery candidates: 26" in text.value
+    assert "Statistically validated: 9" in text.value
+    assert "Nested WF stable: 0 / 31 evaluated candidates" in text.value
+    assert "Nested WF folds: 4" in text.value
+    assert "Final paths: 0" in text.value
+    assert "validation and final promotion are separate stages" in text.value
