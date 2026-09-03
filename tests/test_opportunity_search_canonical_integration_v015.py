@@ -84,6 +84,8 @@ def test_canonical_opportunity_adapter_delegates_analysis_to_v014_runtime(monkey
         "ticker": "SBER",
         "candles": (1, 2, 3),
         "profile": "medium_term",
+        "benchmark_candles": None,
+        "benchmark_id": None,
     }
     assert result.analyses == expected
 
@@ -202,7 +204,7 @@ def test_canonical_contract_preserves_adaptive_and_fixed_sources():
     assert [item.parameters["source"] for item in view.strategies] == ["fixed", "adaptive"]
     assert view.strategies[0].quality_gate is True
     assert view.strategies[1].quality_gate is True
-    assert view.best_analysis is fixed
+    assert view.best_analysis is adaptive
 
 
 def test_canonical_quality_gate_fails_closed_when_statistical_validity_is_unknown():
