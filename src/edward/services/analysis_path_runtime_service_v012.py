@@ -4,7 +4,7 @@ import logging
 from statistics import mean
 from typing import Iterable, Sequence
 
-from edward.domain import TradingPathAnalysisV012, TradingPathValidationSummary, TradingPathMarketContext, TradingPathCurrentState, TradingPathDecision, TradingPathAnalysisStatus
+from edward.domain import TradingPathAnalysisV012, TradingPathValidationSummary, TradingPathMarketContext, TradingPathCurrentState, TradingPathDecision, TradingPathAnalysisStatus, TradingPathContextV015
 from edward.services.analysis_service import Candle
 from edward.services.event_observation_v086 import EventObservationBuilderV086
 from edward.services.trading_path_adaptive_discovery_service_v014 import TradingPathAdaptiveDiscoveryServiceV014
@@ -89,7 +89,7 @@ class AnalysisPathRuntimeServiceV012:
             statistical_integrity = TradingPathStatisticalIntegrityServiceV014.evaluate_candidate_returns(returns_by_candidate, baseline_return_pct_by_horizon=baseline_by_horizon, horizon_by_candidate=horizons, observation_indices_by_candidate=observation_indices_by_candidate)
         return TradingPathCandidatePruningServiceV014.prune(combined, config=CandidatePruningConfigV014(require_statistical_integrity=True), statistical_integrity=statistical_integrity)
 
-    def analyze_paths(self, *, instrument_uid: str, ticker: str, candles: Iterable[Candle], profile: str = "medium_term", risk_profile: str = "balanced", benchmark_candles: Iterable[Candle] | None = None, benchmark_id: str | None = None) -> tuple[TradingPathAnalysisV012, ...]:
+    def analyze_paths(self, *, instrument_uid: str, ticker: str, candles: Iterable[Candle], profile: str = "medium_term", risk_profile: str = "balanced", benchmark_candles: Iterable[Candle] | None = None, benchmark_id: str | None = None, context: TradingPathContextV015 | None = None) -> tuple[TradingPathAnalysisV012, ...]:
         ordered = tuple(sorted(candles, key=lambda item: item.timestamp))
         benchmark_ordered = tuple(sorted(benchmark_candles, key=lambda item: item.timestamp)) if benchmark_candles is not None else None
         train, validation_candles, oos = TradingPathStatisticalIntegrityServiceV014.partition_candles(ordered)
@@ -139,7 +139,7 @@ class AnalysisPathRuntimeServiceV012:
             quality_gate = TradingPathQualityGateServiceV015.evaluate(validation=final_validation, wf_summary=wf_summary, independent_oos_evidence=independent_oos_evidence, market_context=canonical_market_context, risk_gate=risk_result.path_eligible, current_state=pre_gate_current_state, ev_evidence=ev_evidence)
             hard_gate_failures = {"STATISTICAL_GATE_FAILED", "WF_GATE_FAILED", "OOS_GATE_FAILED", "EV_GATE_FAILED", "RISK_GATE_FAILED", "CURRENT_STATE_GATE_FAILED"}
             if quality_gate.passed or not any(reason in hard_gate_failures for reason in quality_gate.reasons):
-                decision_input = TradingPathAnalysisV012(instrument_uid=with_opportunity.instrument_uid, ticker=with_opportunity.ticker, strategy_family=with_opportunity.strategy_family, hypothesis=with_opportunity.hypothesis, regime=with_opportunity.regime, volatility_bucket=with_opportunity.volatility_bucket, direction=with_opportunity.direction, horizon=with_opportunity.horizon, evidence=with_opportunity.evidence, validation=final_validation, market_context=canonical_market_context, opportunity=with_opportunity.opportunity, current_state=with_opportunity.current_state, decision=with_opportunity.decision, status=with_opportunity.status, rank=with_opportunity.rank)
+                decision_input = TradingPathAnalysisV012(instrument_uid=with_opportunity.instrument_uid, ticker=with_opportunity.ticker, strategy_family=with_opportunity.strategy_family, hypothesis=with_opportunity.hypothesis, regime=with_opportunity.regime, volatility_bucket=with_opportunity.volatility_bucket, direction=with_opportunity.direction, horizon=with_opportunity.horizon, evidence=with_opportunity.evidence, validation=final_validation, market_context=canonical_market_context, opportunity=with_opportunity.opportunity, current_state=with_opportunity.current_state, decision=with_opportunity.decision, status=with_opportunity.status, rank=with_opportunity.rank, context=context)
                 decision_result = TradingPathDecisionServiceV012.decide(decision_input)
                 final_current_state = decision_result.current_state
                 final_decision = TradingPathDecision(_value(decision_result.decision))
@@ -150,7 +150,7 @@ class AnalysisPathRuntimeServiceV012:
                 final_decision = TradingPathDecision.PASS
                 final_status = TradingPathAnalysisStatus.REJECTED
                 decision_reasons = quality_gate.reasons
-            final = TradingPathAnalysisV012(instrument_uid=with_opportunity.instrument_uid, ticker=with_opportunity.ticker, strategy_family=with_opportunity.strategy_family, hypothesis=with_opportunity.hypothesis, regime=with_opportunity.regime, volatility_bucket=with_opportunity.volatility_bucket, direction=with_opportunity.direction, horizon=with_opportunity.horizon, evidence=with_opportunity.evidence, validation=final_validation, market_context=canonical_market_context, opportunity=with_opportunity.opportunity, current_state=final_current_state, decision=final_decision, status=final_status, rank=with_opportunity.rank, independent_oos_evidence=independent_oos_evidence, quality_gate=quality_gate, ev_evidence=ev_evidence)
+            final = TradingPathAnalysisV012(instrument_uid=with_opportunity.instrument_uid, ticker=with_opportunity.ticker, strategy_family=with_opportunity.strategy_family, hypothesis=with_opportunity.hypothesis, regime=with_opportunity.regime, volatility_bucket=with_opportunity.volatility_bucket, direction=with_opportunity.direction, horizon=with_opportunity.horizon, evidence=with_opportunity.evidence, validation=final_validation, market_context=canonical_market_context, opportunity=with_opportunity.opportunity, current_state=final_current_state, decision=final_decision, status=final_status, rank=with_opportunity.rank, independent_oos_evidence=independent_oos_evidence, quality_gate=quality_gate, ev_evidence=ev_evidence, context=context)
             finalized.append(final)
             opportunity = final.opportunity
             logger.warning("[V015 PATH DECISION] ticker=%s hypothesis=%s regime=%s volatility=%s direction=%s horizon=%d rank=%s validation=%s ev=%s risk=%s opportunity=%s confidence=%s decision=%s state=%s reason=%s wf_persistence=%s market_context=%s oos_evidence=%s ev_evidence=%s quality_gate=%s quality_reasons=%s", ticker, final.hypothesis, final.regime, final.volatility_bucket, final.direction, final.horizon, final.rank, _value(final.status), _field(opportunity, "expected_value_pct"), _field(opportunity, "risk_score"), _field(opportunity, "score"), _field(opportunity, "confidence"), _value(final.decision), _value(final.current_state), ",".join(decision_reasons) or "READY", _field(final.validation, "wf_persistence_pct"), final.market_context.context_status, independent_oos_evidence.status, ev_evidence.status, quality_gate.passed, ",".join(quality_gate.reasons) or "READY")
