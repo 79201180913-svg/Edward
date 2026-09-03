@@ -7,6 +7,7 @@ from typing import Any, ClassVar, Iterable
 from edward.domain import TradingPathAnalysisV012, TradingPathContextV015
 from edward.services.analysis_service import StrategyResult
 from edward.services.analysis_path_runtime_service_v012 import AnalysisPathRuntimeServiceV012
+from edward.services.trading_path_context_evidence_service_v015 import TradingPathContextEvidenceServiceV015
 
 
 OPPORTUNITY_CANONICAL_ADAPTER_VERSION = "0.8.15"
@@ -68,6 +69,7 @@ class CanonicalOpportunityAnalysisV015:
         )
         if context is not None:
             analyses = tuple(_attach_context(analysis, context) for analysis in analyses)
+            analyses = tuple(_attach_context_evidence(analysis, context, candle_tuple) for analysis in analyses)
         result = cls.from_analyses(analyses)
         cls._cache[cache_key] = result
         return result
@@ -225,6 +227,13 @@ def _attach_context(analysis: object, context: TradingPathContextV015) -> object
     if is_dataclass(analysis) and not isinstance(analysis, type):
         return replace(analysis, context=context)
     return analysis
+
+
+def _attach_context_evidence(analysis: object, context: TradingPathContextV015, candles: tuple[Any, ...]) -> object:
+    if not is_dataclass(analysis) or isinstance(analysis, type):
+        return analysis
+    evidence = TradingPathContextEvidenceServiceV015.analyze(context=context, candles=candles)
+    return replace(analysis, context_evidence=evidence)
 
 
 __all__ = ["OPPORTUNITY_CANONICAL_ADAPTER_VERSION", "CanonicalOpportunityAnalysisV015"]
