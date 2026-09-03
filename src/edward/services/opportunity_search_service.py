@@ -167,7 +167,11 @@ class OpportunitySearchService:
 
     def _benchmark_context(self, instrument: Any, candles: list[Candle]) -> tuple[list[Candle] | None, str | None]:
         """Build the existing v0.11 point-in-time benchmark context and return its market candles."""
-        runtime = self.market_context_runtime
+        # Some unit tests construct the service with __new__ and inject only the
+        # collaborators needed for decision-branch testing. Benchmark context is
+        # optional there, so a missing runtime must behave exactly like an
+        # unsupported client rather than turning the analysis into an error.
+        runtime = getattr(self, "market_context_runtime", None)
         if runtime is None:
             return None, None
         try:
@@ -203,82 +207,73 @@ class OpportunitySearchService:
                 opportunity_context = OpportunityContext(0.0, False, False, False, False, True); strategy_context = StrategyContextData(strategy_name=None, strategy_score=0.0, quality_gate=False, available=True); risk_score = 0.0
             else:
                 estimated_trade_value = max(0.0, portfolio_data.available_cash * 0.10) if not position_data.is_open and portfolio_data.available_cash is not None and price is not None else None; opportunity_engine = getattr(self, "opportunity_engine", None) or UnifiedOpportunityEngineV0821(); opportunity = opportunity_engine.evaluate(analysis, candles, selected, position_weight_pct=position_data.portfolio_weight_pct or portfolio_data.current_weight_pct, target_weight_pct=position_data.target_weight_pct or portfolio_data.target_weight_pct, max_position_weight_pct=portfolio_data.max_position_weight_pct, portfolio_available=portfolio_data.available, available_cash=portfolio_data.available_cash, estimated_trade_value=estimated_trade_value); opportunity_context = opportunity.context; risk = getattr(opportunity, "risk", None); risk_score = float(getattr(risk, "score", 0.0) or 0.0); strategy_context = StrategyContextData(strategy_name=selected.strategy, strategy_score=selected.score, walk_forward_score=selected.test_score, stability_score=selected.stability, confidence=analysis.confidence, quality_gate=selected.quality_gate, entry_signal=bool(selected.quality_gate and opportunity_context.entry_ok), quality_degraded=not selected.quality_gate, available=True)
-            risk_context = RiskContextData(risk_gate=opportunity_context.risk_ok, critical_risk=opportunity_context.critical_risk, risk_score=risk_score, max_drawdown_pct=selected.max_drawdown_pct if selected else None, available=True); self._notify(progress_callback, f"Decision Engine: {ticker}", progress_base + progress_span * 0.78, current, total)
-            request = DecisionRequest(scenario=Scenario.SINGLE_INSTRUMENT if position_data.is_open else Scenario.OPPORTUNITY_SEARCH, instrument=instrument_data, market=market, strategy=strategy_context, risk=risk_context, position=position_data, portfolio=portfolio_data, opportunity=opportunity_context, portfolio_allows_buy=portfolio_data.allows_buy, portfolio_allows_add=portfolio_data.allows_add, market_data_available=market.available, strategy_analysis_available=True, risk_analysis_available=True, portfolio_context_available=(not position_data.is_open) or portfolio_data.available, instrument_available=instrument_data.available, profile=profile); decision = DecisionEngine.evaluate(request); decision_value = decision.decision.value if decision.decision else None
-            trade_plan = None; recommended_quantity = 0; recommended_value = 0.0; recommended_weight_pct = 0.0; execution_ready = False; horizon = self._forecast_horizon(profile)
-            if forecast is not None:
-                try:
-                    plan_action = decision_value if decision_value in {"BUY", "ADD", "HOLD", "REDUCE", "SELL"} else "HOLD"; fp = forecast.point(horizon); trade_plan = TradePlanService.build(TradePlanInput(action=plan_action, forecast=fp, confidence=fp.confidence, holding_horizon_days=horizon, entry_price=market.current_price or price, position_weight_pct=position_data.portfolio_weight_pct, target_weight_pct=position_data.target_weight_pct, max_position_weight_pct=portfolio_data.max_position_weight_pct or 10.0))
-                    if portfolio_data.portfolio_value and (market.current_price or price) and trade_plan.stop_price:
-                        sizing = PositionSizingService.calculate(PositionSizingInput(action=plan_action, portfolio_value=float(portfolio_data.portfolio_value), current_price=float(market.current_price or price), stop_price=float(trade_plan.stop_price), risk_per_trade_pct=1.0, max_position_weight_pct=float(portfolio_data.max_position_weight_pct or 10.0), available_cash=float(portfolio_data.available_cash or 0.0), current_quantity=int(position_data.quantity or 0), current_weight_pct=float(position_data.portfolio_weight_pct or 0.0), lot_size=1)); recommended_quantity = sizing.recommended_quantity; recommended_value = sizing.recommended_value; recommended_weight_pct = sizing.recommended_weight_pct
-                    execution_ready = bool(decision_value in {"BUY", "ADD", "HOLD", "REDUCE", "SELL"} and trade_plan is not None and (decision.status.value == "VALID" if hasattr(decision.status, "value") else True))
-                except Exception: logger.exception("[OPPORTUNITY TRADE PLAN] uid=%s ticker=%s", uid, ticker)
-            reason = decision.reason_codes[0] if decision.reason_codes else ""; status = decision.status.value; display_status = f"{status}: {reason}" if reason else status
-            return OpportunitySearchResult(uid, ticker, name, market.current_price if market.current_price is not None else price, analysis.market_regime, decision.strategy_name, decision.strategy_score, decision.opportunity_score, decision_value, display_status, reason, decision.explanation, position_data.quantity, risk_score, forecast.model if forecast is not None else None, forecast.confidence if forecast is not None else None, forecast_prices, forecast_up, forecast_down, forecast_low, forecast_high, trade_plan, recommended_quantity, recommended_value, recommended_weight_pct, execution_ready, analysis.canonical_results)
+            risk_context = RiskContextData(risk_gate=opportunity_context.risk_ok, critical_risk=opportunity_context.critical_risk, risk_score=risk_score, max_drawdown_pct=selected.max_drawdown_pct if selected else None, available=True); self._notify(progress_callback, f"Decision Engine: {ticker}", progress_base + progress_span * 0.72, current, total)
+            scenario = Scenario.SINGLE_INSTRUMENT if position_data.is_open else Scenario.OPPORTUNITY_SEARCH
+            request = DecisionRequest(scenario=scenario, instrument=instrument_data, strategy=strategy_context, market=market, position=PositionContextData(quantity=position_data.quantity, average_price=position_data.average_price, current_value=position_data.current_value, unrealized_pnl=position_data.unrealized_pnl, portfolio_weight_pct=position_data.portfolio_weight_pct, target_weight_pct=position_data.target_weight_pct, is_open=position_data.is_open), risk=risk_context, opportunity=opportunity_context, portfolio=portfolio_data)
+            decision_result = DecisionEngine.evaluate(request)
+            quantity = position_data.quantity
+            if decision_result.decision in {Decision.BUY, Decision.ADD}: quantity = self._recommended_quantity(price, portfolio_data.available_cash, position_data)
+            trade_plan = self._trade_plan(instrument, decision_result, quantity, price, position_data)
+            recommended_quantity, recommended_value, recommended_weight_pct = self._position_size(price, portfolio_data, position_data, decision_result)
+            return OpportunitySearchResult(instrument_uid=uid, ticker=ticker, name=name, price=price, market_regime=analysis.market_regime, strategy_name=getattr(selected, "strategy", None), strategy_score=float(getattr(selected, "score", 0.0) or 0.0), opportunity_score=float(getattr(opportunity_context, "opportunity_score", 0.0) or 0.0), decision=getattr(decision_result.decision, "value", decision_result.decision), status=getattr(decision_result.status, "value", decision_result.status), reason=",".join(getattr(code, "value", str(code)) for code in decision_result.reason_codes), explanation=str(getattr(decision_result, "explanation", "")), quantity=quantity, risk_score=risk_score, forecast_model=getattr(forecast, "model_name", None) if forecast else None, forecast_confidence=getattr(forecast, "confidence", None) if forecast else None, forecast_prices=forecast_prices, forecast_probability_up=forecast_up, forecast_probability_down=forecast_down, forecast_downside=forecast_low, forecast_upside=forecast_high, trade_plan=trade_plan, recommended_quantity=recommended_quantity, recommended_value=recommended_value, recommended_weight_pct=recommended_weight_pct, execution_ready=bool(getattr(decision_result, "execution_ready", False)), canonical_opportunity=getattr(analysis, "best_analysis", None))
         except Exception as exc:
-            logger.exception("[OPPORTUNITY ANALYSIS ERROR] uid=%s ticker=%s", uid, ticker); return self._unavailable(instrument, price, position_data.quantity, f"Ошибка анализа: {exc}")
+            logger.exception("[OPPORTUNITY ANALYSIS ERROR] uid=%s ticker=%s", uid, ticker)
+            return self._unavailable(instrument, price, position_data.quantity, f"Ошибка анализа: {exc}")
 
-    @staticmethod
-    def _best_strategy(strategies: list[StrategyResult]) -> StrategyResult | None:
-        if not strategies: return None
-        passing = [item for item in strategies if item.quality_gate]; return max(passing or strategies, key=lambda item: item.score)
-
-    def _get_candles(self, instrument_uid: str) -> list[Candle]:
-        payload: Any = None
-        try: payload = self.client.get_candles(instrument_uid, interval="CANDLE_INTERVAL_DAY", limit=2400)
-        except TypeError: payload = self.client.get_candles(instrument_uid, interval="CANDLE_INTERVAL_DAY", days=2400)
-        def extract_items(value: Any) -> list[Any]:
-            if isinstance(value, list): return value
-            if isinstance(value, dict):
-                items = value.get("candles") or value.get("data"); items = items.get("candles", []) if isinstance(items, dict) else items; return items if isinstance(items, list) else []
-            items = getattr(value, "candles", None) or getattr(value, "data", None); items = items.get("candles", []) if isinstance(items, dict) else items; return list(items) if items is not None and not isinstance(items, (str, bytes)) else []
-        items = extract_items(payload); logger.info("[OPPORTUNITY CANDLES] uid=%s response_type=%s initial_count=%d", instrument_uid, type(payload).__name__, len(items))
-        if len(items) < 150:
-            try:
-                retry = self.client.get_candles(instrument_uid, interval="CANDLE_INTERVAL_DAY", limit=2400, days=2400); retry_items = extract_items(retry)
-                if len(retry_items) > len(items): items = retry_items
-            except TypeError: pass
-        result: list[Candle] = []
-        for item in items:
-            timestamp = _field(item, "time", _field(item, "timestamp", None))
-            if timestamp is None: continue
-            try: result.append(Candle(timestamp=_parse_timestamp(timestamp), open=_number(_field(item, "open", 0)), high=_number(_field(item, "high", 0)), low=_number(_field(item, "low", 0)), close=_number(_field(item, "close", 0)), volume=_number(_field(item, "volume", 0))))
-            except (TypeError, ValueError, OverflowError): continue
-        return result
+    def _get_candles(self, uid: str) -> list[Candle]:
+        start = datetime(2000, 1, 1, tzinfo=timezone.utc); end = datetime.now(timezone.utc)
+        try: return list(self.client.get_candles(uid, start, end, interval="CANDLE_INTERVAL_DAY", limit=2400) or [])
+        except TypeError: return list(self.client.get_candles(uid, interval="CANDLE_INTERVAL_DAY", limit=2400) or [])
 
     def _active_account(self) -> str | None:
-        try:
-            accounts = self.client.get_accounts(); items = accounts if isinstance(accounts, list) else _field(accounts, "accounts", []) or []; active = next((item for item in items if AccountService.is_open(item)), None); return str(_field(active, "id", "")) if active else None
+        try: return AccountService(self.client).get_active_account_id()
         except Exception: return None
 
     @staticmethod
+    def _best_strategy(strategies: list[StrategyResult]) -> StrategyResult | None:
+        return max(strategies, key=lambda item: (item.quality_gate, item.score)) if strategies else None
+
+    @staticmethod
+    def _recommended_quantity(price: float | None, available_cash: float | None, position: Any) -> float:
+        if price is None or price <= 0 or available_cash is None or available_cash <= 0: return 0.0
+        if getattr(position, "is_open", False): return float(getattr(position, "quantity", 0.0) or 0.0)
+        return float(int((available_cash * 0.10) / price))
+
+    def _position_size(self, price: float | None, portfolio: PortfolioContextData, position: Any, decision_result: Any) -> tuple[int, float, float]:
+        if price is None or price <= 0 or not getattr(decision_result, "decision", None) in {Decision.BUY, Decision.ADD}: return 0, 0.0, float(getattr(position, "portfolio_weight_pct", 0.0) or 0.0)
+        sizing = PositionSizingService().calculate(PositionSizingInput(available_cash=portfolio.available_cash or 0.0, price=price, target_weight_pct=portfolio.target_weight_pct, max_position_weight_pct=portfolio.max_position_weight_pct, current_weight_pct=getattr(position, "portfolio_weight_pct", 0.0) or 0.0, side="BUY"))
+        return sizing.recommended_quantity, sizing.recommended_value, sizing.recommended_weight_pct
+
+    def _trade_plan(self, instrument: Any, decision_result: Any, quantity: float, price: float | None, position: Any) -> Any | None:
+        if decision_result.decision not in {Decision.BUY, Decision.ADD, Decision.REDUCE, Decision.SELL}: return None
+        try: return TradePlanService().build(TradePlanInput(instrument_uid=_field(instrument, "uid", _field(instrument, "instrument_uid", "")), ticker=_field(instrument, "ticker", ""), side=decision_result.decision.value, quantity=quantity, price=price, reason=str(getattr(decision_result, "explanation", ""))))
+        except Exception: logger.exception("[TRADE PLAN] failed"); return None
+
+    @staticmethod
     def _unavailable(instrument: Any, price: float | None, quantity: float, reason: str) -> OpportunitySearchResult:
-        display_status = f"ANALYSIS_UNAVAILABLE: {reason}" if reason else "ANALYSIS_UNAVAILABLE"; logger.warning("[OPPORTUNITY UNAVAILABLE] ticker=%s price=%s status=%s reason=%s", _field(instrument, "ticker", ""), price, "ANALYSIS_UNAVAILABLE", reason); return OpportunitySearchResult(str(_field(instrument, "uid", _field(instrument, "instrument_uid", ""))), str(_field(instrument, "ticker", "")), str(_field(instrument, "name", "")), price, None, None, 0.0, 0.0, None, display_status, "ANALYSIS_UNAVAILABLE", reason, quantity, 0.0)
+        return OpportunitySearchResult(instrument_uid=str(_field(instrument, "uid", _field(instrument, "instrument_uid", ""))), ticker=str(_field(instrument, "ticker", "")), name=str(_field(instrument, "name", "")), price=price, market_regime=None, strategy_name=None, strategy_score=0.0, opportunity_score=0.0, decision=None, status="ANALYSIS_UNAVAILABLE", reason=reason, explanation=reason, quantity=quantity)
+
+def _field(obj: Any, name: str, default: Any = None) -> Any:
+    if isinstance(obj, dict): return obj.get(name, default)
+    return getattr(obj, name, default)
+
+def _bool_field(obj: Any, name: str, default: bool = False) -> bool:
+    value = _field(obj, name, default); return bool(value)
+
+def _float_or_none(value: Any) -> float | None:
+    try: return None if value is None else float(value)
+    except (TypeError, ValueError): return None
+
+def _uid(item: Any) -> str:
+    return str(_field(item, "uid", _field(item, "instrument_uid", _field(item, "figi", ""))) or "")
 
 def _held_positions(positions: Any) -> list[Any]:
-    raw = _field(positions, "securities", []) if positions is not None else []; return [item for item in (raw or []) if abs(_number(_field(item, "balance", _field(item, "quantity", 0)))) > 0]
+    if positions is None: return []
+    if isinstance(positions, dict): return list(positions.get("securities") or positions.get("positions") or [])
+    return list(getattr(positions, "securities", None) or getattr(positions, "positions", None) or [])
 
-def _empty_portfolio():
-    from edward.services.portfolio_decision_context_service import PortfolioDecisionContext
-    return PortfolioDecisionContext(portfolio=PortfolioContextData(available=False), position=PositionContextData())
+def _empty_portfolio() -> Any:
+    return type("EmptyPortfolio", (), {"portfolio": PortfolioContextData(portfolio_value=None, available_cash=None, blocked_cash=None, current_weight_pct=0.0, target_weight_pct=None, max_position_weight_pct=None, allows_buy=True, allows_add=False, available=True), "position": PositionContextData(quantity=0.0, average_price=None, current_value=0.0, unrealized_pnl=0.0, portfolio_weight_pct=0.0, target_weight_pct=None, is_open=False)})()
 
-def account_id_or_none(positions: Any, portfolio: Any) -> bool: return positions is not None and portfolio is not None
-
-def _field(value: Any, name: str, default: Any = None) -> Any: return value.get(name, default) if isinstance(value, dict) else getattr(value, name, default)
-def _uid(value: Any) -> str: return str(_field(value, "uid", _field(value, "instrument_uid", "")))
-def _bool_field(value: Any, name: str, default: bool = False) -> bool:
-    raw = _field(value, name, default); return raw.strip().casefold() in {"true", "1", "yes", "да"} if isinstance(raw, str) else bool(raw)
-def _number(value: Any) -> float:
-    if isinstance(value, dict): return float(value.get("units", 0)) + float(value.get("nano", value.get("nanos", 0))) / 1_000_000_000
-    units = getattr(value, "units", None); nano = getattr(value, "nano", getattr(value, "nanos", None))
-    if units is not None or nano is not None: return float(units or 0) + float(nano or 0) / 1_000_000_000
-    try: return float(value)
-    except Exception: return 0.0
-def _float_or_none(value: Any) -> float | None:
-    try: return None if value in (None, "") else _number(value)
-    except Exception: return None
-def _parse_timestamp(value: Any) -> datetime:
-    if isinstance(value, dict): return datetime.fromtimestamp(int(value.get("seconds", 0) or 0) + int(value.get("nanos", value.get("nano", 0)) or 0) / 1_000_000_000, tz=timezone.utc)
-    seconds = getattr(value, "seconds", None); nanos = getattr(value, "nanos", getattr(value, "nano", None))
-    if seconds is not None or nanos is not None: return datetime.fromtimestamp(float(seconds or 0) + float(nanos or 0) / 1_000_000_000, tz=timezone.utc)
-    text = str(value or ""); text = text[:-1] + "+00:00" if text.endswith("Z") else text; parsed = datetime.fromisoformat(text); return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+def account_id_or_none(positions: Any, portfolio: Any) -> bool:
+    return positions is not None or portfolio is not None
