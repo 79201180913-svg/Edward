@@ -1,15 +1,12 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 from statistics import mean, median, pstdev
 from typing import Callable, Sequence
 
 from edward.domain import TradingPathCandidate
 from edward.services.analysis_service import Candle
-from edward.services.trading_path_oos_validation_service_v012 import (
-    TradingPathOOSValidationServiceV012,
-)
+from edward.services.trading_path_oos_validation_service_v012 import TradingPathOOSValidationServiceV012
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +63,7 @@ class TradingPathWalkForwardServiceV015:
 
     For nested execution, discovery is rerun independently inside every TRAIN
     fold. Validation candles are never supplied to the discovery callback.
+    Candidate stability is aggregated across all sequential validation folds.
     """
 
     VERSION = "0.8.15"
@@ -91,11 +89,66 @@ class TradingPathWalkForwardServiceV015:
             return ()
         first_train_end = len(ordered) - windows * validation_size
         return tuple(
-            (0, first_train_end + offset * validation_size,
-             first_train_end + offset * validation_size,
-             first_train_end + (offset + 1) * validation_size)
+            (
+                0,
+                first_train_end + offset * validation_size,
+                first_train_end + offset * validation_size,
+                first_train_end + (offset + 1) * validation_size,
+            )
             for offset in range(windows)
         )
+
+    @staticmethod
+    def _candidate_key(candidate: TradingPathCandidate) -> tuple[object, ...]:
+        rule = candidate.rule
+        return (
+            rule.instrument_uid,
+            rule.ticker,
+            rule.hypothesis,
+            rule.regime,
+            rule.volatility_bucket,
+            rule.direction,
+            rule.horizon,
+        )
+
+    @classmethod
+    def _aggregate_summaries(
+        cls,
+        evaluated: Sequence[tuple[TradingPathCandidate, WalkForwardSummaryV015]],
+        *,
+        expected_windows: int,
+    ) -> tuple[tuple[TradingPathCandidate, WalkForwardSummaryV015], ...]:
+        grouped: dict[tuple[object, ...], list[tuple[TradingPathCandidate, WalkForwardSummaryV015]]] = {}
+        for candidate, summary in evaluated:
+            grouped.setdefault(cls._candidate_key(candidate), []).append((candidate, summary))
+
+        result: list[tuple[TradingPathCandidate, WalkForwardSummaryV015]] = []
+        for key in sorted(grouped, key=str):
+            items = grouped[key]
+            windows = tuple(item.windows[0] for item in items if item.windows)
+            if not windows:
+                continue
+            positive = sum(item.positive for item in windows)
+            excess = tuple(item.excess_return_pct for item in windows)
+            sufficient = len(windows) == expected_windows and all(
+                item.candidate_observations >= cls.MIN_VALIDATION_OBSERVATIONS for item in windows
+            )
+            persistence = positive / len(windows) * 100.0
+            summary = WalkForwardSummaryV015(
+                windows=windows,
+                wf_windows=len(windows),
+                positive_windows=positive,
+                persistence_pct=persistence,
+                mean_excess_pct=mean(excess),
+                median_excess_pct=median(excess),
+                worst_window_excess_pct=min(excess),
+                dispersion_pct=pstdev(excess) if len(excess) > 1 else 0.0,
+                sign_consistency_pct=sum(value > 0 for value in excess) / len(excess) * 100.0,
+                sample_sufficiency=sufficient,
+                passed=sufficient and persistence >= 75.0 and min(excess) > 0.0,
+            )
+            result.append((items[-1][0], summary))
+        return tuple(result)
 
     @classmethod
     def nested_validate(
@@ -111,7 +164,8 @@ class TradingPathWalkForwardServiceV015:
         """Run discovery independently in each expanding TRAIN fold.
 
         The discovery callback receives only candles before validation_start.
-        Candidates are then evaluated only inside that fold's validation range.
+        Candidates are evaluated only inside that fold's validation range and
+        then aggregated by canonical candidate identity across folds.
         """
         ordered = tuple(sorted(candles, key=lambda item: item.timestamp))
         ranges = cls.build_windows(
@@ -166,7 +220,7 @@ class TradingPathWalkForwardServiceV015:
                     win_rate_pct=item.win_rate_pct,
                     positive=item.positive and item.observations >= cls.MIN_VALIDATION_OBSERVATIONS,
                 )
-                summary = WalkForwardSummaryV015(
+                evaluated.append((candidate, WalkForwardSummaryV015(
                     windows=(window,),
                     wf_windows=1,
                     positive_windows=int(window.positive),
@@ -178,16 +232,17 @@ class TradingPathWalkForwardServiceV015:
                     sign_consistency_pct=100.0 if window.excess_return_pct > 0 else 0.0,
                     sample_sufficiency=window.candidate_observations >= cls.MIN_VALIDATION_OBSERVATIONS,
                     passed=window.positive,
-                )
-                evaluated.append((candidate, summary))
+                )))
 
+        candidate_summaries = cls._aggregate_summaries(evaluated, expected_windows=windows)
         logger.warning(
-            "[V015 NESTED WALK FORWARD] folds=%d discovered=%d evaluated=%d",
+            "[V015 NESTED WALK FORWARD] folds=%d discovered=%d evaluated=%d stable_candidates=%d",
             len(folds),
             sum(item.discovered_candidates for item in folds),
             sum(item.evaluated_candidates for item in folds),
+            sum(summary.passed for _, summary in candidate_summaries),
         )
-        return NestedWalkForwardResultV015(tuple(folds), tuple(evaluated))
+        return NestedWalkForwardResultV015(tuple(folds), candidate_summaries)
 
     @classmethod
     def validate_candidate(
