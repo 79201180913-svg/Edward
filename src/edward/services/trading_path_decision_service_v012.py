@@ -40,7 +40,7 @@ class TradingPathDecisionServiceV012:
         reasons: list[str] = []
         opportunity = analysis.opportunity
         validation = analysis.validation
-        market_context = analysis.market_context
+        market_context = getattr(analysis, "market_context", None)
         if analysis.evidence is None:
             reasons.append("EVIDENCE_UNAVAILABLE")
         if validation is None:
