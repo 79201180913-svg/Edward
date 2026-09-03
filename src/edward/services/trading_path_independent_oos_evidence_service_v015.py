@@ -153,9 +153,9 @@ class TradingPathIndependentOOSEvidenceServiceV015:
             validation_start=validation_start,
             validation_end=validation_end,
         )
-        if oos_start is not None and effective_oos_start != oos_start:
+        if oos_start is not None and derived_oos_start != oos_start:
             provenance_valid = False
-        if oos_end is not None and effective_oos_end != oos_end:
+        if oos_end is not None and derived_oos_end != oos_end:
             provenance_valid = False
         if validation_end is not None and effective_oos_start is not None and effective_oos_start < validation_end:
             provenance_valid = False
