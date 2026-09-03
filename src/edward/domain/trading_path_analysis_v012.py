@@ -103,6 +103,7 @@ class TradingPathAnalysisV012:
     rank: int | None = None
     independent_oos_evidence: object = None
     quality_gate: object = None
+    ev_evidence: object = None
 
 
 __all__ = [
