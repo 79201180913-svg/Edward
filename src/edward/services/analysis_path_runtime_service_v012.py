@@ -46,7 +46,6 @@ def _baseline_returns(candles: Sequence[Candle], horizon: int) -> tuple[float, .
 
 
 def _oos_returns(oos_results: Sequence[object]) -> tuple[float, ...]:
-    """Extract realized OOS returns, with a compatibility fallback for test doubles."""
     values: list[float] = []
     for window in oos_results:
         returns = _field(window, "returns_pct")
@@ -140,7 +139,8 @@ class AnalysisPathRuntimeServiceV012:
             quality_gate = TradingPathQualityGateServiceV015.evaluate(validation=final_validation, wf_summary=wf_summary, independent_oos_evidence=independent_oos_evidence, market_context=canonical_market_context, risk_gate=risk_result.path_eligible, current_state=pre_gate_current_state, ev_evidence=ev_evidence)
             hard_gate_failures = {"STATISTICAL_GATE_FAILED", "WF_GATE_FAILED", "OOS_GATE_FAILED", "EV_GATE_FAILED", "RISK_GATE_FAILED", "CURRENT_STATE_GATE_FAILED"}
             if quality_gate.passed or not any(reason in hard_gate_failures for reason in quality_gate.reasons):
-                decision_result = TradingPathDecisionServiceV012.decide(with_opportunity)
+                decision_input = TradingPathAnalysisV012(instrument_uid=with_opportunity.instrument_uid, ticker=with_opportunity.ticker, strategy_family=with_opportunity.strategy_family, hypothesis=with_opportunity.hypothesis, regime=with_opportunity.regime, volatility_bucket=with_opportunity.volatility_bucket, direction=with_opportunity.direction, horizon=with_opportunity.horizon, evidence=with_opportunity.evidence, validation=final_validation, market_context=canonical_market_context, opportunity=with_opportunity.opportunity, current_state=with_opportunity.current_state, decision=with_opportunity.decision, status=with_opportunity.status, rank=with_opportunity.rank)
+                decision_result = TradingPathDecisionServiceV012.decide(decision_input)
                 final_current_state = decision_result.current_state
                 final_decision = TradingPathDecision(_value(decision_result.decision))
                 final_status = decision_result.status
@@ -154,7 +154,7 @@ class AnalysisPathRuntimeServiceV012:
             finalized.append(final)
             opportunity = final.opportunity
             logger.warning("[V015 PATH DECISION] ticker=%s hypothesis=%s regime=%s volatility=%s direction=%s horizon=%d rank=%s validation=%s ev=%s risk=%s opportunity=%s confidence=%s decision=%s state=%s reason=%s wf_persistence=%s market_context=%s oos_evidence=%s ev_evidence=%s quality_gate=%s quality_reasons=%s", ticker, final.hypothesis, final.regime, final.volatility_bucket, final.direction, final.horizon, final.rank, _value(final.status), _field(opportunity, "expected_value_pct"), _field(opportunity, "risk_score"), _field(opportunity, "score"), _field(opportunity, "confidence"), _value(final.decision), _value(final.current_state), ",".join(decision_reasons) or "READY", _field(final.validation, "wf_persistence_pct"), final.market_context.context_status, independent_oos_evidence.status, ev_evidence.status, quality_gate.passed, ",".join(quality_gate.reasons) or "READY")
-        logger.warning("[V015 PATH RUNTIME] ticker=%s candles=%d train=%d validation=%d oos=%d discovered=%d selected=%d final=%d buy=%d wait=%d pass=%d nested_folds=%d nested_candidates=%d", ticker, len(ordered), len(train), len(validation_candles), len(oos), len(candidates), len(selected), len(finalized), sum(_value(item.decision) == "buy" for item in finalized), sum(_value(item.decision) == "wait" for item in finalized), sum(_value(item.decision) == "pass" for item in finalized), len(nested.folds), len(nested.candidate_summaries))
+        logger.warning("[V015 PATH RUNTIME] ticker=%s candles=%d train=%d validation=%d oos=%d discovered=%d selected=%d final=%d buy=%d wait=%d pass=%d nested_folds=%d nested_candidates=%d", ticker, len(ordered), len(train), len(validation_candles), len(oos), len(candidates), len(selected), len(finalized), sum(_value(item.decision) == "buy" for item in finalized), sum(_value(item.decision) == "wait" for item in finalized), sum(_value(item.decision) == "pass" for item in finalized), len(nested.folds), sum(len(fold.candidates) for fold in nested.folds))
         return tuple(finalized)
 
 
