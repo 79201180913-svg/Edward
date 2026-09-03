@@ -56,3 +56,39 @@ def test_runtime_bridge_sorts_candles_before_discovery(monkeypatch):
     # v0.8.14 discovery is intentionally TRAIN-only; sorting must therefore
     # be asserted against the chronologically ordered TRAIN partition.
     assert captured == [tuple(sorted(timestamps))[:72]]
+
+
+def test_runtime_executes_nested_wfo_with_train_only_discovery(monkeypatch):
+    candles = [
+        Candle(
+            datetime(2025, 1, 1, tzinfo=timezone.utc) + timedelta(hours=i),
+            100.0, 101.0, 99.0, 100.0, 1000.0,
+        )
+        for i in range(180)
+    ]
+    calls = []
+
+    def fake_discover(train, *, instrument_uid, ticker):
+        calls.append((len(train), train[-1].timestamp))
+        return ()
+
+    monkeypatch.setattr(
+        AnalysisPathRuntimeServiceV012,
+        "_discover_train_candidates",
+        staticmethod(fake_discover),
+    )
+
+    result = AnalysisPathRuntimeServiceV012().analyze_paths(
+        instrument_uid="SBER",
+        ticker="SBER",
+        candles=candles,
+    )
+
+    assert result == ()
+    assert calls[:4] == [
+        (60, candles[59].timestamp),
+        (90, candles[89].timestamp),
+        (120, candles[119].timestamp),
+        (150, candles[149].timestamp),
+    ]
+    assert calls[4:] == [(108, candles[107].timestamp)]
