@@ -28,6 +28,8 @@ def test_independent_oos_aggregates_locked_evidence():
         oos_windows=windows,
         validation_start=60,
         validation_end=120,
+        oos_start=120,
+        oos_end=210,
     )
 
     assert result.windows == 3
@@ -40,6 +42,12 @@ def test_independent_oos_aggregates_locked_evidence():
     assert result.median_window_excess_pct == 1.0
     assert result.status == "READY"
     assert result.parameters_locked is True
+    assert result.candidate_key == ("uid", "TICKER", "hypothesis", "TREND_UP", "LOW", "LONG", 5)
+    assert result.validation_start == 60
+    assert result.validation_end == 120
+    assert result.oos_start == 120
+    assert result.oos_end == 210
+    assert result.provenance_status == "VALID"
 
 
 def test_independent_oos_rejects_validation_overlap():
@@ -55,6 +63,37 @@ def test_independent_oos_rejects_validation_overlap():
     assert result.status == "INVALID_OVERLAP"
     assert result.parameters_locked is True
     assert result.excess_return_pct is None
+    assert result.provenance_status == "INVALID"
+
+
+def test_independent_oos_rejects_invalid_window_bounds():
+    result = TradingPathIndependentOOSEvidenceServiceV015.build(
+        candidate_key=("candidate",),
+        oos_windows=(_window(150, 150, 3, 2.0, 1.0, 1.0),),
+        validation_start=60,
+        validation_end=120,
+    )
+
+    assert result.status == "INVALID_OVERLAP"
+    assert result.provenance_status == "INVALID"
+    assert result.parameters_locked is True
+
+
+def test_independent_oos_rejects_mismatched_explicit_oos_bounds():
+    windows = (_window(120, 150, 3, 2.0, 1.0, 1.0),)
+
+    result = TradingPathIndependentOOSEvidenceServiceV015.build(
+        candidate_key=("candidate",),
+        oos_windows=windows,
+        validation_start=60,
+        validation_end=120,
+        oos_start=121,
+        oos_end=150,
+    )
+
+    assert result.status == "INVALID_OVERLAP"
+    assert result.provenance_status == "INVALID"
+    assert result.parameters_locked is True
 
 
 def test_independent_oos_requires_minimum_observations():
@@ -71,6 +110,7 @@ def test_independent_oos_requires_minimum_observations():
     assert result.observations == 2
     assert result.excess_return_pct == 1.0
     assert result.parameters_locked is True
+    assert result.provenance_status == "VALID"
 
 
 def test_independent_oos_empty_set_is_not_a_pass():
@@ -84,6 +124,7 @@ def test_independent_oos_empty_set_is_not_a_pass():
     assert result.observations == 0
     assert result.excess_return_pct is None
     assert result.parameters_locked is True
+    assert result.provenance_status == "UNVERIFIED"
 
 
 def test_independent_oos_missing_window_metrics_is_insufficient():
@@ -106,3 +147,4 @@ def test_independent_oos_missing_window_metrics_is_insufficient():
     assert result.status == "INSUFFICIENT"
     assert result.excess_return_pct is None
     assert result.parameters_locked is True
+    assert result.provenance_status == "VALID"
