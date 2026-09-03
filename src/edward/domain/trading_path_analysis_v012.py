@@ -42,6 +42,7 @@ class TradingPathValidationSummary:
     p_value_one_sided: float | None = None
     adjusted_p_value: float | None = None
     hypotheses_tested: int | None = None
+    wf_worst_window_excess_pct: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
