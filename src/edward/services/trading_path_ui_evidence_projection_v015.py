@@ -82,7 +82,11 @@ class TradingPathUIEvidenceProjectionServiceV015:
                 _field(wf_summary, "persistence_pct", _field(validation, "wf_persistence_pct"))
             ),
             wf_worst_window_excess_pct=_float_or_none(
-                _field(wf_summary, "worst_window_excess_pct")
+                _field(
+                    wf_summary,
+                    "worst_window_excess_pct",
+                    _field(validation, "wf_worst_window_excess_pct"),
+                )
             ),
             oos_excess_pct=_float_or_none(_field(oos, "excess_return_pct")),
             oos_worst_window_excess_pct=_float_or_none(_field(oos, "worst_window_excess_pct")),
