@@ -4,7 +4,7 @@ import logging
 from statistics import mean
 from typing import Iterable, Sequence
 
-from edward.domain import TradingPathAnalysisV012, TradingPathValidationSummary, TradingPathMarketContext
+from edward.domain import TradingPathAnalysisV012, TradingPathValidationSummary, TradingPathMarketContext, TradingPathCurrentState, TradingPathDecision, TradingPathAnalysisStatus
 from edward.services.analysis_service import Candle
 from edward.services.event_observation_v086 import EventObservationBuilderV086
 from edward.services.trading_path_adaptive_discovery_service_v014 import TradingPathAdaptiveDiscoveryServiceV014
@@ -12,7 +12,6 @@ from edward.services.trading_path_adaptive_oos_service_v014 import TradingPathAd
 from edward.services.trading_path_analysis_builder_v012 import TradingPathAnalysisBuilderV012
 from edward.services.trading_path_candidate_pruning_service_v014 import CandidatePruningConfigV014, TradingPathCandidatePruningServiceV014
 from edward.services.trading_path_candidate_service_v014 import TradingPathCandidateServiceV014
-from edward.services.trading_path_decision_service_v012 import TradingPathDecisionServiceV012
 from edward.services.trading_path_expected_value_service_v012 import TradingPathExpectedValueServiceV012
 from edward.services.trading_path_oos_validation_service_v012 import TradingPathOOSValidationServiceV012
 from edward.services.trading_path_opportunity_builder_v012 import TradingPathOpportunityBuilderV012
@@ -21,6 +20,7 @@ from edward.services.trading_path_statistical_integrity_service_v014 import Trad
 from edward.services.trading_path_walk_forward_service_v015 import TradingPathWalkForwardServiceV015
 from edward.services.trading_path_market_context_service_v015 import TradingPathMarketContextServiceV015
 from edward.services.trading_path_independent_oos_evidence_service_v015 import TradingPathIndependentOOSEvidenceServiceV015
+from edward.services.trading_path_quality_gate_service_v015 import TradingPathQualityGateServiceV015
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +117,6 @@ class AnalysisPathRuntimeServiceV012:
             expected_value = TradingPathExpectedValueServiceV012.calculate(candidate, ordered, windows=oos_windows, test_size=oos_test_size, observations=observations, evaluation_start=split.oos_start, evaluation_end=split.oos_end)
             risk_result = TradingPathRiskServiceV012.evaluate(analysis, candles=ordered, profile=profile, oos_windows=oos_results)
             with_opportunity = TradingPathOpportunityBuilderV012.build(analysis, expected_value=expected_value, risk_score=risk_result.risk.score, risk_gate=risk_result.path_eligible, oos_windows=oos_results)
-            result = TradingPathDecisionServiceV012.decide(with_opportunity)
             final_validation = with_opportunity.validation
             integrity = statistical_integrity.get(key) if key in statistical_integrity else next((value for item, value in statistical_integrity.items() if self._candidate_key(item) == key), None)
             wf_summary = nested_by_key.get(key)
@@ -126,10 +125,36 @@ class AnalysisPathRuntimeServiceV012:
             market_context = TradingPathMarketContextServiceV015.build_from_oos(candidate=candidate, instrument_candles=ordered, benchmark_candles=benchmark_ordered, oos_windows=oos_results, benchmark_id=benchmark_id)
             legacy_market_context = with_opportunity.market_context
             canonical_market_context = TradingPathMarketContext(benchmark_id=market_context.benchmark_id, baseline_rank=_field(legacy_market_context, "baseline_rank"), context_rank=_field(legacy_market_context, "context_rank"), rank_delta=_field(legacy_market_context, "rank_delta"), baseline_score=_field(legacy_market_context, "baseline_score"), context_adjusted_score=_field(legacy_market_context, "context_adjusted_score"), score_delta=_field(legacy_market_context, "score_delta"), regime_compatibility=_field(legacy_market_context, "regime_compatibility"), relative_strength_component=_field(legacy_market_context, "relative_strength_component"), volatility_component=_field(legacy_market_context, "volatility_component"), instrument_return_pct=market_context.instrument_return_pct, instrument_baseline_return_pct=market_context.instrument_baseline_return_pct, regime_baseline_return_pct=market_context.regime_baseline_return_pct, market_return_pct=market_context.market_return_pct, instrument_excess_pct=market_context.instrument_excess_pct, regime_excess_pct=market_context.regime_excess_pct, market_excess_pct=market_context.market_excess_pct, relative_strength_pct=market_context.relative_strength_pct, context_status=market_context.context_status, context_version=market_context.version)
-            final = TradingPathAnalysisV012(instrument_uid=with_opportunity.instrument_uid, ticker=with_opportunity.ticker, strategy_family=with_opportunity.strategy_family, hypothesis=with_opportunity.hypothesis, regime=with_opportunity.regime, volatility_bucket=with_opportunity.volatility_bucket, direction=with_opportunity.direction, horizon=with_opportunity.horizon, evidence=with_opportunity.evidence, validation=final_validation, market_context=canonical_market_context, opportunity=with_opportunity.opportunity, current_state=result.current_state, decision=result.decision, status=_field(result, "status"), rank=with_opportunity.rank, independent_oos_evidence=independent_oos_evidence)
+
+            # V815-05: current state is a structural pre-gate state. It does not
+            # inspect opportunity score/confidence, so the legacy weighted
+            # decision service cannot silently override the explicit hard gate.
+            pre_gate_current_state = (
+                TradingPathCurrentState.ENTRY_READY
+                if risk_result.path_eligible is True
+                else TradingPathCurrentState.INVALID
+            )
+            quality_gate = TradingPathQualityGateServiceV015.evaluate(
+                validation=final_validation,
+                wf_summary=wf_summary,
+                independent_oos_evidence=independent_oos_evidence,
+                market_context=canonical_market_context,
+                risk_gate=risk_result.path_eligible,
+                current_state=pre_gate_current_state,
+            )
+            if quality_gate.passed:
+                final_current_state = TradingPathCurrentState.ENTRY_READY
+                final_decision = TradingPathDecision.BUY
+                final_status = TradingPathAnalysisStatus.PROMOTABLE
+            else:
+                final_current_state = TradingPathCurrentState.INVALID
+                final_decision = TradingPathDecision.PASS
+                final_status = TradingPathAnalysisStatus.REJECTED
+
+            final = TradingPathAnalysisV012(instrument_uid=with_opportunity.instrument_uid, ticker=with_opportunity.ticker, strategy_family=with_opportunity.strategy_family, hypothesis=with_opportunity.hypothesis, regime=with_opportunity.regime, volatility_bucket=with_opportunity.volatility_bucket, direction=with_opportunity.direction, horizon=with_opportunity.horizon, evidence=with_opportunity.evidence, validation=final_validation, market_context=canonical_market_context, opportunity=with_opportunity.opportunity, current_state=final_current_state, decision=final_decision, status=final_status, rank=with_opportunity.rank, independent_oos_evidence=independent_oos_evidence, quality_gate=quality_gate)
             finalized.append(final)
             opportunity = final.opportunity
-            logger.warning("[V015 PATH DECISION] ticker=%s hypothesis=%s regime=%s volatility=%s direction=%s horizon=%d rank=%s validation=%s ev=%s risk=%s opportunity=%s confidence=%s decision=%s state=%s reason=%s wf_persistence=%s market_context=%s oos_evidence=%s", ticker, final.hypothesis, final.regime, final.volatility_bucket, final.direction, final.horizon, final.rank, _value(final.status), _field(opportunity, "expected_value_pct"), _field(opportunity, "risk_score"), _field(opportunity, "score"), _field(opportunity, "confidence"), _value(final.decision), _value(final.current_state), ",".join(result.reasons) or "READY", _field(final.validation, "wf_persistence_pct"), final.market_context.context_status, independent_oos_evidence.status)
+            logger.warning("[V015 PATH DECISION] ticker=%s hypothesis=%s regime=%s volatility=%s direction=%s horizon=%d rank=%s validation=%s ev=%s risk=%s opportunity=%s confidence=%s decision=%s state=%s reason=%s wf_persistence=%s market_context=%s oos_evidence=%s quality_gate=%s quality_reasons=%s", ticker, final.hypothesis, final.regime, final.volatility_bucket, final.direction, final.horizon, final.rank, _value(final.status), _field(opportunity, "expected_value_pct"), _field(opportunity, "risk_score"), _field(opportunity, "score"), _field(opportunity, "confidence"), _value(final.decision), _value(final.current_state), ",".join(quality_gate.reasons) or "READY", _field(final.validation, "wf_persistence_pct"), final.market_context.context_status, independent_oos_evidence.status, quality_gate.passed, ",".join(quality_gate.reasons) or "READY")
         logger.warning("[V015 PATH RUNTIME] ticker=%s candles=%d train=%d validation=%d oos=%d discovered=%d selected=%d final=%d buy=%d wait=%d pass=%d nested_folds=%d nested_candidates=%d", ticker, len(ordered), len(train), len(validation_candles), len(oos), len(candidates), len(selected), len(finalized), sum(_value(item.decision) == "buy" for item in finalized), sum(_value(item.decision) == "wait" for item in finalized), sum(_value(item.decision) == "pass" for item in finalized), len(nested.folds), len(nested.candidate_summaries))
         return tuple(finalized)
 
