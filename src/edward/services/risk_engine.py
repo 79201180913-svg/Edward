@@ -23,7 +23,7 @@ class RiskResult:
 
 
 class RiskEngine:
-    """Current risk assessment used by Opportunity and Decision layers."""
+    """Risk assessment with hard admissibility limits and descriptive scoring."""
 
     @staticmethod
     def _clamp(value: float, low: float = 0.0, high: float = 100.0) -> float:
@@ -96,8 +96,10 @@ class RiskEngine:
         if cash_score < 100.0:
             reasons.append("INSUFFICIENT_CASH")
 
-        critical = max_dd > dd_limit * 1.35 or volatility_pct > volatility_limit * 1.35 or position_weight_pct > max_weight * 1.35
-        gate = not critical and not reasons
+        # V815-06: every hard admissibility-limit breach is critical. The
+        # descriptive score never overrides this flag or the hard gate.
+        critical = bool(reasons)
+        gate = not critical
         level = "LOW" if score >= 75 and not critical else "MEDIUM" if score >= 50 and not critical else "HIGH"
 
         return RiskResult(
