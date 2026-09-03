@@ -23,6 +23,11 @@ class TradingPathIndependentOOSEvidenceV015:
     median_window_excess_pct: float | None
     status: str
     parameters_locked: bool
+    validation_start: int | None = None
+    validation_end: int | None = None
+    oos_start: int | None = None
+    oos_end: int | None = None
+    provenance_status: str = "UNVERIFIED"
     version: str = INDEPENDENT_OOS_EVIDENCE_VERSION_V015
 
 
@@ -31,6 +36,7 @@ class TradingPathIndependentOOSEvidenceServiceV015:
 
     The service consumes already-evaluated OOS windows. It does not discover,
     mutate, re-rank, or tune the candidate and never produces a trading decision.
+    The returned snapshot carries explicit candidate and temporal provenance.
     """
 
     MIN_WINDOWS = 1
@@ -42,7 +48,23 @@ class TradingPathIndependentOOSEvidenceServiceV015:
         end = getattr(window, "end", None)
         if start is None or end is None:
             return None
-        return int(start), int(end)
+        start_value, end_value = int(start), int(end)
+        if end_value <= start_value:
+            return None
+        return start_value, end_value
+
+    @classmethod
+    def _provenance_bounds(cls, windows: Sequence[object]) -> tuple[int | None, int | None, bool]:
+        bounds = tuple(cls._window_bounds(window) for window in windows)
+        if not bounds or any(item is None for item in bounds):
+            return None, None, False
+        normalized = tuple(item for item in bounds if item is not None)
+        ordered = tuple(sorted(normalized))
+        contiguous_non_overlapping = all(
+            ordered[index][1] <= ordered[index + 1][0]
+            for index in range(len(ordered) - 1)
+        )
+        return ordered[0][0], ordered[-1][1], contiguous_non_overlapping
 
     @classmethod
     def _validate_temporal_independence(
@@ -54,6 +76,8 @@ class TradingPathIndependentOOSEvidenceServiceV015:
     ) -> bool:
         if validation_start is None or validation_end is None:
             return True
+        if validation_end <= validation_start:
+            return False
         for window in oos_windows:
             bounds = cls._window_bounds(window)
             if bounds is None:
@@ -64,6 +88,38 @@ class TradingPathIndependentOOSEvidenceServiceV015:
         return True
 
     @classmethod
+    def _empty_result(
+        cls,
+        *,
+        candidate_key: tuple[object, ...] | None,
+        windows: int,
+        validation_start: int | None,
+        validation_end: int | None,
+        oos_start: int | None,
+        oos_end: int | None,
+        status: str,
+        provenance_status: str,
+    ) -> TradingPathIndependentOOSEvidenceV015:
+        return TradingPathIndependentOOSEvidenceV015(
+            candidate_key=candidate_key,
+            windows=windows,
+            observations=0,
+            mean_return_pct=None,
+            mean_baseline_return_pct=None,
+            excess_return_pct=None,
+            positive_windows_pct=None,
+            worst_window_excess_pct=None,
+            median_window_excess_pct=None,
+            status=status,
+            parameters_locked=True,
+            validation_start=validation_start,
+            validation_end=validation_end,
+            oos_start=oos_start,
+            oos_end=oos_end,
+            provenance_status=provenance_status,
+        )
+
+    @classmethod
     def build(
         cls,
         *,
@@ -71,41 +127,49 @@ class TradingPathIndependentOOSEvidenceServiceV015:
         oos_windows: Sequence[object],
         validation_start: int | None = None,
         validation_end: int | None = None,
+        oos_start: int | None = None,
+        oos_end: int | None = None,
     ) -> TradingPathIndependentOOSEvidenceV015:
         """Aggregate locked OOS windows without applying a decision threshold."""
         windows = tuple(oos_windows)
+        derived_oos_start, derived_oos_end, windows_valid = cls._provenance_bounds(windows)
+        effective_oos_start = oos_start if oos_start is not None else derived_oos_start
+        effective_oos_end = oos_end if oos_end is not None else derived_oos_end
+
         if not windows:
-            return TradingPathIndependentOOSEvidenceV015(
+            return cls._empty_result(
                 candidate_key=candidate_key,
                 windows=0,
-                observations=0,
-                mean_return_pct=None,
-                mean_baseline_return_pct=None,
-                excess_return_pct=None,
-                positive_windows_pct=None,
-                worst_window_excess_pct=None,
-                median_window_excess_pct=None,
+                validation_start=validation_start,
+                validation_end=validation_end,
+                oos_start=effective_oos_start,
+                oos_end=effective_oos_end,
                 status="INSUFFICIENT",
-                parameters_locked=True,
+                provenance_status="UNVERIFIED",
             )
 
-        if not cls._validate_temporal_independence(
+        provenance_valid = windows_valid and cls._validate_temporal_independence(
             windows,
             validation_start=validation_start,
             validation_end=validation_end,
-        ):
-            return TradingPathIndependentOOSEvidenceV015(
+        )
+        if oos_start is not None and effective_oos_start != oos_start:
+            provenance_valid = False
+        if oos_end is not None and effective_oos_end != oos_end:
+            provenance_valid = False
+        if validation_end is not None and effective_oos_start is not None and effective_oos_start < validation_end:
+            provenance_valid = False
+
+        if not provenance_valid:
+            return cls._empty_result(
                 candidate_key=candidate_key,
                 windows=len(windows),
-                observations=0,
-                mean_return_pct=None,
-                mean_baseline_return_pct=None,
-                excess_return_pct=None,
-                positive_windows_pct=None,
-                worst_window_excess_pct=None,
-                median_window_excess_pct=None,
+                validation_start=validation_start,
+                validation_end=validation_end,
+                oos_start=effective_oos_start,
+                oos_end=effective_oos_end,
                 status="INVALID_OVERLAP",
-                parameters_locked=True,
+                provenance_status="INVALID",
             )
 
         valid_windows = tuple(
@@ -116,18 +180,15 @@ class TradingPathIndependentOOSEvidenceServiceV015:
             and getattr(window, "excess_return_pct", None) is not None
         )
         if not valid_windows:
-            return TradingPathIndependentOOSEvidenceV015(
+            return cls._empty_result(
                 candidate_key=candidate_key,
                 windows=len(windows),
-                observations=0,
-                mean_return_pct=None,
-                mean_baseline_return_pct=None,
-                excess_return_pct=None,
-                positive_windows_pct=None,
-                worst_window_excess_pct=None,
-                median_window_excess_pct=None,
+                validation_start=validation_start,
+                validation_end=validation_end,
+                oos_start=effective_oos_start,
+                oos_end=effective_oos_end,
                 status="INSUFFICIENT",
-                parameters_locked=True,
+                provenance_status="VALID",
             )
 
         observations = sum(int(getattr(window, "observations", 0)) for window in valid_windows)
@@ -149,6 +210,11 @@ class TradingPathIndependentOOSEvidenceServiceV015:
             median_window_excess_pct=round(median(excess), 10),
             status="READY" if sufficient else "INSUFFICIENT",
             parameters_locked=True,
+            validation_start=validation_start,
+            validation_end=validation_end,
+            oos_start=effective_oos_start,
+            oos_end=effective_oos_end,
+            provenance_status="VALID",
         )
 
 
