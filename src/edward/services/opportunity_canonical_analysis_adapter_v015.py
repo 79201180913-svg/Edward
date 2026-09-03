@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from hashlib import sha256
 from typing import Any, ClassVar, Iterable
 
-from edward.domain import TradingPathAnalysisV012
+from edward.domain import TradingPathAnalysisV012, TradingPathContextV015
 from edward.services.analysis_service import StrategyResult
 from edward.services.analysis_path_runtime_service_v012 import AnalysisPathRuntimeServiceV012
 
@@ -36,6 +36,7 @@ class CanonicalOpportunityAnalysisV015:
         instrument: Any | None = None,
         benchmark_candles: Iterable[Any] | None = None,
         benchmark_id: str | None = None,
+        context: TradingPathContextV015 | None = None,
         force_recompute: bool = False,
     ) -> "CanonicalOpportunityAnalysisV015":
         # Opportunity Search already supplies the instrument object. Preserve
@@ -48,9 +49,12 @@ class CanonicalOpportunityAnalysisV015:
             if benchmark_id is None:
                 benchmark_id = _field(instrument, "benchmark_instrument_uid", None)
 
+        if context is None:
+            context = _context_from_instrument(instrument)
+
         candle_tuple = tuple(candles)
         benchmark_tuple = tuple(benchmark_candles) if benchmark_candles is not None else None
-        cache_key = cls._cache_key(instrument_uid, ticker, profile, candle_tuple, benchmark_tuple, benchmark_id)
+        cache_key = cls._cache_key(instrument_uid, ticker, profile, candle_tuple, benchmark_tuple, benchmark_id, context)
         if not force_recompute:
             cached = cls._cache.get(cache_key)
             if cached is not None:
@@ -64,6 +68,8 @@ class CanonicalOpportunityAnalysisV015:
             benchmark_candles=benchmark_tuple,
             benchmark_id=benchmark_id,
         )
+        if context is not None:
+            analyses = tuple(replace(analysis, context=context) for analysis in analyses)
         result = cls.from_analyses(analyses)
         cls._cache[cache_key] = result
         return result
@@ -80,6 +86,7 @@ class CanonicalOpportunityAnalysisV015:
         candles: tuple[Any, ...],
         benchmark_candles: tuple[Any, ...] | None = None,
         benchmark_id: str | None = None,
+        context: TradingPathContextV015 | None = None,
     ) -> tuple[str, str, str, str]:
         digest = sha256()
         for sequence in (candles, benchmark_candles or ()):
@@ -87,6 +94,11 @@ class CanonicalOpportunityAnalysisV015:
                 digest.update(repr(candle).encode("utf-8", errors="replace"))
                 digest.update(b"\n")
         digest.update(str(benchmark_id or "").encode("utf-8", errors="replace"))
+        if context is not None:
+            for name in TradingPathContextV015.__dataclass_fields__:
+                digest.update(name.encode("utf-8"))
+                digest.update(repr(getattr(context, name)).encode("utf-8", errors="replace"))
+                digest.update(b"\n")
         return (
             str(instrument_uid),
             str(ticker),
@@ -201,6 +213,19 @@ def _field(value: object | None, name: str, default: object | None = None) -> ob
     if isinstance(value, dict):
         return value.get(name, default)
     return getattr(value, name, default)
+
+
+def _context_from_instrument(instrument: object | None) -> TradingPathContextV015 | None:
+    if instrument is None:
+        return None
+    names = TradingPathContextV015.__dataclass_fields__
+    values = {name: _field(instrument, name, None) for name in names}
+    # instrument_metadata is always the original source object. Other fields
+    # are copied only when the instrument object explicitly exposes them.
+    values["instrument_metadata"] = instrument
+    if not any(values[name] is not None for name in names):
+        return None
+    return TradingPathContextV015(**values)
 
 
 __all__ = ["OPPORTUNITY_CANONICAL_ADAPTER_VERSION", "CanonicalOpportunityAnalysisV015"]
