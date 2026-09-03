@@ -16,8 +16,8 @@ class TradingPathMarketContextV015:
     """Return-relative market context evidence for one trading path.
 
     The service is deliberately decision-independent. It measures the path
-    against the instrument baseline, the same-regime benchmark baseline and
-    the market benchmark. It does not apply a BUY/WAIT/PASS threshold.
+    against the instrument baseline, the same-regime baseline and the market
+    benchmark. It does not apply a BUY/WAIT/PASS threshold.
     """
 
     benchmark_id: str | None
@@ -41,25 +41,6 @@ class TradingPathMarketContextServiceV015:
         if value is None or baseline is None:
             return None
         return round(float(value) - float(baseline), 10)
-
-    @staticmethod
-    def _forward_returns(
-        candles: Sequence[Candle],
-        *,
-        horizon: int,
-        start: int = 0,
-        end: int | None = None,
-    ) -> tuple[float, ...]:
-        ordered = tuple(sorted(candles, key=lambda item: item.timestamp))
-        finish_end = len(ordered) if end is None else min(end, len(ordered))
-        values: list[float] = []
-        last_start = finish_end - horizon
-        for index in range(max(0, start), max(0, last_start)):
-            first = float(ordered[index].close)
-            finish = float(ordered[index + horizon].close)
-            if first > 0.0 and finish > 0.0:
-                values.append((finish / first - 1.0) * 100.0)
-        return tuple(values)
 
     @classmethod
     def _market_returns_for_window(
@@ -88,22 +69,43 @@ class TradingPathMarketContextServiceV015:
     @classmethod
     def _same_regime_baseline(
         cls,
+        instrument_candles: Sequence[Candle],
         benchmark_candles: Sequence[Candle],
         *,
         regime: str,
         horizon: int,
         before_timestamp,
     ) -> float | None:
-        ordered = tuple(sorted(benchmark_candles, key=lambda item: item.timestamp))
+        """Benchmark return during the instrument's historical matching regime.
+
+        Regime labels are classified point-in-time from instrument candles only.
+        Benchmark returns are then measured over the same timestamps, preventing
+        future benchmark information from influencing the regime label.
+        """
+        instrument = tuple(sorted(instrument_candles, key=lambda item: item.timestamp))
+        benchmark = tuple(sorted(benchmark_candles, key=lambda item: item.timestamp))
+        if before_timestamp is None:
+            return None
+
+        matching_timestamps: set[object] = set()
+        for index in range(len(instrument)):
+            anchor = instrument[index]
+            if anchor.timestamp >= before_timestamp:
+                break
+            classified = MarketRegimeEngineV08.classify(instrument[: index + 1])
+            if classified.regime == regime:
+                matching_timestamps.add(anchor.timestamp)
+
+        if not matching_timestamps:
+            return None
+
         values: list[float] = []
-        for index in range(max(0, len(ordered) - horizon)):
-            anchor = ordered[index]
-            finish = ordered[index + horizon]
-            if finish.timestamp >= before_timestamp:
+        for index in range(max(0, len(benchmark) - horizon)):
+            anchor = benchmark[index]
+            finish = benchmark[index + horizon]
+            if anchor.timestamp not in matching_timestamps:
                 continue
-            prefix = ordered[: index + 1]
-            classified = MarketRegimeEngineV08.classify(prefix)
-            if classified.regime != regime:
+            if finish.timestamp >= before_timestamp:
                 continue
             first = float(anchor.close)
             last = float(finish.close)
@@ -191,6 +193,7 @@ class TradingPathMarketContextServiceV015:
         first_oos_start = ordered[oos_windows[0].start].timestamp if oos_windows and oos_windows[0].start < len(ordered) else None
         regime_baseline = (
             cls._same_regime_baseline(
+                ordered,
                 benchmark_candles,
                 regime=str(candidate.rule.regime),
                 horizon=horizon,
