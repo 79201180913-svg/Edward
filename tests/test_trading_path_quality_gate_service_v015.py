@@ -10,6 +10,9 @@ def _inputs(**overrides):
         independent_oos_evidence=SimpleNamespace(
             status="READY", parameters_locked=True, excess_return_pct=2.0, worst_window_excess_pct=1.0,
         ),
+        ev_evidence=SimpleNamespace(
+            status="READY", positive_ev=True, statistically_positive_ev=True,
+        ),
         market_context=SimpleNamespace(context_status="FULL", regime_excess_pct=1.5, market_excess_pct=1.0),
         risk_gate=True,
         current_state="entry_ready",
@@ -25,10 +28,35 @@ def test_quality_gate_requires_all_critical_gates():
     assert result.statistical_gate is True
     assert result.wf_gate is True
     assert result.oos_gate is True
+    assert result.ev_gate is True
     assert result.market_context_gate is True
     assert result.risk_gate is True
     assert result.current_state_gate is True
     assert result.reasons == ()
+
+
+def test_quality_gate_rejects_non_positive_or_non_statistically_positive_ev():
+    result = TradingPathQualityGateServiceV015.evaluate(
+        **_inputs(ev_evidence=SimpleNamespace(
+            status="READY", positive_ev=True, statistically_positive_ev=False,
+        ))
+    )
+
+    assert result.passed is False
+    assert result.ev_gate is False
+    assert "EV_GATE_FAILED" in result.reasons
+
+
+def test_quality_gate_rejects_unavailable_ev_evidence():
+    result = TradingPathQualityGateServiceV015.evaluate(
+        **_inputs(ev_evidence=SimpleNamespace(
+            status="INSUFFICIENT", positive_ev=True, statistically_positive_ev=True,
+        ))
+    )
+
+    assert result.passed is False
+    assert result.ev_gate is False
+    assert "EV_GATE_FAILED" in result.reasons
 
 
 def test_quality_gate_does_not_allow_oos_failure_to_be_compensated():
