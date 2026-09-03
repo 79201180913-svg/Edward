@@ -57,6 +57,18 @@ class AnalysisPathRuntimeServiceV012:
             rule.horizon,
         )
 
+    @staticmethod
+    def _analysis_key(analysis: TradingPathAnalysisV012) -> tuple[object, ...]:
+        return (
+            analysis.instrument_uid,
+            analysis.ticker,
+            analysis.hypothesis,
+            analysis.regime,
+            analysis.volatility_bucket,
+            analysis.direction,
+            analysis.horizon,
+        )
+
     @classmethod
     def _discover_train_candidates(
         cls,
@@ -69,30 +81,21 @@ class AnalysisPathRuntimeServiceV012:
 
         fixed_discovery = ConditionalDiscoveryServiceV086.run(train)
         fixed_candidates = TradingPathCandidateServiceV014.from_fixed(
-            fixed_discovery,
-            instrument_uid=instrument_uid,
-            ticker=ticker,
+            fixed_discovery, instrument_uid=instrument_uid, ticker=ticker
         )
         adaptive_discovery = TradingPathAdaptiveDiscoveryServiceV014.run(train)
         adaptive_candidates = TradingPathCandidateServiceV014.from_adaptive(
-            adaptive_discovery,
-            instrument_uid=instrument_uid,
-            ticker=ticker,
+            adaptive_discovery, instrument_uid=instrument_uid, ticker=ticker
         )
         combined = TradingPathCandidateServiceV014.combine(
-            fixed_candidates,
-            adaptive_candidates,
-            ticker=ticker,
+            fixed_candidates, adaptive_candidates, ticker=ticker
         )
 
         statistical_integrity = {}
         if adaptive_candidates:
             returns_by_candidate = {
                 candidate: TradingPathAdaptiveOOSServiceV014.returns_in_range(
-                    candidate,
-                    train,
-                    start=0,
-                    end=len(train),
+                    candidate, train, start=0, end=len(train)
                 )
                 for candidate in adaptive_candidates
             }
@@ -132,15 +135,10 @@ class AnalysisPathRuntimeServiceV012:
         train, validation_candles, oos = TradingPathStatisticalIntegrityServiceV014.partition_candles(ordered)
         split = TradingPathStatisticalIntegrityServiceV014.temporal_split(ordered)
 
-        # v0.8.15: nested WFO reruns the existing TRAIN-only discovery pipeline
-        # inside every expanding fold. Its validation blocks are used only as
-        # robustness evidence; the final reserved OOS block remains untouched.
         nested = TradingPathWalkForwardServiceV015.nested_validate(
             ordered,
             discover=lambda fold_train: self._discover_train_candidates(
-                fold_train,
-                instrument_uid=instrument_uid,
-                ticker=ticker,
+                fold_train, instrument_uid=instrument_uid, ticker=ticker
             ),
             windows=TradingPathWalkForwardServiceV015.DEFAULT_WINDOWS,
             train_size=TradingPathWalkForwardServiceV015.DEFAULT_TRAIN_SIZE,
@@ -149,19 +147,46 @@ class AnalysisPathRuntimeServiceV012:
         wfo_by_key: dict[tuple[object, ...], list[object]] = {}
         for candidate, summary in nested.candidate_summaries:
             wfo_by_key.setdefault(self._candidate_key(candidate), []).append(summary)
-
-        full_train_candidates = self._discover_train_candidates(
-            train,
-            instrument_uid=instrument_uid,
-            ticker=ticker,
-        )
         wfo_pass_by_key = {
             key: summaries[-1].passed
             for key, summaries in wfo_by_key.items()
-            if len(summaries) >= TradingPathWalkForwardServiceV015.DEFAULT_WINDOWS
+            if len(summaries) == len(nested.folds) and nested.folds
         }
 
-        candidates = full_train_candidates
+        candidates = self._discover_train_candidates(
+            train, instrument_uid=instrument_uid, ticker=ticker
+        )
+
+        statistical_integrity = {}
+        adaptive_candidates = tuple(
+            candidate
+            for candidate in candidates
+            if candidate.rule.hypothesis.upper().startswith("ADAPTIVE_RULE:")
+        )
+        if adaptive_candidates:
+            returns_by_candidate = {
+                candidate: TradingPathAdaptiveOOSServiceV014.returns_in_range(
+                    candidate, train, start=0, end=len(train)
+                )
+                for candidate in adaptive_candidates
+            }
+            observation_indices_by_candidate = {
+                candidate: TradingPathAdaptiveOOSServiceV014.matching_indices(candidate, train)
+                for candidate in adaptive_candidates
+            }
+            horizons = {candidate: candidate.rule.horizon for candidate in adaptive_candidates}
+            unique_horizons = sorted({candidate.rule.horizon for candidate in adaptive_candidates})
+            baseline_by_horizon = {
+                horizon: mean(_baseline_returns(train, horizon)) if _baseline_returns(train, horizon) else 0.0
+                for horizon in unique_horizons
+            }
+            statistical_integrity = TradingPathStatisticalIntegrityServiceV014.evaluate_candidate_returns(
+                returns_by_candidate,
+                baseline_return_pct_by_horizon=baseline_by_horizon,
+                horizon_by_candidate=horizons,
+                observation_indices_by_candidate=observation_indices_by_candidate,
+            )
+
         observations = EventObservationBuilderV086.build(ordered)
         validation_size = split.validation_size
         validation_analysis = TradingPathAnalysisBuilderV012.build(
@@ -176,18 +201,7 @@ class AnalysisPathRuntimeServiceV012:
             analysis
             for analysis in validation_analysis
             if analysis.validation.promotion_status == "validated"
-            and wfo_pass_by_key.get(self._candidate_key(next(
-                candidate for candidate in candidates
-                if self._candidate_key(candidate) == self._candidate_key(type("CandidateRef", (), {"rule": type("RuleRef", (), {
-                    "instrument_uid": analysis.instrument_uid,
-                    "ticker": analysis.ticker,
-                    "hypothesis": analysis.hypothesis,
-                    "regime": analysis.regime,
-                    "volatility_bucket": analysis.volatility_bucket,
-                    "direction": analysis.direction,
-                    "horizon": analysis.horizon,
-                })()})(),
-            )), False)
+            and wfo_pass_by_key.get(self._analysis_key(analysis), False)
         )
         candidate_by_key = {self._candidate_key(item): item for item in candidates}
 
@@ -199,30 +213,35 @@ class AnalysisPathRuntimeServiceV012:
 
         finalized: list[TradingPathAnalysisV012] = []
         for analysis in selected:
-            key = self._candidate_key(type("CandidateRef", (), {"rule": type("RuleRef", (), {
-                "instrument_uid": analysis.instrument_uid,
-                "ticker": analysis.ticker,
-                "hypothesis": analysis.hypothesis,
-                "regime": analysis.regime,
-                "volatility_bucket": analysis.volatility_bucket,
-                "direction": analysis.direction,
-                "horizon": analysis.horizon,
-            })()})())
+            key = self._analysis_key(analysis)
             candidate = candidate_by_key.get(key)
             if candidate is None:
                 continue
-            oos_results = TradingPathOOSValidationServiceV012.validate(candidate, ordered, windows=oos_windows, test_size=oos_test_size, observations=observations, evaluation_start=split.oos_start, evaluation_end=split.oos_end)
-            expected_value = TradingPathExpectedValueServiceV012.calculate(candidate, ordered, windows=oos_windows, test_size=oos_test_size, observations=observations, evaluation_start=split.oos_start, evaluation_end=split.oos_end)
-            risk_result = TradingPathRiskServiceV012.evaluate(analysis, candles=ordered, profile=profile, oos_windows=oos_results)
-            with_opportunity = TradingPathOpportunityBuilderV012.build(analysis, expected_value=expected_value, risk_score=risk_result.risk.score, risk_gate=risk_result.path_eligible, oos_windows=oos_results)
+            oos_results = TradingPathOOSValidationServiceV012.validate(
+                candidate, ordered, windows=oos_windows, test_size=oos_test_size,
+                observations=observations, evaluation_start=split.oos_start, evaluation_end=split.oos_end,
+            )
+            expected_value = TradingPathExpectedValueServiceV012.calculate(
+                candidate, ordered, windows=oos_windows, test_size=oos_test_size,
+                observations=observations, evaluation_start=split.oos_start, evaluation_end=split.oos_end,
+            )
+            risk_result = TradingPathRiskServiceV012.evaluate(
+                analysis, candles=ordered, profile=profile, oos_windows=oos_results
+            )
+            with_opportunity = TradingPathOpportunityBuilderV012.build(
+                analysis,
+                expected_value=expected_value,
+                risk_score=risk_result.risk.score,
+                risk_gate=risk_result.path_eligible,
+                oos_windows=oos_results,
+            )
             result = TradingPathDecisionServiceV012.decide(with_opportunity)
             final_validation = with_opportunity.validation
-            integrity = None
-            if hasattr(candidate, "evidence") and candidate in (getattr(self, "_unused", ()),):
-                integrity = None
+            integrity = statistical_integrity.get(candidate)
+            wfo_summaries = wfo_by_key.get(key, ())
             if integrity is not None:
                 final_validation = TradingPathValidationSummary(
-                    wf_persistence_pct=final_validation.wf_persistence_pct,
+                    wf_persistence_pct=(wfo_summaries[-1].persistence_pct if wfo_summaries else final_validation.wf_persistence_pct),
                     robustness_score=final_validation.robustness_score,
                     positive_oos_windows_pct=final_validation.positive_oos_windows_pct,
                     statistical_valid=integrity.statistically_valid,
@@ -237,12 +256,41 @@ class AnalysisPathRuntimeServiceV012:
                     adjusted_p_value=integrity.adjusted_p_value,
                     hypotheses_tested=integrity.hypotheses_tested,
                 )
-            final = TradingPathAnalysisV012(instrument_uid=with_opportunity.instrument_uid, ticker=with_opportunity.ticker, strategy_family=with_opportunity.strategy_family, hypothesis=with_opportunity.hypothesis, regime=with_opportunity.regime, volatility_bucket=with_opportunity.volatility_bucket, direction=with_opportunity.direction, horizon=with_opportunity.horizon, evidence=with_opportunity.evidence, validation=final_validation, market_context=with_opportunity.market_context, opportunity=with_opportunity.opportunity, current_state=result.current_state, decision=result.decision, status=result.status, rank=with_opportunity.rank)
+            final = TradingPathAnalysisV012(
+                instrument_uid=with_opportunity.instrument_uid,
+                ticker=with_opportunity.ticker,
+                strategy_family=with_opportunity.strategy_family,
+                hypothesis=with_opportunity.hypothesis,
+                regime=with_opportunity.regime,
+                volatility_bucket=with_opportunity.volatility_bucket,
+                direction=with_opportunity.direction,
+                horizon=with_opportunity.horizon,
+                evidence=with_opportunity.evidence,
+                validation=final_validation,
+                market_context=with_opportunity.market_context,
+                opportunity=with_opportunity.opportunity,
+                current_state=result.current_state,
+                decision=result.decision,
+                status=result.status,
+                rank=with_opportunity.rank,
+            )
             finalized.append(final)
             opportunity = final.opportunity
-            logger.warning("[V015 PATH DECISION] ticker=%s hypothesis=%s regime=%s volatility=%s direction=%s horizon=%d rank=%s validation=%s ev=%s risk=%s opportunity=%s confidence=%s decision=%s state=%s reason=%s", ticker, final.hypothesis, final.regime, final.volatility_bucket, final.direction, final.horizon, final.rank, _value(final.status), _field(opportunity, "expected_value_pct"), _field(opportunity, "risk_score"), _field(opportunity, "score"), _field(opportunity, "confidence"), _value(final.decision), _value(final.current_state), ",".join(result.reasons) or "READY")
+            logger.warning(
+                "[V015 PATH DECISION] ticker=%s hypothesis=%s regime=%s volatility=%s direction=%s horizon=%d rank=%s validation=%s ev=%s risk=%s opportunity=%s confidence=%s decision=%s state=%s reason=%s",
+                ticker, final.hypothesis, final.regime, final.volatility_bucket, final.direction,
+                final.horizon, final.rank, _value(final.status), _field(opportunity, "expected_value_pct"),
+                _field(opportunity, "risk_score"), _field(opportunity, "score"), _field(opportunity, "confidence"),
+                _value(final.decision), _value(final.current_state), ",".join(result.reasons) or "READY",
+            )
 
-        logger.warning("[V015 PATH RUNTIME] ticker=%s candles=%d train=%d validation=%d oos=%d discovered=%d selected=%d final=%d buy=%d wait=%d pass=%d nested_folds=%d", ticker, len(ordered), len(train), len(validation_candles), len(oos), len(candidates), len(selected), len(finalized), sum(_value(item.decision) == "buy" for item in finalized), sum(_value(item.decision) == "wait" for item in finalized), sum(_value(item.decision) == "pass" for item in finalized), len(nested.folds))
+        logger.warning(
+            "[V015 PATH RUNTIME] ticker=%s candles=%d train=%d validation=%d oos=%d discovered=%d selected=%d final=%d buy=%d wait=%d pass=%d nested_folds=%d",
+            ticker, len(ordered), len(train), len(validation_candles), len(oos), len(candidates), len(selected),
+            len(finalized), sum(_value(item.decision) == "buy" for item in finalized),
+            sum(_value(item.decision) == "wait" for item in finalized),
+            sum(_value(item.decision) == "pass" for item in finalized), len(nested.folds),
+        )
         return tuple(finalized)
 
 
