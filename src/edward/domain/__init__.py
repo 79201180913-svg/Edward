@@ -40,6 +40,7 @@ from .trading_path_analysis_v012 import (
     TradingPathOpportunity,
     TradingPathValidationSummary,
 )
+from .trading_path_context_v015 import TradingPathContextV015
 
 __all__ = [
     "ExecutionDecision",
@@ -53,7 +54,6 @@ __all__ = [
     "Account",
     "Instrument",
     "MoneyBalance",
-    "Order",
     "OrderSide",
     "OrderStatus",
     "OrderType",
@@ -73,4 +73,5 @@ __all__ = [
     "TradingPathMarketContext",
     "TradingPathOpportunity",
     "TradingPathValidationSummary",
+    "TradingPathContextV015",
 ]
