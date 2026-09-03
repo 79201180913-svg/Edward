@@ -57,18 +57,6 @@ class AnalysisPathRuntimeServiceV012:
             rule.horizon,
         )
 
-    @staticmethod
-    def _analysis_key(analysis: TradingPathAnalysisV012) -> tuple[object, ...]:
-        return (
-            analysis.instrument_uid,
-            analysis.ticker,
-            analysis.hypothesis,
-            analysis.regime,
-            analysis.volatility_bucket,
-            analysis.direction,
-            analysis.horizon,
-        )
-
     @classmethod
     def _discover_train_candidates(
         cls,
@@ -135,6 +123,10 @@ class AnalysisPathRuntimeServiceV012:
         train, validation_candles, oos = TradingPathStatisticalIntegrityServiceV014.partition_candles(ordered)
         split = TradingPathStatisticalIntegrityServiceV014.temporal_split(ordered)
 
+        # v0.8.15: execute nested WFO in the canonical runtime. Discovery is
+        # rerun independently for every expanding TRAIN fold. The fold
+        # validation blocks are diagnostic robustness evidence for this stage;
+        # final promotion remains unchanged until V815-02 aggregates persistence.
         nested = TradingPathWalkForwardServiceV015.nested_validate(
             ordered,
             discover=lambda fold_train: self._discover_train_candidates(
@@ -144,19 +136,10 @@ class AnalysisPathRuntimeServiceV012:
             train_size=TradingPathWalkForwardServiceV015.DEFAULT_TRAIN_SIZE,
             validation_size=TradingPathWalkForwardServiceV015.DEFAULT_VALIDATION_SIZE,
         )
-        wfo_by_key: dict[tuple[object, ...], list[object]] = {}
-        for candidate, summary in nested.candidate_summaries:
-            wfo_by_key.setdefault(self._candidate_key(candidate), []).append(summary)
-        wfo_pass_by_key = {
-            key: summaries[-1].passed
-            for key, summaries in wfo_by_key.items()
-            if len(summaries) == len(nested.folds) and nested.folds
-        }
 
         candidates = self._discover_train_candidates(
             train, instrument_uid=instrument_uid, ticker=ticker
         )
-
         statistical_integrity = {}
         adaptive_candidates = tuple(
             candidate
@@ -198,10 +181,8 @@ class AnalysisPathRuntimeServiceV012:
             validation_end=split.validation_end,
         )
         selected = tuple(
-            analysis
-            for analysis in validation_analysis
+            analysis for analysis in validation_analysis
             if analysis.validation.promotion_status == "validated"
-            and wfo_pass_by_key.get(self._analysis_key(analysis), False)
         )
         candidate_by_key = {self._candidate_key(item): item for item in candidates}
 
@@ -213,7 +194,10 @@ class AnalysisPathRuntimeServiceV012:
 
         finalized: list[TradingPathAnalysisV012] = []
         for analysis in selected:
-            key = self._analysis_key(analysis)
+            key = (
+                analysis.instrument_uid, analysis.ticker, analysis.hypothesis,
+                analysis.regime, analysis.volatility_bucket, analysis.direction, analysis.horizon,
+            )
             candidate = candidate_by_key.get(key)
             if candidate is None:
                 continue
@@ -229,19 +213,15 @@ class AnalysisPathRuntimeServiceV012:
                 analysis, candles=ordered, profile=profile, oos_windows=oos_results
             )
             with_opportunity = TradingPathOpportunityBuilderV012.build(
-                analysis,
-                expected_value=expected_value,
-                risk_score=risk_result.risk.score,
-                risk_gate=risk_result.path_eligible,
-                oos_windows=oos_results,
+                analysis, expected_value=expected_value, risk_score=risk_result.risk.score,
+                risk_gate=risk_result.path_eligible, oos_windows=oos_results,
             )
             result = TradingPathDecisionServiceV012.decide(with_opportunity)
             final_validation = with_opportunity.validation
             integrity = statistical_integrity.get(candidate)
-            wfo_summaries = wfo_by_key.get(key, ())
             if integrity is not None:
                 final_validation = TradingPathValidationSummary(
-                    wf_persistence_pct=(wfo_summaries[-1].persistence_pct if wfo_summaries else final_validation.wf_persistence_pct),
+                    wf_persistence_pct=final_validation.wf_persistence_pct,
                     robustness_score=final_validation.robustness_score,
                     positive_oos_windows_pct=final_validation.positive_oos_windows_pct,
                     statistical_valid=integrity.statistically_valid,
@@ -285,11 +265,12 @@ class AnalysisPathRuntimeServiceV012:
             )
 
         logger.warning(
-            "[V015 PATH RUNTIME] ticker=%s candles=%d train=%d validation=%d oos=%d discovered=%d selected=%d final=%d buy=%d wait=%d pass=%d nested_folds=%d",
+            "[V015 PATH RUNTIME] ticker=%s candles=%d train=%d validation=%d oos=%d discovered=%d selected=%d final=%d buy=%d wait=%d pass=%d nested_folds=%d nested_evaluated=%d",
             ticker, len(ordered), len(train), len(validation_candles), len(oos), len(candidates), len(selected),
             len(finalized), sum(_value(item.decision) == "buy" for item in finalized),
             sum(_value(item.decision) == "wait" for item in finalized),
             sum(_value(item.decision) == "pass" for item in finalized), len(nested.folds),
+            len(nested.candidate_summaries),
         )
         return tuple(finalized)
 
