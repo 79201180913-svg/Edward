@@ -40,14 +40,16 @@ def _fmt_bool(value: Any) -> str:
 
 
 def _analysis_key(item: Any) -> tuple[Any, ...]:
+    rule = getattr(item, "rule", None)
+    source = rule if rule is not None else item
     return (
-        getattr(item, "instrument_uid", None),
-        getattr(item, "ticker", None),
-        getattr(item, "hypothesis", None),
-        getattr(item, "regime", None),
-        getattr(item, "volatility_bucket", None),
-        getattr(item, "direction", None),
-        getattr(item, "horizon", None),
+        getattr(source, "instrument_uid", None),
+        getattr(source, "ticker", None),
+        getattr(source, "hypothesis", None),
+        getattr(source, "regime", None),
+        getattr(source, "volatility_bucket", None),
+        getattr(source, "direction", None),
+        getattr(source, "horizon", None),
     )
 
 
