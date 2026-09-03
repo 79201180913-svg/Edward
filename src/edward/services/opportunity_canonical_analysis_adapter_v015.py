@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, is_dataclass, replace
 from hashlib import sha256
 from typing import Any, ClassVar, Iterable
 
@@ -69,7 +69,7 @@ class CanonicalOpportunityAnalysisV015:
             benchmark_id=benchmark_id,
         )
         if context is not None:
-            analyses = tuple(replace(analysis, context=context) for analysis in analyses)
+            analyses = tuple(_attach_context(analysis, context) for analysis in analyses)
         result = cls.from_analyses(analyses)
         cls._cache[cache_key] = result
         return result
@@ -226,6 +226,18 @@ def _context_from_instrument(instrument: object | None) -> TradingPathContextV01
     if not any(values[name] is not None for name in names):
         return None
     return TradingPathContextV015(**values)
+
+
+def _attach_context(analysis: object, context: TradingPathContextV015) -> object:
+    """Attach context to canonical dataclasses without breaking test doubles.
+
+    Runtime contracts use the frozen TradingPathAnalysisV012 dataclass, while
+    compatibility tests and downstream adapters may return lightweight objects.
+    Preserve those objects unchanged rather than requiring dataclass semantics.
+    """
+    if is_dataclass(analysis) and not isinstance(analysis, type):
+        return replace(analysis, context=context)
+    return analysis
 
 
 __all__ = ["OPPORTUNITY_CANONICAL_ADAPTER_VERSION", "CanonicalOpportunityAnalysisV015"]
