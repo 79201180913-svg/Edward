@@ -46,7 +46,7 @@ class TradingPathValidationSummary:
 
 @dataclass(frozen=True, slots=True)
 class TradingPathMarketContext:
-    """Market-context snapshot used for path ranking."""
+    """Market-context snapshot used for path ranking and evidence display."""
 
     benchmark_id: str | None = None
     baseline_rank: int | None = None
@@ -58,6 +58,16 @@ class TradingPathMarketContext:
     regime_compatibility: float | None = None
     relative_strength_component: float | None = None
     volatility_component: float | None = None
+    instrument_return_pct: float | None = None
+    instrument_baseline_return_pct: float | None = None
+    regime_baseline_return_pct: float | None = None
+    market_return_pct: float | None = None
+    instrument_excess_pct: float | None = None
+    regime_excess_pct: float | None = None
+    market_excess_pct: float | None = None
+    relative_strength_pct: float | None = None
+    context_status: str | None = None
+    context_version: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
