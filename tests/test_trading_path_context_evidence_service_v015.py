@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from edward.domain import TradingPathContextV015
+from edward.domain import TradingPathAnalysisV012, TradingPathContextV015
 from edward.services.trading_path_context_evidence_service_v015 import TradingPathContextEvidenceServiceV015
 
 
@@ -17,28 +17,15 @@ def test_context_evidence_service_consumes_preserved_context_sources(monkeypatch
     )
 
     context = TradingPathContextV015(
-        fundamentals=object(),
-        order_book=object(),
-        trades=(object(),),
-        current_signal=object(),
-        historical_signals=(object(),),
-        events=object(),
-        historical_gaps_pct=(1.0,),
-        historical_event_vol_pct=(2.0,),
-        dividends=object(),
-        insider=(object(),),
-        session_name="REGULAR",
-        session_execution_allowed=False,
-        risk_metadata=object(),
-        current_price=101.0,
-        current_weight_pct=5.0,
-        marginal_risk_pct=2.0,
-        diversification_benefit_pct=3.0,
-        expected_return_impact_pct=4.0,
-        max_position_weight_pct=10.0,
+        fundamentals=object(), order_book=object(), trades=(object(),),
+        current_signal=object(), historical_signals=(object(),), events=object(),
+        historical_gaps_pct=(1.0,), historical_event_vol_pct=(2.0,), dividends=object(),
+        insider=(object(),), session_name="REGULAR", session_execution_allowed=False,
+        risk_metadata=object(), current_price=101.0, current_weight_pct=5.0,
+        marginal_risk_pct=2.0, diversification_benefit_pct=3.0,
+        expected_return_impact_pct=4.0, max_position_weight_pct=10.0,
     )
     candles = (object(), object())
-
     result = TradingPathContextEvidenceServiceV015.analyze(context=context, candles=candles)
 
     assert result.version == "test"
@@ -62,3 +49,25 @@ def test_context_evidence_service_consumes_preserved_context_sources(monkeypatch
     assert captured["diversification_benefit_pct"] == 3.0
     assert captured["expected_return_impact_pct"] == 4.0
     assert captured["max_position_weight_pct"] == 10.0
+
+
+def test_context_evidence_service_enriches_canonical_analysis(monkeypatch):
+    context = TradingPathContextV015(fundamentals=object())
+    evidence = SimpleNamespace(version="0.8.15-test")
+    analysis = TradingPathAnalysisV012(
+        instrument_uid="SBER", ticker="SBER", strategy_family="trend",
+        hypothesis="H", regime="TREND_UP", volatility_bucket="normal",
+        direction="long", horizon=3, evidence=SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        TradingPathContextEvidenceServiceV015,
+        "analyze",
+        staticmethod(lambda *, context, candles=(): evidence),
+    )
+
+    enriched = TradingPathContextEvidenceServiceV015.enrich(
+        analysis, context=context, candles=(object(),)
+    )
+
+    assert enriched.context is context
+    assert enriched.context_evidence is evidence
