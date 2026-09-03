@@ -20,6 +20,7 @@ from edward.services.trading_path_risk_service_v012 import TradingPathRiskServic
 from edward.services.trading_path_statistical_integrity_service_v014 import TradingPathStatisticalIntegrityServiceV014
 from edward.services.trading_path_walk_forward_service_v015 import TradingPathWalkForwardServiceV015
 from edward.services.trading_path_market_context_service_v015 import TradingPathMarketContextServiceV015
+from edward.services.trading_path_independent_oos_evidence_service_v015 import TradingPathIndependentOOSEvidenceServiceV015
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +113,7 @@ class AnalysisPathRuntimeServiceV012:
             if candidate is None:
                 continue
             oos_results = TradingPathOOSValidationServiceV012.validate(candidate, ordered, windows=oos_windows, test_size=oos_test_size, observations=observations, evaluation_start=split.oos_start, evaluation_end=split.oos_end)
+            independent_oos_evidence = TradingPathIndependentOOSEvidenceServiceV015.build(candidate_key=key, oos_windows=oos_results, validation_start=split.validation_start, validation_end=split.validation_end)
             expected_value = TradingPathExpectedValueServiceV012.calculate(candidate, ordered, windows=oos_windows, test_size=oos_test_size, observations=observations, evaluation_start=split.oos_start, evaluation_end=split.oos_end)
             risk_result = TradingPathRiskServiceV012.evaluate(analysis, candles=ordered, profile=profile, oos_windows=oos_results)
             with_opportunity = TradingPathOpportunityBuilderV012.build(analysis, expected_value=expected_value, risk_score=risk_result.risk.score, risk_gate=risk_result.path_eligible, oos_windows=oos_results)
@@ -145,10 +147,10 @@ class AnalysisPathRuntimeServiceV012:
                 context_status=market_context.context_status,
                 context_version=market_context.version,
             )
-            final = TradingPathAnalysisV012(instrument_uid=with_opportunity.instrument_uid, ticker=with_opportunity.ticker, strategy_family=with_opportunity.strategy_family, hypothesis=with_opportunity.hypothesis, regime=with_opportunity.regime, volatility_bucket=with_opportunity.volatility_bucket, direction=with_opportunity.direction, horizon=with_opportunity.horizon, evidence=with_opportunity.evidence, validation=final_validation, market_context=canonical_market_context, opportunity=with_opportunity.opportunity, current_state=result.current_state, decision=result.decision, status=result.status, rank=with_opportunity.rank)
+            final = TradingPathAnalysisV012(instrument_uid=with_opportunity.instrument_uid, ticker=with_opportunity.ticker, strategy_family=with_opportunity.strategy_family, hypothesis=with_opportunity.hypothesis, regime=with_opportunity.regime, volatility_bucket=with_opportunity.volatility_bucket, direction=with_opportunity.direction, horizon=with_opportunity.horizon, evidence=with_opportunity.evidence, validation=final_validation, market_context=canonical_market_context, opportunity=with_opportunity.opportunity, current_state=result.current_state, decision=result.decision, status=result.status, rank=with_opportunity.rank, independent_oos_evidence=independent_oos_evidence)
             finalized.append(final)
             opportunity = final.opportunity
-            logger.warning("[V015 PATH DECISION] ticker=%s hypothesis=%s regime=%s volatility=%s direction=%s horizon=%d rank=%s validation=%s ev=%s risk=%s opportunity=%s confidence=%s decision=%s state=%s reason=%s wf_persistence=%s market_context=%s", ticker, final.hypothesis, final.regime, final.volatility_bucket, final.direction, final.horizon, final.rank, _value(final.status), _field(opportunity, "expected_value_pct"), _field(opportunity, "risk_score"), _field(opportunity, "score"), _field(opportunity, "confidence"), _value(final.decision), _value(final.current_state), ",".join(result.reasons) or "READY", _field(final.validation, "wf_persistence_pct"), final.market_context.context_status)
+            logger.warning("[V015 PATH DECISION] ticker=%s hypothesis=%s regime=%s volatility=%s direction=%s horizon=%d rank=%s validation=%s ev=%s risk=%s opportunity=%s confidence=%s decision=%s state=%s reason=%s wf_persistence=%s market_context=%s oos_evidence=%s", ticker, final.hypothesis, final.regime, final.volatility_bucket, final.direction, final.horizon, final.rank, _value(final.status), _field(opportunity, "expected_value_pct"), _field(opportunity, "risk_score"), _field(opportunity, "score"), _field(opportunity, "confidence"), _value(final.decision), _value(final.current_state), ",".join(result.reasons) or "READY", _field(final.validation, "wf_persistence_pct"), final.market_context.context_status, independent_oos_evidence.status)
         logger.warning("[V015 PATH RUNTIME] ticker=%s candles=%d train=%d validation=%d oos=%d discovered=%d selected=%d final=%d buy=%d wait=%d pass=%d nested_folds=%d nested_candidates=%d", ticker, len(ordered), len(train), len(validation_candles), len(oos), len(candidates), len(selected), len(finalized), sum(_value(item.decision) == "buy" for item in finalized), sum(_value(item.decision) == "wait" for item in finalized), sum(_value(item.decision) == "pass" for item in finalized), len(nested.folds), len(nested.candidate_summaries))
         return tuple(finalized)
 
