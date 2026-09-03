@@ -79,14 +79,13 @@ def test_canonical_opportunity_adapter_delegates_analysis_to_v014_runtime(monkey
         instrument={"uid": "uid"},
     )
 
-    assert calls == {
-        "instrument_uid": "uid",
-        "ticker": "SBER",
-        "candles": (1, 2, 3),
-        "profile": "medium_term",
-        "benchmark_candles": None,
-        "benchmark_id": None,
-    }
+    assert calls["instrument_uid"] == "uid"
+    assert calls["ticker"] == "SBER"
+    assert calls["candles"] == (1, 2, 3)
+    assert calls["profile"] == "medium_term"
+    assert calls["benchmark_candles"] is None
+    assert calls["benchmark_id"] is None
+    assert calls["context"].instrument_metadata == {"uid": "uid"}
     assert result.analyses == expected
 
 
