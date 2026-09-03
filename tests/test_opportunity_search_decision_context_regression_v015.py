@@ -34,6 +34,10 @@ def test_opportunity_search_passes_portfolio_decision_flags(monkeypatch):
     )
     selected = StrategyResult(
         strategy="test",
+        parameters={},
+        return_pct=10.0,
+        sharpe=1.0,
+        trades=10,
         score=1.0,
         quality_gate=True,
         test_score=0.8,
