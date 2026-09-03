@@ -7,7 +7,7 @@ from typing import Any, Callable
 
 from edward.services.account_service import AccountService
 from edward.services.analysis_service import AnalysisService, Candle, StrategyResult
-from edward.services.decision_engine import DecisionEngine, DecisionRequest, OpportunityContext, PortfolioContextData, PositionContextData, RiskContextData, Scenario, StrategyContextData
+from edward.services.decision_engine import Decision, DecisionEngine, DecisionRequest, OpportunityContext, PortfolioContextData, PositionContextData, RiskContextData, Scenario, StrategyContextData
 from edward.services.forecast_model_selection_service import ForecastModelSelectionService
 from edward.services.instrument_catalog_service import InstrumentCatalogService
 from edward.services.instrument_decision_context_service import InstrumentDecisionContextService
@@ -76,11 +76,7 @@ class OpportunitySearchService:
             return None
         try:
             from edward.services.market_context_runtime_service_v011 import MarketContextRuntimeServiceV011
-            return MarketContextRuntimeServiceV011(
-                fetcher=get_candles,
-                indicatives_fetcher=get_indicatives,
-                find_instrument_fetcher=getattr(self.client, "find_instrument", None),
-            )
+            return MarketContextRuntimeServiceV011(fetcher=get_candles, indicatives_fetcher=get_indicatives, find_instrument_fetcher=getattr(self.client, "find_instrument", None))
         except Exception:
             logger.exception("[V015 MARKET CONTEXT] failed to initialize existing v0.11 runtime")
             return None
@@ -168,20 +164,16 @@ class OpportunitySearchService:
     def _benchmark_context(self, instrument: Any, candles: list[Candle]) -> tuple[list[Candle] | None, str | None]:
         """Build the existing v0.11 point-in-time benchmark context and return its market candles."""
         runtime = getattr(self, "market_context_runtime", None)
-        if runtime is None:
-            return None, None
+        if runtime is None: return None, None
         try:
             benchmark, snapshot = runtime.build(instrument_metadata=instrument, asset_candles=candles, as_of=max(item.timestamp for item in candles))
             benchmark_candles = tuple(getattr(runtime, "last_built_market_candles", ()) or ())
             benchmark_id = str(getattr(benchmark, "benchmark_id", None) or "") or None
             if not benchmark_candles:
-                logger.info("[V015 MARKET CONTEXT] ticker=%s benchmark=%s status=%s candles=0", _field(instrument, "ticker", ""), benchmark_id, getattr(snapshot, "context_status", "UNAVAILABLE"))
-                return None, benchmark_id
-            logger.info("[V015 MARKET CONTEXT] ticker=%s benchmark=%s status=%s candles=%d", _field(instrument, "ticker", ""), benchmark_id, getattr(snapshot, "context_status", "UNAVAILABLE"), len(benchmark_candles))
-            return list(benchmark_candles), benchmark_id
+                logger.info("[V015 MARKET CONTEXT] ticker=%s benchmark=%s status=%s candles=0", _field(instrument, "ticker", ""), benchmark_id, getattr(snapshot, "context_status", "UNAVAILABLE")); return None, benchmark_id
+            logger.info("[V015 MARKET CONTEXT] ticker=%s benchmark=%s status=%s candles=%d", _field(instrument, "ticker", ""), benchmark_id, getattr(snapshot, "context_status", "UNAVAILABLE"), len(benchmark_candles)); return list(benchmark_candles), benchmark_id
         except Exception:
-            logger.exception("[V015 MARKET CONTEXT] ticker=%s failed", _field(instrument, "ticker", ""))
-            return None, None
+            logger.exception("[V015 MARKET CONTEXT] ticker=%s failed", _field(instrument, "ticker", "")); return None, None
 
     def _evaluate_instrument(self, *, instrument: Any, profile: str, positions: Any, portfolio: Any, progress_callback: ProgressCallback | None = None, progress_base: float = 15.0, progress_span: float = 80.0, current: int = 0, total: int = 0) -> OpportunitySearchResult:
         uid = str(_field(instrument, "uid", _field(instrument, "instrument_uid", ""))); ticker = str(_field(instrument, "ticker", "")); name = str(_field(instrument, "name", "")); price = _float_or_none(_field(instrument, "last_price", None))
@@ -215,13 +207,34 @@ class OpportunitySearchService:
             logger.exception("[OPPORTUNITY ANALYSIS ERROR] uid=%s ticker=%s", uid, ticker)
             return self._unavailable(instrument, price, position_data.quantity, f"Ошибка анализа: {exc}")
 
-    def _get_candles(self, uid: str) -> list[Candle]:
-        start = datetime(2000, 1, 1, tzinfo=timezone.utc); end = datetime.now(timezone.utc)
-        try: return list(self.client.get_candles(uid, start, end, interval="CANDLE_INTERVAL_DAY", limit=2400) or [])
-        except TypeError: return list(self.client.get_candles(uid, interval="CANDLE_INTERVAL_DAY", limit=2400) or [])
+    def _get_candles(self, instrument_uid: str) -> list[Candle]:
+        payload: Any = None
+        try: payload = self.client.get_candles(instrument_uid, interval="CANDLE_INTERVAL_DAY", limit=2400)
+        except TypeError: payload = self.client.get_candles(instrument_uid, interval="CANDLE_INTERVAL_DAY", days=2400)
+        def extract_items(value: Any) -> list[Any]:
+            if isinstance(value, list): return value
+            if isinstance(value, dict):
+                items = value.get("candles") or value.get("data"); items = items.get("candles", []) if isinstance(items, dict) else items; return items if isinstance(items, list) else []
+            items = getattr(value, "candles", None) or getattr(value, "data", None); items = items.get("candles", []) if isinstance(items, dict) else items; return list(items) if items is not None and not isinstance(items, (str, bytes)) else []
+        items = extract_items(payload); logger.info("[OPPORTUNITY CANDLES] uid=%s response_type=%s initial_count=%d", instrument_uid, type(payload).__name__, len(items))
+        if len(items) < 150:
+            try:
+                retry = self.client.get_candles(instrument_uid, interval="CANDLE_INTERVAL_DAY", limit=2400, days=2400); retry_items = extract_items(retry)
+                if len(retry_items) > len(items): items = retry_items
+            except TypeError: pass
+        result: list[Candle] = []
+        for item in items:
+            timestamp = _field(item, "time", _field(item, "timestamp", None))
+            if timestamp is None: continue
+            try: result.append(Candle(timestamp=_parse_timestamp(timestamp), open=_number(_field(item, "open", 0)), high=_number(_field(item, "high", 0)), low=_number(_field(item, "low", 0)), close=_number(_field(item, "close", 0)), volume=_number(_field(item, "volume", 0))))
+            except (TypeError, ValueError, OverflowError): continue
+        return result
 
     def _active_account(self) -> str | None:
-        try: return AccountService(self.client).get_active_account_id()
+        try:
+            accounts = self.client.get_accounts(); items = accounts if isinstance(accounts, list) else _field(accounts, "accounts", []) or []
+            active = next((item for item in items if str(_field(item, "status", "")).strip() in {"2", "OPEN", "ACCOUNT_STATUS_OPEN", "OPENED"} or AccountService.is_open(item)), None)
+            return str(_field(active, "id", "")) if active else None
         except Exception: return None
 
     @staticmethod
@@ -246,26 +259,40 @@ class OpportunitySearchService:
 
     @staticmethod
     def _unavailable(instrument: Any, price: float | None, quantity: float, reason: str) -> OpportunitySearchResult:
-        return OpportunitySearchResult(instrument_uid=str(_field(instrument, "uid", _field(instrument, "instrument_uid", ""))), ticker=str(_field(instrument, "ticker", "")), name=str(_field(instrument, "name", "")), price=price, market_regime=None, strategy_name=None, strategy_score=0.0, opportunity_score=0.0, decision=None, status="ANALYSIS_UNAVAILABLE", reason=reason, explanation=reason, quantity=quantity)
+        display_status = f"ANALYSIS_UNAVAILABLE: {reason}" if reason else "ANALYSIS_UNAVAILABLE"
+        logger.warning("[OPPORTUNITY UNAVAILABLE] ticker=%s price=%s status=%s reason=%s", _field(instrument, "ticker", ""), price, "ANALYSIS_UNAVAILABLE", reason)
+        return OpportunitySearchResult(str(_field(instrument, "uid", _field(instrument, "instrument_uid", ""))), str(_field(instrument, "ticker", "")), str(_field(instrument, "name", "")), price, None, None, 0.0, 0.0, None, display_status, "ANALYSIS_UNAVAILABLE", reason, quantity, 0.0)
 
 def _field(obj: Any, name: str, default: Any = None) -> Any:
-    if isinstance(obj, dict): return obj.get(name, default)
-    return getattr(obj, name, default)
+    return obj.get(name, default) if isinstance(obj, dict) else getattr(obj, name, default)
 
-def _bool_field(obj: Any, name: str, default: bool = False) -> bool:
-    value = _field(obj, name, default); return bool(value)
+def _uid(value: Any) -> str:
+    return str(_field(value, "uid", _field(value, "instrument_uid", "")))
+
+def _bool_field(value: Any, name: str, default: bool = False) -> bool:
+    raw = _field(value, name, default); return raw.strip().casefold() in {"true", "1", "yes", "да"} if isinstance(raw, str) else bool(raw)
+
+def _number(value: Any) -> float:
+    if isinstance(value, dict): return float(value.get("units", 0)) + float(value.get("nano", value.get("nanos", 0))) / 1_000_000_000
+    units = getattr(value, "units", None); nano = getattr(value, "nano", getattr(value, "nanos", None))
+    if units is not None or nano is not None: return float(units or 0) + float(nano or 0) / 1_000_000_000
+    try: return float(value)
+    except Exception: return 0.0
 
 def _float_or_none(value: Any) -> float | None:
-    try: return None if value is None else float(value)
-    except (TypeError, ValueError): return None
+    try: return None if value in (None, "") else _number(value)
+    except Exception: return None
 
-def _uid(item: Any) -> str:
-    return str(_field(item, "uid", _field(item, "instrument_uid", _field(item, "figi", ""))) or "")
+def _parse_timestamp(value: Any) -> datetime:
+    if isinstance(value, datetime): return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, dict): return datetime.fromtimestamp(int(value.get("seconds", 0) or 0) + int(value.get("nanos", value.get("nano", 0)) or 0) / 1_000_000_000, tz=timezone.utc)
+    seconds = getattr(value, "seconds", None); nanos = getattr(value, "nanos", getattr(value, "nano", None))
+    if seconds is not None or nanos is not None: return datetime.fromtimestamp(float(seconds or 0) + float(nanos or 0) / 1_000_000_000, tz=timezone.utc)
+    text = str(value or ""); text = text[:-1] + "+00:00" if text.endswith("Z") else text; parsed = datetime.fromisoformat(text); return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 def _held_positions(positions: Any) -> list[Any]:
-    if positions is None: return []
-    if isinstance(positions, dict): return list(positions.get("securities") or positions.get("positions") or [])
-    return list(getattr(positions, "securities", None) or getattr(positions, "positions", None) or [])
+    raw = _field(positions, "securities", []) if positions is not None else []
+    return [item for item in (raw or []) if abs(_number(_field(item, "balance", _field(item, "quantity", 0)))) > 0]
 
 def _empty_portfolio() -> Any:
     return type("EmptyPortfolio", (), {"portfolio": PortfolioContextData(), "position": PositionContextData()})()
