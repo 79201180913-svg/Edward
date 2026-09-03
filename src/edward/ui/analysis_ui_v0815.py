@@ -109,9 +109,20 @@ def _render_pipeline_summary(text: tk.Text, snapshot: dict[str, Any]) -> None:
     text.configure(state="disabled")
 
 
+def _widget_class(widget: Any) -> str:
+    try:
+        return str(widget.winfo_class())
+    except (AttributeError, tk.TclError):
+        return ""
+
+
+def _is_widget(widget: Any, *classes: str) -> bool:
+    return _widget_class(widget) in classes
+
+
 def _find_tree(widget: Any) -> Any | None:
     try:
-        if isinstance(widget, ttk.Treeview):
+        if _is_widget(widget, "Treeview"):
             columns = tuple(widget["columns"] or ())
             if len(columns) >= 12:
                 return widget
@@ -127,7 +138,7 @@ def _find_tree(widget: Any) -> Any | None:
 def _find_content(widget: Any) -> Any | None:
     try:
         for child in widget.winfo_children():
-            if isinstance(child, ttk.LabelFrame) and "Детализация выбранного пути" in str(child.cget("text")):
+            if _is_widget(child, "TLabelframe", "Labelframe") and "Детализация выбранного пути" in str(child.cget("text")):
                 return child.master
             found = _find_content(child)
             if found is not None:
@@ -139,7 +150,7 @@ def _find_content(widget: Any) -> Any | None:
 
 def _find_label_frame(widget: Any, title_fragment: str) -> Any | None:
     try:
-        if isinstance(widget, ttk.LabelFrame) and title_fragment in str(widget.cget("text")):
+        if _is_widget(widget, "TLabelframe", "Labelframe") and title_fragment in str(widget.cget("text")):
             return widget
         for child in widget.winfo_children():
             found = _find_label_frame(child, title_fragment)
@@ -152,7 +163,7 @@ def _find_label_frame(widget: Any, title_fragment: str) -> Any | None:
 
 def _replace_legacy_version_labels(widget: Any) -> None:
     try:
-        if isinstance(widget, ttk.Label):
+        if _is_widget(widget, "TLabel", "Label"):
             text = str(widget.cget("text"))
             if "v0.8.14 Adaptive Discovery" in text:
                 widget.configure(text="v0.8.15 Robust Walk-Forward · Canonical Path Runtime")
@@ -315,7 +326,7 @@ def install(app_class: type[Any], client_class: type[Any]) -> None:
         result = original_open(app)
         try:
             candidates = [child for child in app.winfo_children() if child not in before]
-            windows = [child for child in candidates if isinstance(child, tk.Toplevel)]
+            windows = [child for child in candidates if _is_widget(child, "Toplevel")]
             if windows:
                 ticker = str(getattr(app, "instrument_detail", {}).get("ticker", ""))
                 _attach_evidence_panel(windows[-1], ticker)
