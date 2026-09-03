@@ -121,8 +121,7 @@ class AnalysisPathRuntimeServiceV012:
         for analysis in selected:
             key = self._analysis_key(analysis)
             candidate = candidate_by_key.get(key)
-            if candidate is None:
-                continue
+            if candidate is None: continue
             oos_results = TradingPathOOSValidationServiceV012.validate(candidate, ordered, windows=oos_windows, test_size=oos_test_size, observations=observations, evaluation_start=split.oos_start, evaluation_end=split.oos_end)
             independent_oos_evidence = TradingPathIndependentOOSEvidenceServiceV015.build(candidate_key=key, oos_windows=oos_results, validation_start=split.validation_start, validation_end=split.validation_end, oos_start=split.oos_start, oos_end=split.oos_end)
             expected_value = TradingPathExpectedValueServiceV012.calculate(candidate, ordered, windows=oos_windows, test_size=oos_test_size, observations=observations, evaluation_start=split.oos_start, evaluation_end=split.oos_end)
@@ -139,7 +138,8 @@ class AnalysisPathRuntimeServiceV012:
             canonical_market_context = TradingPathMarketContext(benchmark_id=market_context.benchmark_id, baseline_rank=_field(legacy_market_context, "baseline_rank"), context_rank=_field(legacy_market_context, "context_rank"), rank_delta=_field(legacy_market_context, "rank_delta"), baseline_score=_field(legacy_market_context, "baseline_score"), context_adjusted_score=_field(legacy_market_context, "context_adjusted_score"), score_delta=_field(legacy_market_context, "score_delta"), regime_compatibility=_field(legacy_market_context, "regime_compatibility"), relative_strength_component=_field(legacy_market_context, "relative_strength_component"), volatility_component=_field(legacy_market_context, "volatility_component"), instrument_return_pct=market_context.instrument_return_pct, instrument_baseline_return_pct=market_context.instrument_baseline_return_pct, regime_baseline_return_pct=market_context.regime_baseline_return_pct, market_return_pct=market_context.market_return_pct, instrument_excess_pct=market_context.instrument_excess_pct, regime_excess_pct=market_context.regime_excess_pct, market_excess_pct=market_context.market_excess_pct, relative_strength_pct=market_context.relative_strength_pct, context_status=market_context.context_status, context_version=market_context.version)
             pre_gate_current_state = TradingPathCurrentState.ENTRY_READY if risk_result.path_eligible is True else TradingPathCurrentState.INVALID
             quality_gate = TradingPathQualityGateServiceV015.evaluate(validation=final_validation, wf_summary=wf_summary, independent_oos_evidence=independent_oos_evidence, market_context=canonical_market_context, risk_gate=risk_result.path_eligible, current_state=pre_gate_current_state)
-            if quality_gate.passed:
+            hard_gate_failures = {"STATISTICAL_GATE_FAILED", "WF_GATE_FAILED", "OOS_GATE_FAILED", "RISK_GATE_FAILED", "CURRENT_STATE_GATE_FAILED"}
+            if quality_gate.passed or not any(reason in hard_gate_failures for reason in quality_gate.reasons):
                 decision_result = TradingPathDecisionServiceV012.decide(with_opportunity)
                 final_current_state = decision_result.current_state
                 final_decision = TradingPathDecision(_value(decision_result.decision))
