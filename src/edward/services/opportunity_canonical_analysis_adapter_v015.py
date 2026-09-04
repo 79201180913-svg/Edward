@@ -15,12 +15,7 @@ OPPORTUNITY_CANONICAL_ADAPTER_VERSION = "0.8.15"
 
 @dataclass(frozen=True, slots=True)
 class CanonicalOpportunityAnalysisV015:
-    """Opportunity-facing view over canonical v0.8.15 path analyses.
-
-    The adapter owns no analysis logic. It preserves the complete canonical
-    result set and exposes a compatibility shape for the existing Opportunity
-    Search consumer without inventing validation evidence.
-    """
+    """Opportunity-facing view over canonical v0.8.15 path analyses."""
 
     analyses: tuple[TradingPathAnalysisV012, ...]
 
@@ -99,12 +94,7 @@ class CanonicalOpportunityAnalysisV015:
                 digest.update(name.encode("utf-8"))
                 digest.update(repr(getattr(context, name)).encode("utf-8", errors="replace"))
                 digest.update(b"\n")
-        return (
-            str(instrument_uid),
-            str(ticker),
-            str(profile),
-            digest.hexdigest(),
-        )
+        return (str(instrument_uid), str(ticker), str(profile), digest.hexdigest())
 
     @property
     def pipeline_result(self) -> TradingPathAnalysisV012 | None:
@@ -236,4 +226,4 @@ def _attach_context_evidence(analysis: object, context: TradingPathContextV015, 
     return replace(analysis, context_evidence=evidence)
 
 
-__all__ = ["OPPORTUNITY_CANONICAL_ADAPTER_VERSION", "CanonicalOpportunityAnalysisV015"]
+__all__ = ["OPPORTUNITY_CANONICAL_ADAPTER_VERSION", "CanonicalOpportunityAnalysisV015", "_context_from_instrument"]
