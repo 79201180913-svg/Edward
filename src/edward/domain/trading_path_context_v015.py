@@ -5,12 +5,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class TradingPathContextV015:
-    """Immutable context envelope preserved alongside canonical path analysis.
-
-    The envelope intentionally keeps source payloads opaque: individual context
-    producers remain responsible for their own schemas, while the canonical
-    trading-path pipeline guarantees that these inputs are not silently dropped.
-    """
+    """Immutable context envelope preserved alongside canonical path analysis."""
 
     fundamentals: object | None = None
     instrument_metadata: object | None = None
