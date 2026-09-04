@@ -18,6 +18,7 @@ from edward.services.opportunity_analysis_pipeline_v0821 import UnifiedOpportuni
 from edward.services.portfolio_decision_context_service import PortfolioDecisionContextService
 from edward.services.position_sizing_service import PositionSizingInput, PositionSizingService
 from edward.services.trade_plan_service import TradePlanInput, TradePlanService
+from edward.services.trading_path_context_factory_v015 import TradingPathContextFactoryV015
 
 logger = logging.getLogger(__name__)
 ProgressCallback = Callable[[str, float, int, int], None]
@@ -184,7 +185,8 @@ class OpportunitySearchService:
             instrument_data = self.instrument_context.build(instrument, _field(instrument, "trading_status", None)); self._notify(progress_callback, f"Market Data: candles {ticker}", progress_base + progress_span * 0.08, current, total); candles = self._get_candles(uid)
             if len(candles) < 150: return self._unavailable(instrument, price, position_data.quantity, f"Недостаточно исторических данных: получено {len(candles)} свечей, требуется не менее 150.")
             benchmark_candles, benchmark_id = self._benchmark_context(instrument, candles)
-            self._notify(progress_callback, f"Анализ стратегий: {ticker}", progress_base + progress_span * 0.28, current, total); analysis = self.analysis.analyze(instrument_uid=uid, ticker=ticker, candles=candles, profile=profile, instrument=instrument, benchmark_candles=benchmark_candles, benchmark_id=benchmark_id); selected = self._best_strategy(analysis.strategies); market = self.market_context.build(last_price=_field(instrument, "last_price", None), candles=candles, market_regime=analysis.market_regime)
+            context = TradingPathContextFactoryV015.build(instrument=instrument, portfolio=portfolio_data, position=position_data)
+            self._notify(progress_callback, f"Анализ стратегий: {ticker}", progress_base + progress_span * 0.28, current, total); analysis = self.analysis.analyze(instrument_uid=uid, ticker=ticker, candles=candles, profile=profile, instrument=instrument, benchmark_candles=benchmark_candles, benchmark_id=benchmark_id, context=context); selected = self._best_strategy(analysis.strategies); market = self.market_context.build(last_price=_field(instrument, "last_price", None), candles=candles, market_regime=analysis.market_regime)
             forecast = None; forecast_prices = forecast_up = forecast_down = forecast_low = forecast_high = (); self._notify(progress_callback, f"Прогноз цены: {ticker}", progress_base + progress_span * 0.44, current, total)
             if candles and all(isinstance(item, Candle) for item in candles):
                 try:
