@@ -27,6 +27,7 @@ class TradingPathContextFactoryV015:
             if name not in {"instrument_metadata", "current_price", "current_weight_pct"}
         }
         values["instrument_metadata"] = instrument
+        values["current_price"] = _field(instrument, "current_price", _field(instrument, "last_price", None))
 
         if portfolio is not None:
             values["current_weight_pct"] = float(portfolio.current_weight_pct or 0.0)
@@ -37,9 +38,6 @@ class TradingPathContextFactoryV015:
                 values["current_price"] = position.current_price
             if not values.get("current_weight_pct"):
                 values["current_weight_pct"] = float(position.portfolio_weight_pct or 0.0)
-
-        if values.get("current_price") is None:
-            values["current_price"] = _field(instrument, "last_price", None)
 
         return TradingPathContextV015(**values)
 
