@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from edward.domain import TradingPathContextV015
@@ -42,6 +42,28 @@ def test_context_from_instrument_uses_instrument_as_metadata_without_dropping_ex
     assert context.instrument_metadata is instrument
     assert context.fundamentals is fundamentals
     assert context.news is news
+
+
+def test_context_from_instrument_accepts_portfolio_context_fields():
+    instrument = SimpleNamespace(
+        uid="SBER",
+        current_price=101.5,
+        current_weight_pct=12.5,
+        marginal_risk_pct=2.25,
+        diversification_benefit_pct=0.75,
+        expected_return_impact_pct=1.8,
+        max_position_weight_pct=20.0,
+    )
+
+    context = _context_from_instrument(instrument)
+
+    assert context is not None
+    assert context.current_price == 101.5
+    assert context.current_weight_pct == 12.5
+    assert context.marginal_risk_pct == 2.25
+    assert context.diversification_benefit_pct == 0.75
+    assert context.expected_return_impact_pct == 1.8
+    assert context.max_position_weight_pct == 20.0
 
 
 def test_canonical_adapter_passes_context_into_runtime(monkeypatch):
